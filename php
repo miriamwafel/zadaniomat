@@ -236,13 +236,63 @@ add_action('wp_ajax_zadaniomat_edit_task', function() {
 add_action('wp_ajax_zadaniomat_delete_task', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $id = intval($_POST['id']);
-    
+
     $wpdb->delete($table, ['id' => $id]);
-    
+
     wp_send_json_success();
+});
+
+// Zbiorowe usuwanie zadań
+add_action('wp_ajax_zadaniomat_bulk_delete', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+    $ids = isset($_POST['ids']) ? array_map('intval', $_POST['ids']) : [];
+
+    if (empty($ids)) {
+        wp_send_json_error(['message' => 'Brak zadań do usunięcia']);
+    }
+
+    $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+    $wpdb->query($wpdb->prepare("DELETE FROM $table WHERE id IN ($placeholders)", $ids));
+
+    wp_send_json_success(['deleted' => count($ids)]);
+});
+
+// Zbiorowe kopiowanie zadań
+add_action('wp_ajax_zadaniomat_bulk_copy', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+    $ids = isset($_POST['ids']) ? array_map('intval', $_POST['ids']) : [];
+    $target_date = sanitize_text_field($_POST['target_date']);
+
+    if (empty($ids) || empty($target_date)) {
+        wp_send_json_error(['message' => 'Brak zadań lub daty docelowej']);
+    }
+
+    $auto_okres = zadaniomat_get_current_okres($target_date);
+
+    $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+    $tasks = $wpdb->get_results($wpdb->prepare("SELECT kategoria, zadanie, cel_todo, planowany_czas FROM $table WHERE id IN ($placeholders)", $ids));
+
+    foreach ($tasks as $task) {
+        $wpdb->insert($table, [
+            'okres_id' => $auto_okres ? $auto_okres->id : null,
+            'kategoria' => $task->kategoria,
+            'dzien' => $target_date,
+            'zadanie' => $task->zadanie,
+            'cel_todo' => $task->cel_todo,
+            'planowany_czas' => $task->planowany_czas
+        ]);
+    }
+
+    wp_send_json_success(['copied' => count($tasks)]);
 });
 
 // Szybka aktualizacja (status, faktyczny czas)
@@ -600,6 +650,20 @@ add_action('admin_head', function() {
             .btn-delete:hover { background: #f8d7da; }
             .btn-edit { color: #007bff; background: none; border: none; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
             .btn-edit:hover { background: #e3f2fd; }
+
+            /* Bulk actions */
+            .task-checkbox { width: 18px; height: 18px; cursor: pointer; accent-color: #667eea; }
+            .bulk-actions { display: none; align-items: center; gap: 10px; margin-left: 15px; }
+            .bulk-actions.visible { display: flex; }
+            .bulk-actions button { padding: 5px 12px; font-size: 12px; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+            .btn-bulk-delete { background: #dc3545; color: #fff; }
+            .btn-bulk-delete:hover { background: #c82333; }
+            .btn-bulk-copy { background: #667eea; color: #fff; }
+            .btn-bulk-copy:hover { background: #5a6fd6; }
+            .bulk-copy-date { padding: 4px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; }
+            .select-all-label { font-size: 12px; color: #666; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+            .day-header-left { display: flex; align-items: center; gap: 10px; }
+            .selected-count { font-size: 12px; color: #667eea; font-weight: 600; }
             
             .kategoria-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
             .kategoria-badge.zapianowany { background: #d4edda; color: #155724; }
@@ -1079,12 +1143,23 @@ function zadaniomat_page_main() {
                 
                 html += '<div class="day-section" data-day="' + current + '">';
                 html += '<div class="day-header ' + (isToday ? 'today-header' : '') + '">';
+                html += '<div class="day-header-left">';
                 html += '<h3>';
                 if (isToday) html += '🔵 ';
                 if (isSelected) html += '📍 ';
                 html += dayName + ', ' + d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear();
                 if (isToday) html += ' <span style="font-weight:normal;font-size:12px;">(dziś)</span>';
                 html += '</h3>';
+                // Bulk actions
+                if (dayTasks.length > 0) {
+                    html += '<div class="bulk-actions" data-day="' + current + '">';
+                    html += '<span class="selected-count"></span>';
+                    html += '<button class="btn-bulk-delete" onclick="bulkDeleteTasks(\'' + current + '\')">🗑️ Usuń zaznaczone</button>';
+                    html += '<button class="btn-bulk-copy" onclick="bulkCopyTasks(\'' + current + '\')">📄 Kopiuj zaznaczone do:</button>';
+                    html += '<input type="date" class="bulk-copy-date" value="' + addDays(current, 1) + '">';
+                    html += '</div>';
+                }
+                html += '</div>';
                 html += '<div class="day-header-actions">';
                 if (copiedTask) {
                     html += '<button class="btn-paste" onclick="pasteTask(\'' + current + '\')" title="Wklej skopiowane zadanie">📋 Wklej</button>';
@@ -1093,8 +1168,11 @@ function zadaniomat_page_main() {
                     html += '<span class="day-stats">' + dayTasks.length + ' zadań • Plan: ' + planned + ' min • Fakt: ' + actual + ' min</span>';
                 }
                 html += '</div></div>';
-                
+
                 html += '<table class="day-table"><thead><tr>';
+                if (dayTasks.length > 0) {
+                    html += '<th style="width:30px;"><input type="checkbox" class="select-all-checkbox" data-day="' + current + '" title="Zaznacz wszystkie"></th>';
+                }
                 html += '<th style="width:130px;">Kategoria</th><th>Zadanie</th><th style="width:180px;">Cel TO DO</th>';
                 html += '<th style="width:50px;">Plan</th><th style="width:70px;">Fakt</th><th style="width:70px;">Status</th><th style="width:90px;">Akcje</th>';
                 html += '</tr></thead><tbody>';
@@ -1144,8 +1222,9 @@ function zadaniomat_page_main() {
                 else if (parseFloat(t.status) > 0) statusClass = 'status-partial';
                 else statusClass = 'status-none';
             }
-            
+
             var html = '<tr class="' + statusClass + '" data-task-id="' + t.id + '">';
+            html += '<td><input type="checkbox" class="task-checkbox" data-task-id="' + t.id + '" data-day="' + day + '"></td>';
             html += '<td><span class="kategoria-badge ' + t.kategoria + '">' + t.kategoria_label + '</span></td>';
             html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong></td>';
             html += '<td style="font-size:12px;color:#666;">' + escapeHtml(t.cel_todo || '') + '</td>';
@@ -1167,6 +1246,7 @@ function zadaniomat_page_main() {
         
         window.renderEmptySlot = function(day, kategoria, kategoriaLabel) {
             var html = '<tr class="empty-slot" data-day="' + day + '" data-kategoria="' + kategoria + '">';
+            html += '<td></td>'; // Pusta komórka dla checkboxa
             html += '<td><span class="kategoria-badge ' + kategoria + '">' + kategoriaLabel + '</span></td>';
             html += '<td><input type="text" class="slot-input slot-zadanie" placeholder="Wpisz zadanie..." data-field="zadanie"></td>';
             html += '<td><input type="text" class="slot-input slot-cel" placeholder="Cel TO DO..." data-field="cel_todo"></td>';
@@ -1351,7 +1431,22 @@ function zadaniomat_page_main() {
                 var date = $(this).data('date');
                 if (date) selectDate(date);
             });
-            
+
+            // Checkbox pojedynczego zadania
+            $(document).on('change', '.task-checkbox', function() {
+                var day = $(this).data('day');
+                updateBulkActionsVisibility(day);
+            });
+
+            // Checkbox "zaznacz wszystkie"
+            $(document).on('change', '.select-all-checkbox', function() {
+                var day = $(this).data('day');
+                var isChecked = $(this).prop('checked');
+                var $daySection = $('.day-section[data-day="' + day + '"]');
+                $daySection.find('.task-checkbox').prop('checked', isChecked);
+                updateBulkActionsVisibility(day);
+            });
+
             // Enter w slotach - zapisuje lub przechodzi do następnego pola
             $(document).on('keydown', '.slot-input', function(e) {
                 if (e.key === 'Enter') {
@@ -1507,7 +1602,10 @@ function zadaniomat_page_main() {
         
         window.deleteTask = function(id) {
             if (!confirm('Na pewno usunąć to zadanie?')) return;
-            
+
+            var $row = $('tr[data-task-id="' + id + '"]');
+            var $daySection = $row.closest('.day-section');
+
             $.post(ajaxurl, {
                 action: 'zadaniomat_delete_task',
                 nonce: nonce,
@@ -1515,14 +1613,122 @@ function zadaniomat_page_main() {
             }, function(response) {
                 if (response.success) {
                     showToast('Zadanie usunięte!', 'success');
-                    $('tr[data-task-id="' + id + '"]').fadeOut(300, function() {
+                    $row.fadeOut(300, function() {
                         $(this).remove();
+                        // Przelicz statystyki dnia po usunięciu wiersza
+                        recalculateDayStats($daySection);
                     });
                     loadCalendarDots();
                 }
             });
         };
-        
+
+        // Funkcja do przeliczania statystyk dnia
+        window.recalculateDayStats = function($daySection) {
+            var $rows = $daySection.find('tr[data-task-id]');
+            var taskCount = $rows.length;
+            var planned = 0, actual = 0;
+
+            $rows.each(function() {
+                var $row = $(this);
+                // Planowany czas jest w 5. kolumnie (index 4) - po dodaniu kolumny checkbox
+                var planText = $row.find('td:eq(4)').text();
+                planned += parseInt(planText) || 0;
+                // Faktyczny czas jest w input w 6. kolumnie
+                var actualVal = $row.find('input[data-field="faktyczny_czas"]').val();
+                actual += parseInt(actualVal) || 0;
+            });
+
+            var $stats = $daySection.find('.day-stats');
+            if (taskCount > 0) {
+                $stats.text(taskCount + ' zadań • Plan: ' + planned + ' min • Fakt: ' + actual + ' min');
+            } else {
+                $stats.text('');
+            }
+        };
+
+        // ==================== BULK ACTIONS ====================
+        // Aktualizuj widoczność przycisków akcji zbiorowych
+        window.updateBulkActionsVisibility = function(day) {
+            var $daySection = $('.day-section[data-day="' + day + '"]');
+            var $checkboxes = $daySection.find('.task-checkbox:checked');
+            var $bulkActions = $daySection.find('.bulk-actions');
+            var $selectedCount = $bulkActions.find('.selected-count');
+
+            if ($checkboxes.length > 0) {
+                $bulkActions.addClass('visible');
+                $selectedCount.text($checkboxes.length + ' zaznaczonych');
+            } else {
+                $bulkActions.removeClass('visible');
+                $selectedCount.text('');
+            }
+        };
+
+        // Zbiorowe usuwanie zadań
+        window.bulkDeleteTasks = function(day) {
+            var $daySection = $('.day-section[data-day="' + day + '"]');
+            var $checkboxes = $daySection.find('.task-checkbox:checked');
+            var ids = [];
+
+            $checkboxes.each(function() {
+                ids.push($(this).data('task-id'));
+            });
+
+            if (ids.length === 0) {
+                showToast('Zaznacz najpierw zadania do usunięcia!', 'error');
+                return;
+            }
+
+            if (!confirm('Na pewno usunąć ' + ids.length + ' zadań?')) return;
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_bulk_delete',
+                nonce: nonce,
+                ids: ids
+            }, function(response) {
+                if (response.success) {
+                    showToast('Usunięto ' + response.data.deleted + ' zadań!', 'success');
+                    loadTasks();
+                    loadCalendarDots();
+                }
+            });
+        };
+
+        // Zbiorowe kopiowanie zadań
+        window.bulkCopyTasks = function(day) {
+            var $daySection = $('.day-section[data-day="' + day + '"]');
+            var $checkboxes = $daySection.find('.task-checkbox:checked');
+            var targetDate = $daySection.find('.bulk-copy-date').val();
+            var ids = [];
+
+            $checkboxes.each(function() {
+                ids.push($(this).data('task-id'));
+            });
+
+            if (ids.length === 0) {
+                showToast('Zaznacz najpierw zadania do skopiowania!', 'error');
+                return;
+            }
+
+            if (!targetDate) {
+                showToast('Wybierz datę docelową!', 'error');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_bulk_copy',
+                nonce: nonce,
+                ids: ids,
+                target_date: targetDate
+            }, function(response) {
+                if (response.success) {
+                    showToast('Skopiowano ' + response.data.copied + ' zadań na ' + targetDate + '!', 'success');
+                    loadTasks();
+                    loadCalendarDots();
+                }
+            });
+        };
+
         // ==================== HELPERS ====================
         window.addDays = function(dateStr, days) {
             var d = new Date(dateStr);
