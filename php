@@ -1302,6 +1302,34 @@ add_action('admin_head', function() {
                 background: #f0f0f0;
             }
 
+            /* Edytowalna godzina */
+            .harmonogram-task-time-edit {
+                display: flex;
+                align-items: center;
+                gap: 3px;
+                margin-right: 10px;
+            }
+            .time-input-small {
+                width: 85px;
+                padding: 4px 6px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 12px;
+                cursor: pointer;
+            }
+            .time-input-small:hover {
+                border-color: #667eea;
+            }
+            .time-input-small:focus {
+                border-color: #667eea;
+                outline: none;
+                box-shadow: 0 0 0 2px rgba(102,126,234,0.2);
+            }
+            .end-time {
+                font-size: 12px;
+                color: #888;
+            }
+
             /* Nieprzypisane zadania */
             .unscheduled-tasks {
                 background: #f8f9fa;
@@ -1603,6 +1631,12 @@ function zadaniomat_page_main() {
                     </form>
                 </div>
                 
+                <!-- Zadania na dziś -->
+                <div class="zadaniomat-card">
+                    <h2>📋 Zadania</h2>
+                    <div id="tasks-container"></div>
+                </div>
+
                 <!-- Harmonogram dnia - pokazuje się tylko dla dzisiaj -->
                 <div id="harmonogram-section" style="display: none;">
                     <div class="harmonogram-container">
@@ -1629,12 +1663,6 @@ function zadaniomat_page_main() {
                         <!-- Timeline godzinowy -->
                         <div class="harmonogram-timeline" id="harmonogram-timeline"></div>
                     </div>
-                </div>
-
-                <!-- Zadania -->
-                <div class="zadaniomat-card">
-                    <h2>📋 Zadania</h2>
-                    <div id="tasks-container"></div>
                 </div>
             </div>
         </div>
@@ -1670,6 +1698,7 @@ function zadaniomat_page_main() {
             loadTasks();
             updateDateInfo();
             bindEvents();
+            checkShowHarmonogram();
         });
         
         // ==================== CALENDAR ====================
@@ -2388,6 +2417,7 @@ function zadaniomat_page_main() {
                 if (response.success) {
                     harmonogramTasks = response.data.zadania;
                     harmonogramStale = response.data.stale_zadania;
+                    loadStaleModifications(); // Zastosuj dzisiejsze modyfikacje
                     renderHarmonogram();
                 }
             });
@@ -2456,9 +2486,9 @@ function zadaniomat_page_main() {
         window.renderHarmonogramTask = function(task, isStale) {
             var staleClass = isStale ? ' is-stale' : '';
             var taskId = isStale ? 'stale-' + task.id : task.id;
-            var draggable = !isStale ? 'draggable="true" ondragstart="handleDragStart(event, ' + task.id + ')"' : '';
+            var draggable = 'draggable="true" ondragstart="handleDragStart(event, \'' + taskId + '\')"';
 
-            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + '" data-id="' + taskId + '" ' + draggable + '>';
+            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
             html += '<div class="harmonogram-task-info">';
             html += '<div class="harmonogram-task-name">' + escapeHtml(task.zadanie || task.nazwa) + '</div>';
             html += '<div class="harmonogram-task-meta">';
@@ -2471,23 +2501,125 @@ function zadaniomat_page_main() {
             }
             html += '</div></div>';
 
+            // Edytowalna godzina
             if (task.godzina_start) {
-                html += '<div class="harmonogram-task-time">';
-                html += task.godzina_start.substring(0, 5);
-                if (task.godzina_koniec) {
-                    html += ' - ' + task.godzina_koniec.substring(0, 5);
+                var startTime = task.godzina_start.substring(0, 5);
+                var endTime = task.godzina_koniec ? task.godzina_koniec.substring(0, 5) : '';
+
+                html += '<div class="harmonogram-task-time-edit">';
+                html += '<input type="time" class="time-input-small" value="' + startTime + '" onchange="updateTaskTime(\'' + taskId + '\', this.value, \'' + (isStale ? '1' : '0') + '\')" title="Zmień godzinę rozpoczęcia">';
+                if (endTime) {
+                    html += '<span style="margin: 0 3px;">-</span>';
+                    html += '<span class="end-time">' + endTime + '</span>';
                 }
                 html += '</div>';
             }
 
-            if (!isStale) {
-                html += '<div class="harmonogram-task-actions">';
+            // Akcje dla wszystkich zadań (nie tylko zwykłych)
+            html += '<div class="harmonogram-task-actions">';
+            if (isStale) {
+                html += '<button onclick="hideStaleForToday(\'' + task.id + '\')" title="Ukryj dzisiaj">👁️‍🗨️</button>';
+            } else {
                 html += '<button onclick="removeFromHarmonogram(' + task.id + ')" title="Usuń z harmonogramu">❌</button>';
-                html += '</div>';
             }
+            html += '</div>';
 
             html += '</div>';
             return html;
+        };
+
+        // Aktualizuj godzinę zadania
+        window.updateTaskTime = function(taskId, newTime, isStale) {
+            if (isStale === '1') {
+                // Dla stałych - zapisz w localStorage na dzisiaj
+                var staleId = taskId.replace('stale-', '');
+                var staleTask = harmonogramStale.find(function(s) { return s.id == staleId; });
+                if (staleTask) {
+                    staleTask.godzina_start = newTime + ':00';
+                    // Przelicz godzinę końcową
+                    if (staleTask.planowany_czas) {
+                        var parts = newTime.split(':');
+                        var endMinutes = parseInt(parts[0]) * 60 + parseInt(parts[1]) + parseInt(staleTask.planowany_czas);
+                        var endHour = Math.floor(endMinutes / 60);
+                        var endMin = endMinutes % 60;
+                        staleTask.godzina_koniec = String(endHour).padStart(2, '0') + ':' + String(endMin).padStart(2, '0') + ':00';
+                    }
+                    saveStaleModifications();
+                    renderHarmonogram();
+                    showToast('Godzina stałego zadania zmieniona na dziś', 'success');
+                }
+            } else {
+                // Dla zwykłych zadań - zapisz w bazie
+                var task = harmonogramTasks.find(function(t) { return t.id == taskId; });
+                if (task) {
+                    var godzinaKoniec = null;
+                    if (task.planowany_czas) {
+                        var parts = newTime.split(':');
+                        var endMinutes = parseInt(parts[0]) * 60 + parseInt(parts[1]) + parseInt(task.planowany_czas);
+                        var endHour = Math.floor(endMinutes / 60);
+                        var endMin = endMinutes % 60;
+                        godzinaKoniec = String(endHour).padStart(2, '0') + ':' + String(endMin).padStart(2, '0');
+                    }
+
+                    $.post(ajaxurl, {
+                        action: 'zadaniomat_update_harmonogram',
+                        nonce: nonce,
+                        id: taskId,
+                        godzina_start: newTime,
+                        godzina_koniec: godzinaKoniec
+                    }, function(response) {
+                        if (response.success) {
+                            task.godzina_start = newTime + ':00';
+                            task.godzina_koniec = godzinaKoniec ? godzinaKoniec + ':00' : null;
+                            renderHarmonogram();
+                            showToast('Godzina zmieniona', 'success');
+                        }
+                    });
+                }
+            }
+        };
+
+        // Ukryj stałe zadanie na dzisiaj
+        window.hideStaleForToday = function(staleId) {
+            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + today) || '[]');
+            if (hidden.indexOf(staleId) === -1) {
+                hidden.push(staleId);
+                localStorage.setItem('zadaniomat_hidden_stale_' + today, JSON.stringify(hidden));
+            }
+            harmonogramStale = harmonogramStale.filter(function(s) { return s.id != staleId; });
+            renderHarmonogram();
+            showToast('Stałe zadanie ukryte na dzisiaj', 'success');
+        };
+
+        // Zapisz modyfikacje stałych na dzisiaj
+        window.saveStaleModifications = function() {
+            var mods = {};
+            harmonogramStale.forEach(function(s) {
+                mods[s.id] = {
+                    godzina_start: s.godzina_start,
+                    godzina_koniec: s.godzina_koniec
+                };
+            });
+            localStorage.setItem('zadaniomat_stale_mods_' + today, JSON.stringify(mods));
+        };
+
+        // Załaduj modyfikacje stałych na dzisiaj
+        window.loadStaleModifications = function() {
+            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + today) || '[]');
+            var mods = JSON.parse(localStorage.getItem('zadaniomat_stale_mods_' + today) || '{}');
+
+            // Filtruj ukryte
+            harmonogramStale = harmonogramStale.filter(function(s) {
+                return hidden.indexOf(String(s.id)) === -1;
+            });
+
+            // Zastosuj modyfikacje godzin
+            harmonogramStale.forEach(function(s) {
+                if (mods[s.id]) {
+                    s.godzina_start = mods[s.id].godzina_start;
+                    s.godzina_koniec = mods[s.id].godzina_koniec;
+                }
+            });
         };
 
         // Renderuj nieprzypisane zadania
@@ -2540,34 +2672,57 @@ function zadaniomat_page_main() {
             if (!draggedTask) return;
 
             var godzina = String(hour).padStart(2, '0') + ':00';
-            var task = harmonogramTasks.find(function(t) { return t.id == draggedTask; });
+            var isStale = String(draggedTask).indexOf('stale-') === 0;
 
-            if (task) {
-                // Oblicz godzinę końcową
-                var godzinaKoniec = null;
-                if (task.planowany_czas) {
-                    var endMinutes = hour * 60 + parseInt(task.planowany_czas);
-                    var endHour = Math.floor(endMinutes / 60);
-                    var endMin = endMinutes % 60;
-                    godzinaKoniec = String(endHour).padStart(2, '0') + ':' + String(endMin).padStart(2, '0');
-                }
+            if (isStale) {
+                // Stałe zadanie - zapisz tylko lokalnie na dzisiaj
+                var staleId = String(draggedTask).replace('stale-', '');
+                var staleTask = harmonogramStale.find(function(s) { return s.id == staleId; });
 
-                // Aktualizuj w bazie
-                $.post(ajaxurl, {
-                    action: 'zadaniomat_update_harmonogram',
-                    nonce: nonce,
-                    id: draggedTask,
-                    godzina_start: godzina,
-                    godzina_koniec: godzinaKoniec
-                }, function(response) {
-                    if (response.success) {
-                        // Aktualizuj lokalnie
-                        task.godzina_start = godzina;
-                        task.godzina_koniec = godzinaKoniec;
-                        renderHarmonogram();
-                        showToast('Zadanie przypisane do ' + godzina, 'success');
+                if (staleTask) {
+                    staleTask.godzina_start = godzina + ':00';
+                    // Oblicz godzinę końcową
+                    if (staleTask.planowany_czas) {
+                        var endMinutes = hour * 60 + parseInt(staleTask.planowany_czas);
+                        var endHour = Math.floor(endMinutes / 60);
+                        var endMin = endMinutes % 60;
+                        staleTask.godzina_koniec = String(endHour).padStart(2, '0') + ':' + String(endMin).padStart(2, '0') + ':00';
                     }
-                });
+                    saveStaleModifications();
+                    renderHarmonogram();
+                    showToast('Stałe zadanie przesunięte na ' + godzina, 'success');
+                }
+            } else {
+                // Zwykłe zadanie
+                var task = harmonogramTasks.find(function(t) { return t.id == draggedTask; });
+
+                if (task) {
+                    // Oblicz godzinę końcową
+                    var godzinaKoniec = null;
+                    if (task.planowany_czas) {
+                        var endMinutes = hour * 60 + parseInt(task.planowany_czas);
+                        var endHour = Math.floor(endMinutes / 60);
+                        var endMin = endMinutes % 60;
+                        godzinaKoniec = String(endHour).padStart(2, '0') + ':' + String(endMin).padStart(2, '0');
+                    }
+
+                    // Aktualizuj w bazie
+                    $.post(ajaxurl, {
+                        action: 'zadaniomat_update_harmonogram',
+                        nonce: nonce,
+                        id: draggedTask,
+                        godzina_start: godzina,
+                        godzina_koniec: godzinaKoniec
+                    }, function(response) {
+                        if (response.success) {
+                            // Aktualizuj lokalnie
+                            task.godzina_start = godzina;
+                            task.godzina_koniec = godzinaKoniec;
+                            renderHarmonogram();
+                            showToast('Zadanie przypisane do ' + godzina, 'success');
+                        }
+                    });
+                }
             }
 
             draggedTask = null;
@@ -2662,17 +2817,6 @@ function zadaniomat_page_main() {
 
         // Aktualizuj linię co minutę
         setInterval(updateCurrentTimeLine, 60000);
-
-        // Modyfikuj init żeby sprawdzić harmonogram
-        var originalInit = $(document).ready;
-        $(document).ready(function() {
-            renderCalendar();
-            loadOverdueTasks();
-            loadTasks();
-            updateDateInfo();
-            bindEvents();
-            checkShowHarmonogram();
-        });
 
         // Modyfikuj selectDate żeby sprawdzić harmonogram
         var originalSelectDate = window.selectDate;
