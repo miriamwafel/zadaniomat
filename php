@@ -1482,6 +1482,250 @@ add_action('admin_head', function() {
             .toggle-switch input:checked + .toggle-slider:before {
                 transform: translateX(24px);
             }
+
+            /* ========== TIMER / CZASOMIERZ ========== */
+            .timer-btn {
+                background: none;
+                border: none;
+                cursor: pointer;
+                font-size: 16px;
+                padding: 4px 8px;
+                border-radius: 6px;
+                transition: all 0.2s;
+            }
+            .timer-btn:hover {
+                background: #f0f0f0;
+            }
+            .timer-btn.running {
+                background: #e8f5e9;
+                animation: pulse 1.5s infinite;
+            }
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.6; }
+            }
+            .timer-display {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: #fff;
+                padding: 6px 12px;
+                border-radius: 20px;
+                font-size: 14px;
+                font-weight: 600;
+                font-family: 'Courier New', monospace;
+            }
+            .timer-display.warning {
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                animation: pulse 0.5s infinite;
+            }
+            .timer-display .timer-time {
+                min-width: 60px;
+                text-align: center;
+            }
+            .timer-display button {
+                background: rgba(255,255,255,0.2);
+                border: none;
+                color: #fff;
+                width: 24px;
+                height: 24px;
+                border-radius: 50%;
+                cursor: pointer;
+                font-size: 12px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .timer-display button:hover {
+                background: rgba(255,255,255,0.3);
+            }
+
+            /* Timer w wierszu zadania */
+            .task-timer-cell {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+            }
+            .time-tracked {
+                font-size: 12px;
+                color: #28a745;
+                font-weight: 600;
+            }
+            .time-edit-input {
+                width: 50px;
+                padding: 2px 4px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 12px;
+                text-align: center;
+            }
+
+            /* Modal timera */
+            .timer-modal-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.7);
+                z-index: 10001;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                animation: fadeIn 0.3s ease;
+            }
+            .timer-modal {
+                background: #fff;
+                border-radius: 20px;
+                padding: 40px;
+                max-width: 450px;
+                width: 90%;
+                text-align: center;
+                box-shadow: 0 25px 80px rgba(0,0,0,0.4);
+                animation: slideUp 0.3s ease;
+            }
+            .timer-modal h2 {
+                margin: 0 0 10px 0;
+                font-size: 28px;
+            }
+            .timer-modal .task-name {
+                color: #666;
+                font-size: 16px;
+                margin-bottom: 20px;
+            }
+            .timer-modal .timer-big {
+                font-size: 64px;
+                font-weight: 700;
+                font-family: 'Courier New', monospace;
+                color: #667eea;
+                margin: 30px 0;
+            }
+            .timer-modal .timer-big.overtime {
+                color: #e53e3e;
+            }
+            .timer-modal .time-info {
+                font-size: 14px;
+                color: #888;
+                margin-bottom: 30px;
+            }
+            .timer-modal-actions {
+                display: flex;
+                gap: 15px;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+            .timer-modal-actions button {
+                padding: 12px 25px;
+                border-radius: 10px;
+                border: none;
+                font-size: 15px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .btn-timer-done {
+                background: #28a745;
+                color: #fff;
+            }
+            .btn-timer-done:hover {
+                background: #218838;
+                transform: translateY(-2px);
+            }
+            .btn-timer-extend {
+                background: #667eea;
+                color: #fff;
+            }
+            .btn-timer-extend:hover {
+                background: #5a6fd6;
+                transform: translateY(-2px);
+            }
+            .btn-timer-stop {
+                background: #dc3545;
+                color: #fff;
+            }
+            .btn-timer-stop:hover {
+                background: #c82333;
+            }
+            .btn-timer-cancel {
+                background: #f0f0f0;
+                color: #333;
+            }
+
+            /* Extend options */
+            .extend-options {
+                display: flex;
+                gap: 10px;
+                justify-content: center;
+                margin-top: 20px;
+            }
+            .extend-options button {
+                padding: 8px 16px;
+                border-radius: 8px;
+                border: 2px solid #667eea;
+                background: #fff;
+                color: #667eea;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .extend-options button:hover {
+                background: #667eea;
+                color: #fff;
+            }
+
+            /* Floating timer */
+            .floating-timer {
+                position: fixed;
+                bottom: 30px;
+                right: 30px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: #fff;
+                padding: 15px 25px;
+                border-radius: 50px;
+                box-shadow: 0 10px 40px rgba(102,126,234,0.4);
+                z-index: 9999;
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                cursor: pointer;
+                animation: slideUp 0.3s ease;
+            }
+            .floating-timer:hover {
+                transform: translateY(-3px);
+                box-shadow: 0 15px 50px rgba(102,126,234,0.5);
+            }
+            .floating-timer .ft-time {
+                font-size: 24px;
+                font-weight: 700;
+                font-family: 'Courier New', monospace;
+            }
+            .floating-timer .ft-task {
+                font-size: 13px;
+                max-width: 200px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .floating-timer .ft-actions {
+                display: flex;
+                gap: 8px;
+            }
+            .floating-timer .ft-actions button {
+                background: rgba(255,255,255,0.2);
+                border: none;
+                color: #fff;
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                cursor: pointer;
+                font-size: 14px;
+            }
+            .floating-timer .ft-actions button:hover {
+                background: rgba(255,255,255,0.3);
+            }
+            .floating-timer.overtime {
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            }
         </style>
         <?php
     }
@@ -1670,6 +1914,10 @@ function zadaniomat_page_main() {
 
     <!-- Modal startu dnia -->
     <div id="start-day-modal-container"></div>
+
+    <!-- Timer containers -->
+    <div id="timer-modal-container"></div>
+    <div id="floating-timer-container"></div>
 
     <!-- Toast container -->
     <div id="toast-container"></div>
@@ -1902,13 +2150,41 @@ function zadaniomat_page_main() {
                 else if (parseFloat(t.status) > 0) statusClass = 'status-partial';
                 else statusClass = 'status-none';
             }
-            
+
+            var planowany = parseInt(t.planowany_czas) || 0;
+            var faktyczny = parseInt(t.faktyczny_czas) || 0;
+            var isActiveTimer = activeTimer && activeTimer.taskId == t.id;
+
             var html = '<tr class="' + statusClass + '" data-task-id="' + t.id + '">';
             html += '<td><span class="kategoria-badge ' + t.kategoria + '">' + t.kategoria_label + '</span></td>';
             html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong></td>';
             html += '<td style="font-size:12px;color:#666;">' + escapeHtml(t.cel_todo || '') + '</td>';
-            html += '<td>' + (t.planowany_czas || 0) + '</td>';
-            html += '<td><input type="number" class="inline-input quick-update" data-field="faktyczny_czas" data-id="' + t.id + '" value="' + (t.faktyczny_czas || '') + '" placeholder="-" min="0"></td>';
+
+            // Kolumna czasu z timerem
+            html += '<td class="task-timer-cell">';
+            html += '<span>' + planowany + '</span>';
+            if (planowany > 0) {
+                html += '<button class="timer-btn' + (isActiveTimer ? ' running' : '') + '" onclick="startTimer(' + t.id + ', \'' + escapeHtml(t.zadanie).replace(/'/g, "\\'") + '\', ' + planowany + ')" title="' + (isActiveTimer ? 'Timer działa' : 'Uruchom timer') + '">';
+                html += isActiveTimer ? '⏸️' : '▶️';
+                html += '</button>';
+            }
+            html += '</td>';
+
+            // Faktyczny czas z możliwością edycji
+            html += '<td class="task-timer-cell">';
+            if (faktyczny > 0) {
+                html += '<span class="time-tracked" onclick="editFaktycznyCzas(' + t.id + ', ' + faktyczny + ')" style="cursor:pointer;" title="Kliknij aby edytować">' + faktyczny + ' min</span>';
+            } else {
+                html += '<input type="number" class="inline-input quick-update" data-field="faktyczny_czas" data-id="' + t.id + '" value="" placeholder="-" min="0" style="width:50px;">';
+            }
+            // Przycisk do dodatkowej sesji timera
+            if (planowany > 0 && !isActiveTimer) {
+                html += '<button class="timer-btn" onclick="promptAdditionalTimer(' + t.id + ', \'' + escapeHtml(t.zadanie).replace(/'/g, "\\'") + '\', ' + faktyczny + ')" title="Dodaj czas">';
+                html += '➕';
+                html += '</button>';
+            }
+            html += '</td>';
+
             html += '<td><select class="inline-select quick-update" data-field="status" data-id="' + t.id + '">';
             html += '<option value=""' + (t.status === null ? ' selected' : '') + '>-</option>';
             ['0', '0.5', '0.9', '1'].forEach(function(s) {
@@ -1921,6 +2197,38 @@ function zadaniomat_page_main() {
             html += '<button class="btn-delete" onclick="deleteTask(' + t.id + ')" title="Usuń">🗑️</button>';
             html += '</td></tr>';
             return html;
+        };
+
+        // Prompt do dodatkowej sesji timera
+        window.promptAdditionalTimer = function(taskId, taskName, currentMinutes) {
+            var minutes = prompt('Na ile minut uruchomić timer?\n(Aktualny zapisany czas: ' + currentMinutes + ' min)', '15');
+            if (minutes === null) return;
+
+            var mins = parseInt(minutes);
+            if (isNaN(mins) || mins <= 0) {
+                alert('Podaj prawidłową liczbę minut');
+                return;
+            }
+
+            // Pobierz aktualny faktyczny czas i ustaw jako elapsedBefore
+            activeTimer = {
+                taskId: taskId,
+                taskName: taskName,
+                plannedTime: mins * 60,
+                startTime: Date.now(),
+                elapsedBefore: currentMinutes * 60, // Poprzedni czas
+                interval: null,
+                notified: false
+            };
+
+            initTimerAudio();
+            requestNotificationPermission();
+
+            activeTimer.interval = setInterval(updateTimerDisplay, 1000);
+            updateTimerDisplay();
+            renderFloatingTimer();
+
+            showToast('⏱️ Timer uruchomiony (+' + mins + ' min)', 'success');
         };
         
         window.renderEmptySlot = function(day, kategoria, kategoriaLabel) {
@@ -2828,6 +3136,341 @@ function zadaniomat_page_main() {
             updateDateInfo();
             $('#task-date').val(date);
             checkShowHarmonogram();
+        };
+
+        // ==================== TIMER / CZASOMIERZ ====================
+        var activeTimer = null; // { taskId, taskName, plannedTime, startTime, elapsedBefore, interval, notified }
+        var timerAudio = null;
+
+        // Inicjalizacja dźwięku (generowany programowo)
+        window.initTimerAudio = function() {
+            if (timerAudio) return;
+            var AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) return;
+
+            timerAudio = {
+                play: function() {
+                    var ctx = new AudioContext();
+                    var oscillator = ctx.createOscillator();
+                    var gainNode = ctx.createGain();
+
+                    oscillator.connect(gainNode);
+                    gainNode.connect(ctx.destination);
+
+                    oscillator.frequency.value = 800;
+                    oscillator.type = 'sine';
+                    gainNode.gain.value = 0.3;
+
+                    oscillator.start();
+
+                    // Beep pattern
+                    setTimeout(function() { gainNode.gain.value = 0; }, 200);
+                    setTimeout(function() { gainNode.gain.value = 0.3; }, 400);
+                    setTimeout(function() { gainNode.gain.value = 0; }, 600);
+                    setTimeout(function() { gainNode.gain.value = 0.3; }, 800);
+                    setTimeout(function() { oscillator.stop(); ctx.close(); }, 1000);
+                }
+            };
+        };
+
+        // Poproś o pozwolenie na powiadomienia
+        window.requestNotificationPermission = function() {
+            if ('Notification' in window && Notification.permission === 'default') {
+                Notification.requestPermission();
+            }
+        };
+
+        // Uruchom timer dla zadania
+        window.startTimer = function(taskId, taskName, plannedMinutes) {
+            // Jeśli już jest aktywny timer dla innego zadania
+            if (activeTimer && activeTimer.taskId !== taskId) {
+                if (!confirm('Masz już uruchomiony timer dla innego zadania. Czy chcesz go zatrzymać i uruchomić nowy?')) {
+                    return;
+                }
+                stopTimer(false);
+            }
+
+            // Jeśli to kontynuacja tego samego zadania
+            var elapsedBefore = 0;
+            if (activeTimer && activeTimer.taskId === taskId) {
+                elapsedBefore = activeTimer.elapsedBefore + getElapsedSeconds();
+                clearInterval(activeTimer.interval);
+            }
+
+            initTimerAudio();
+            requestNotificationPermission();
+
+            activeTimer = {
+                taskId: taskId,
+                taskName: taskName,
+                plannedTime: plannedMinutes * 60, // w sekundach
+                startTime: Date.now(),
+                elapsedBefore: elapsedBefore,
+                interval: null,
+                notified: false
+            };
+
+            activeTimer.interval = setInterval(updateTimerDisplay, 1000);
+            updateTimerDisplay();
+            renderFloatingTimer();
+
+            showToast('⏱️ Timer uruchomiony: ' + taskName, 'success');
+        };
+
+        // Pobierz upływający czas w sekundach
+        window.getElapsedSeconds = function() {
+            if (!activeTimer) return 0;
+            return Math.floor((Date.now() - activeTimer.startTime) / 1000);
+        };
+
+        // Pobierz całkowity czas (poprzedni + aktualny)
+        window.getTotalElapsed = function() {
+            if (!activeTimer) return 0;
+            return activeTimer.elapsedBefore + getElapsedSeconds();
+        };
+
+        // Aktualizuj wyświetlanie timera
+        window.updateTimerDisplay = function() {
+            if (!activeTimer) return;
+
+            var totalElapsed = getTotalElapsed();
+            var remaining = activeTimer.plannedTime - totalElapsed;
+            var isOvertime = remaining < 0;
+
+            // Aktualizuj floating timer
+            var timeStr = formatTime(Math.abs(remaining));
+            if (isOvertime) timeStr = '+' + timeStr;
+
+            $('.ft-time').text(timeStr);
+
+            if (isOvertime) {
+                $('#floating-timer-container .floating-timer').addClass('overtime');
+            }
+
+            // Sprawdź czy czas minął i pokaż powiadomienie
+            if (remaining <= 0 && !activeTimer.notified) {
+                activeTimer.notified = true;
+                showTimerEndNotification();
+            }
+        };
+
+        // Formatuj czas (sekundy -> MM:SS)
+        window.formatTime = function(seconds) {
+            var mins = Math.floor(seconds / 60);
+            var secs = seconds % 60;
+            return String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+        };
+
+        // Formatuj czas w minutach
+        window.formatMinutes = function(seconds) {
+            return Math.round(seconds / 60);
+        };
+
+        // Renderuj floating timer
+        window.renderFloatingTimer = function() {
+            if (!activeTimer) {
+                $('#floating-timer-container').html('');
+                return;
+            }
+
+            var html = '<div class="floating-timer" onclick="showTimerModal()">';
+            html += '<div class="ft-time">00:00</div>';
+            html += '<div class="ft-task">' + escapeHtml(activeTimer.taskName) + '</div>';
+            html += '<div class="ft-actions">';
+            html += '<button onclick="event.stopPropagation(); stopTimer(true)" title="Zakończ">✓</button>';
+            html += '<button onclick="event.stopPropagation(); cancelTimer()" title="Anuluj">✕</button>';
+            html += '</div>';
+            html += '</div>';
+
+            $('#floating-timer-container').html(html);
+        };
+
+        // Pokaż powiadomienie o końcu czasu
+        window.showTimerEndNotification = function() {
+            // Dźwięk
+            if (timerAudio) timerAudio.play();
+
+            // Powiadomienie systemowe
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification('⏰ Czas upłynął!', {
+                    body: activeTimer.taskName + ' - czas planowany minął',
+                    icon: '⏰',
+                    requireInteraction: true
+                });
+            }
+
+            // Pokaż modal
+            showTimerModal();
+        };
+
+        // Pokaż modal timera
+        window.showTimerModal = function() {
+            if (!activeTimer) return;
+
+            var totalElapsed = getTotalElapsed();
+            var remaining = activeTimer.plannedTime - totalElapsed;
+            var isOvertime = remaining < 0;
+            var timeStr = formatTime(Math.abs(isOvertime ? remaining : totalElapsed));
+
+            var html = '<div class="timer-modal-overlay" onclick="closeTimerModal(event)">';
+            html += '<div class="timer-modal" onclick="event.stopPropagation()">';
+
+            if (isOvertime) {
+                html += '<h2>⏰ Czas upłynął!</h2>';
+            } else {
+                html += '<h2>⏱️ Timer aktywny</h2>';
+            }
+
+            html += '<div class="task-name">' + escapeHtml(activeTimer.taskName) + '</div>';
+            html += '<div class="timer-big' + (isOvertime ? ' overtime' : '') + '" id="modal-timer-display">';
+            html += (isOvertime ? '+' : '') + timeStr;
+            html += '</div>';
+            html += '<div class="time-info">';
+            html += 'Planowany czas: ' + formatMinutes(activeTimer.plannedTime) + ' min | ';
+            html += 'Przepracowano: ' + formatMinutes(totalElapsed) + ' min';
+            html += '</div>';
+
+            html += '<div class="timer-modal-actions">';
+            html += '<button class="btn-timer-done" onclick="stopTimer(true)">✓ Zakończone</button>';
+            if (isOvertime) {
+                html += '<button class="btn-timer-extend" onclick="showExtendOptions()">+ Przedłuż</button>';
+            }
+            html += '<button class="btn-timer-stop" onclick="stopTimer(false)">⏹ Zatrzymaj</button>';
+            html += '</div>';
+
+            html += '<div class="extend-options" id="extend-options" style="display:none;">';
+            html += '<button onclick="extendTimer(5)">+5 min</button>';
+            html += '<button onclick="extendTimer(10)">+10 min</button>';
+            html += '<button onclick="extendTimer(15)">+15 min</button>';
+            html += '<button onclick="extendTimer(30)">+30 min</button>';
+            html += '</div>';
+
+            html += '</div></div>';
+
+            $('#timer-modal-container').html(html);
+
+            // Aktualizuj czas w modalu
+            if (activeTimer) {
+                var modalInterval = setInterval(function() {
+                    if (!activeTimer) {
+                        clearInterval(modalInterval);
+                        return;
+                    }
+                    var elapsed = getTotalElapsed();
+                    var rem = activeTimer.plannedTime - elapsed;
+                    var over = rem < 0;
+                    var ts = formatTime(Math.abs(over ? rem : elapsed));
+                    $('#modal-timer-display').text((over ? '+' : '') + ts);
+                    if (over) $('#modal-timer-display').addClass('overtime');
+                }, 1000);
+            }
+        };
+
+        window.closeTimerModal = function(event) {
+            if (event && event.target !== event.currentTarget) return;
+            $('#timer-modal-container').html('');
+        };
+
+        window.showExtendOptions = function() {
+            $('#extend-options').show();
+        };
+
+        // Przedłuż timer
+        window.extendTimer = function(minutes) {
+            if (!activeTimer) return;
+
+            activeTimer.plannedTime += minutes * 60;
+            activeTimer.notified = false;
+
+            closeTimerModal();
+            $('#floating-timer-container .floating-timer').removeClass('overtime');
+            showToast('Timer przedłużony o ' + minutes + ' minut', 'success');
+        };
+
+        // Zatrzymaj timer
+        window.stopTimer = function(markAsComplete) {
+            if (!activeTimer) return;
+
+            clearInterval(activeTimer.interval);
+            var totalMinutes = formatMinutes(getTotalElapsed());
+            var taskId = activeTimer.taskId;
+
+            // Zapisz rzeczywisty czas
+            $.post(ajaxurl, {
+                action: 'zadaniomat_quick_update',
+                nonce: nonce,
+                id: taskId,
+                field: 'faktyczny_czas',
+                value: totalMinutes
+            }, function(response) {
+                if (response.success) {
+                    // Odśwież listę zadań
+                    loadTasks();
+                    if (selectedDate === today) loadHarmonogram();
+                }
+            });
+
+            // Jeśli oznaczamy jako zakończone
+            if (markAsComplete) {
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_quick_update',
+                    nonce: nonce,
+                    id: taskId,
+                    field: 'status',
+                    value: '1'
+                });
+            }
+
+            showToast('⏱️ Zapisano czas: ' + totalMinutes + ' min', 'success');
+
+            activeTimer = null;
+            $('#floating-timer-container').html('');
+            closeTimerModal();
+        };
+
+        // Anuluj timer bez zapisywania
+        window.cancelTimer = function() {
+            if (!activeTimer) return;
+            if (!confirm('Anulować timer bez zapisywania czasu?')) return;
+
+            clearInterval(activeTimer.interval);
+            activeTimer = null;
+            $('#floating-timer-container').html('');
+            closeTimerModal();
+            showToast('Timer anulowany', 'warning');
+        };
+
+        // Uruchom kolejną sesję timera (dodatkowy czas)
+        window.startAdditionalTimer = function(taskId, taskName, minutes) {
+            // Pobierz aktualny faktyczny czas z bazy i dodaj do niego
+            var currentFactical = 0;
+            // Na razie uruchom normalnie - czas się zsumuje
+            startTimer(taskId, taskName, minutes);
+        };
+
+        // Edytuj rzeczywisty czas ręcznie
+        window.editFaktycznyCzas = function(taskId, currentValue) {
+            var newValue = prompt('Podaj rzeczywisty czas w minutach:', currentValue || '0');
+            if (newValue === null) return;
+
+            var minutes = parseInt(newValue);
+            if (isNaN(minutes) || minutes < 0) {
+                alert('Podaj prawidłową liczbę minut');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_quick_update',
+                nonce: nonce,
+                id: taskId,
+                field: 'faktyczny_czas',
+                value: minutes
+            }, function(response) {
+                if (response.success) {
+                    loadTasks();
+                    showToast('Czas zaktualizowany: ' + minutes + ' min', 'success');
+                }
+            });
         };
 
     })(jQuery);
