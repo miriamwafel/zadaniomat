@@ -6,24 +6,47 @@
  */
 
 // =============================================
-// KATEGORIE
+// KATEGORIE - DOMYŚLNE WARTOŚCI
 // =============================================
-define('ZADANIOMAT_KATEGORIE', [
-    'zapianowany' => 'Zapianowany',
-    'klejpan' => 'Klejpan',
-    'marka_langer' => 'Marka Langer',
-    'marketing_construction' => 'Marketing Construction',
-    'fjo' => 'FJO (Firma Jako Osobowość)'
-]);
-
-define('ZADANIOMAT_KATEGORIE_ZADANIA', [
+define('ZADANIOMAT_DEFAULT_KATEGORIE', [
     'zapianowany' => 'Zapianowany',
     'klejpan' => 'Klejpan',
     'marka_langer' => 'Marka Langer',
     'marketing_construction' => 'Marketing Construction',
     'fjo' => 'FJO (Firma Jako Osobowość)',
+    'obsluga_telefoniczna' => 'Obsługa telefoniczna'
+]);
+
+define('ZADANIOMAT_DEFAULT_KATEGORIE_ZADANIA', [
+    'zapianowany' => 'Zapianowany',
+    'klejpan' => 'Klejpan',
+    'marka_langer' => 'Marka Langer',
+    'marketing_construction' => 'Marketing Construction',
+    'fjo' => 'FJO (Firma Jako Osobowość)',
+    'obsluga_telefoniczna' => 'Obsługa telefoniczna',
     'sprawy_organizacyjne' => 'Sprawy Organizacyjne'
 ]);
+
+// Funkcje do pobierania kategorii (z opcji lub domyślnych)
+function zadaniomat_get_kategorie() {
+    $saved = get_option('zadaniomat_kategorie');
+    if ($saved && is_array($saved) && !empty($saved)) {
+        return $saved;
+    }
+    return ZADANIOMAT_DEFAULT_KATEGORIE;
+}
+
+function zadaniomat_get_kategorie_zadania() {
+    $saved = get_option('zadaniomat_kategorie_zadania');
+    if ($saved && is_array($saved) && !empty($saved)) {
+        return $saved;
+    }
+    return ZADANIOMAT_DEFAULT_KATEGORIE_ZADANIA;
+}
+
+// Stałe dla kompatybilności wstecznej (dynamicznie generowane)
+define('ZADANIOMAT_KATEGORIE', zadaniomat_get_kategorie());
+define('ZADANIOMAT_KATEGORIE_ZADANIA', zadaniomat_get_kategorie_zadania());
 
 // =============================================
 // TWORZENIE TABEL
@@ -425,6 +448,66 @@ add_action('wp_ajax_zadaniomat_save_cel_rok', function() {
     wp_send_json_success();
 });
 
+// Pobierz kategorie
+add_action('wp_ajax_zadaniomat_get_kategorie', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    wp_send_json_success([
+        'kategorie' => zadaniomat_get_kategorie(),
+        'kategorie_zadania' => zadaniomat_get_kategorie_zadania()
+    ]);
+});
+
+// Zapisz kategorie
+add_action('wp_ajax_zadaniomat_save_kategorie', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $kategorie = [];
+    $kategorie_zadania = [];
+
+    if (isset($_POST['kategorie']) && is_array($_POST['kategorie'])) {
+        foreach ($_POST['kategorie'] as $kat) {
+            $key = sanitize_key($kat['key']);
+            $label = sanitize_text_field($kat['label']);
+            if ($key && $label) {
+                $kategorie[$key] = $label;
+            }
+        }
+    }
+
+    if (isset($_POST['kategorie_zadania']) && is_array($_POST['kategorie_zadania'])) {
+        foreach ($_POST['kategorie_zadania'] as $kat) {
+            $key = sanitize_key($kat['key']);
+            $label = sanitize_text_field($kat['label']);
+            if ($key && $label) {
+                $kategorie_zadania[$key] = $label;
+            }
+        }
+    }
+
+    if (!empty($kategorie)) {
+        update_option('zadaniomat_kategorie', $kategorie);
+    }
+    if (!empty($kategorie_zadania)) {
+        update_option('zadaniomat_kategorie_zadania', $kategorie_zadania);
+    }
+
+    wp_send_json_success();
+});
+
+// Resetuj kategorie do domyślnych
+add_action('wp_ajax_zadaniomat_reset_kategorie', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    delete_option('zadaniomat_kategorie');
+    delete_option('zadaniomat_kategorie_zadania');
+
+    wp_send_json_success([
+        'kategorie' => ZADANIOMAT_DEFAULT_KATEGORIE,
+        'kategorie_zadania' => ZADANIOMAT_DEFAULT_KATEGORIE_ZADANIA
+    ]);
+});
+
 // =============================================
 // STYLE CSS
 // =============================================
@@ -474,6 +557,7 @@ add_action('admin_head', function() {
             .cel-card.marka_langer { border-left-color: #ffc107; }
             .cel-card.marketing_construction { border-left-color: #dc3545; }
             .cel-card.fjo { border-left-color: #6f42c1; }
+            .cel-card.obsluga_telefoniczna { border-left-color: #e91e63; }
             .cel-card h4 { margin: 0 0 8px 0; font-size: 12px; color: #666; }
             .cel-card textarea { width: 100%; min-height: 50px; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; resize: vertical; }
             .cel-card .status-row { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
@@ -524,7 +608,8 @@ add_action('admin_head', function() {
             .kategoria-badge.marketing_construction { background: #f8d7da; color: #721c24; }
             .kategoria-badge.fjo { background: #e2d9f3; color: #4a235a; }
             .kategoria-badge.sprawy_organizacyjne { background: #e2e3e5; color: #383d41; }
-            
+            .kategoria-badge.obsluga_telefoniczna { background: #fce4ec; color: #880e4f; }
+
             .saved-flash { animation: flash-green 0.5s ease; }
             @keyframes flash-green { 0% { background-color: #28a745; color: #fff; } 100% { background-color: transparent; } }
             
@@ -644,6 +729,7 @@ add_action('admin_head', function() {
             .cel-review-card.marka_langer { border-left-color: #ffc107; }
             .cel-review-card.marketing_construction { border-left-color: #dc3545; }
             .cel-review-card.fjo { border-left-color: #6f42c1; }
+            .cel-review-card.obsluga_telefoniczna { border-left-color: #e91e63; }
             .cel-review-card h4 { margin: 0 0 10px 0; font-size: 14px; color: #333; }
             .cel-review-card .cel-text { background: #fff; padding: 10px; border-radius: 6px; margin-bottom: 10px; font-size: 13px; color: #555; min-height: 40px; }
             .cel-review-card .cel-text.empty { color: #999; font-style: italic; }
@@ -763,21 +849,11 @@ function zadaniomat_page_main() {
                                             Cel roczny: <?php echo esc_html(mb_substr($cel_rok, 0, 50)); ?><?php echo mb_strlen($cel_rok) > 50 ? '...' : ''; ?>
                                         </div>
                                     <?php endif; ?>
-                                    <textarea class="cel-okres-input" 
-                                              data-okres="<?php echo $current_okres->id; ?>" 
+                                    <textarea class="cel-okres-input"
+                                              data-okres="<?php echo $current_okres->id; ?>"
                                               data-kategoria="<?php echo $key; ?>"
                                               data-cel-id="<?php echo $cel_data['id'] ?: ''; ?>"
                                               placeholder="Cel na 2 tygodnie..."><?php echo esc_textarea($cel_data['cel']); ?></textarea>
-                                    <div class="status-row" style="<?php echo $cel_data['id'] ? '' : 'display:none;'; ?>">
-                                        <label style="font-size: 11px; color: #888;">Status:</label>
-                                        <select class="cel-okres-status" data-id="<?php echo $cel_data['id']; ?>">
-                                            <option value="" <?php selected($cel_data['status'], null); ?>>-</option>
-                                            <option value="0" <?php selected($cel_data['status'], '0'); ?>>0</option>
-                                            <option value="0.5" <?php selected($cel_data['status'], '0.5'); ?>>0.5</option>
-                                            <option value="0.9" <?php selected($cel_data['status'], '0.9'); ?>>0.9</option>
-                                            <option value="1" <?php selected($cel_data['status'], '1'); ?>>1</option>
-                                        </select>
-                                    </div>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -1668,6 +1744,32 @@ function zadaniomat_page_settings() {
             </div>
         </div>
         <?php endif; ?>
+
+        <div class="zadaniomat-card">
+            <h2>📁 Zarządzanie kategoriami</h2>
+            <p style="color: #666; margin-bottom: 15px;">Edytuj kategorie celów i zadań. Kategorie celów to główne obszary strategiczne. Kategorie zadań to wszystkie dostępne kategorie przy dodawaniu zadań.</p>
+
+            <div class="settings-grid">
+                <div>
+                    <h3 style="margin-top: 0;">Kategorie celów</h3>
+                    <p style="font-size: 12px; color: #888;">Te kategorie są używane przy definiowaniu celów rocznych i 2-tygodniowych.</p>
+                    <div id="kategorie-cele-list"></div>
+                    <button type="button" class="button" onclick="addKategoriaCel()">➕ Dodaj kategorię</button>
+                </div>
+                <div>
+                    <h3 style="margin-top: 0;">Kategorie zadań</h3>
+                    <p style="font-size: 12px; color: #888;">Te kategorie są dostępne przy tworzeniu zadań (mogą zawierać dodatkowe).</p>
+                    <div id="kategorie-zadania-list"></div>
+                    <button type="button" class="button" onclick="addKategoriaZadanie()">➕ Dodaj kategorię</button>
+                </div>
+            </div>
+
+            <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #eee;">
+                <button type="button" class="button button-primary" onclick="saveKategorie()">💾 Zapisz kategorie</button>
+                <button type="button" class="button" onclick="resetKategorie()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
+                <span id="kategorie-save-status" style="margin-left: 15px; color: #28a745;"></span>
+            </div>
+        </div>
     </div>
     
     <script>
@@ -1820,6 +1922,115 @@ function zadaniomat_page_settings() {
         $(document).on('keydown', function(e) {
             if (e.key === 'Escape') closeOkresModal();
         });
+
+        // ==================== ZARZĄDZANIE KATEGORIAMI ====================
+        var kategorieCele = <?php echo json_encode(zadaniomat_get_kategorie()); ?>;
+        var kategorieZadania = <?php echo json_encode(zadaniomat_get_kategorie_zadania()); ?>;
+
+        function renderKategorieList() {
+            var htmlCele = '';
+            for (var key in kategorieCele) {
+                htmlCele += '<div class="kategoria-row" style="display: flex; gap: 10px; margin-bottom: 8px; align-items: center;">';
+                htmlCele += '<input type="text" class="kat-cel-key" value="' + escapeHtml(key) + '" placeholder="klucz" style="width: 120px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+                htmlCele += '<input type="text" class="kat-cel-label" value="' + escapeHtml(kategorieCele[key]) + '" placeholder="Nazwa" style="flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+                htmlCele += '<button type="button" class="button button-small" onclick="removeKategoriaCel(this)" style="color: #dc3545;">✕</button>';
+                htmlCele += '</div>';
+            }
+            $('#kategorie-cele-list').html(htmlCele);
+
+            var htmlZadania = '';
+            for (var key in kategorieZadania) {
+                htmlZadania += '<div class="kategoria-row" style="display: flex; gap: 10px; margin-bottom: 8px; align-items: center;">';
+                htmlZadania += '<input type="text" class="kat-zad-key" value="' + escapeHtml(key) + '" placeholder="klucz" style="width: 120px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+                htmlZadania += '<input type="text" class="kat-zad-label" value="' + escapeHtml(kategorieZadania[key]) + '" placeholder="Nazwa" style="flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+                htmlZadania += '<button type="button" class="button button-small" onclick="removeKategoriaZadanie(this)" style="color: #dc3545;">✕</button>';
+                htmlZadania += '</div>';
+            }
+            $('#kategorie-zadania-list').html(htmlZadania);
+        }
+
+        window.addKategoriaCel = function() {
+            var html = '<div class="kategoria-row" style="display: flex; gap: 10px; margin-bottom: 8px; align-items: center;">';
+            html += '<input type="text" class="kat-cel-key" value="" placeholder="klucz" style="width: 120px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+            html += '<input type="text" class="kat-cel-label" value="" placeholder="Nazwa" style="flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+            html += '<button type="button" class="button button-small" onclick="removeKategoriaCel(this)" style="color: #dc3545;">✕</button>';
+            html += '</div>';
+            $('#kategorie-cele-list').append(html);
+        };
+
+        window.addKategoriaZadanie = function() {
+            var html = '<div class="kategoria-row" style="display: flex; gap: 10px; margin-bottom: 8px; align-items: center;">';
+            html += '<input type="text" class="kat-zad-key" value="" placeholder="klucz" style="width: 120px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+            html += '<input type="text" class="kat-zad-label" value="" placeholder="Nazwa" style="flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">';
+            html += '<button type="button" class="button button-small" onclick="removeKategoriaZadanie(this)" style="color: #dc3545;">✕</button>';
+            html += '</div>';
+            $('#kategorie-zadania-list').append(html);
+        };
+
+        window.removeKategoriaCel = function(btn) {
+            $(btn).closest('.kategoria-row').remove();
+        };
+
+        window.removeKategoriaZadanie = function(btn) {
+            $(btn).closest('.kategoria-row').remove();
+        };
+
+        window.saveKategorie = function() {
+            var kategorie = [];
+            var kategorieZad = [];
+
+            $('#kategorie-cele-list .kategoria-row').each(function() {
+                var key = $(this).find('.kat-cel-key').val().trim();
+                var label = $(this).find('.kat-cel-label').val().trim();
+                if (key && label) {
+                    kategorie.push({key: key, label: label});
+                }
+            });
+
+            $('#kategorie-zadania-list .kategoria-row').each(function() {
+                var key = $(this).find('.kat-zad-key').val().trim();
+                var label = $(this).find('.kat-zad-label').val().trim();
+                if (key && label) {
+                    kategorieZad.push({key: key, label: label});
+                }
+            });
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_kategorie',
+                nonce: nonce,
+                kategorie: kategorie,
+                kategorie_zadania: kategorieZad
+            }, function(response) {
+                if (response.success) {
+                    $('#kategorie-save-status').text('✓ Zapisano! Odśwież stronę, aby zobaczyć zmiany.').show();
+                    setTimeout(function() { $('#kategorie-save-status').fadeOut(); }, 5000);
+                } else {
+                    alert('Błąd podczas zapisywania kategorii.');
+                }
+            });
+        };
+
+        window.resetKategorie = function() {
+            if (!confirm('Czy na pewno chcesz przywrócić domyślne kategorie? Twoje zmiany zostaną utracone.')) {
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_reset_kategorie',
+                nonce: nonce
+            }, function(response) {
+                if (response.success) {
+                    kategorieCele = response.data.kategorie;
+                    kategorieZadania = response.data.kategorie_zadania;
+                    renderKategorieList();
+                    $('#kategorie-save-status').text('✓ Przywrócono domyślne kategorie!').show();
+                    setTimeout(function() { $('#kategorie-save-status').fadeOut(); }, 3000);
+                }
+            });
+        };
+
+        // Inicjalizacja
+        renderKategorieList();
     });
     </script>
     <?php
