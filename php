@@ -106,15 +106,35 @@ function zadaniomat_create_tables() {
         planowany_czas INT DEFAULT 0,
         faktyczny_czas INT DEFAULT NULL,
         status DECIMAL(3,1) DEFAULT NULL,
+        godzina_start TIME DEFAULT NULL,
+        godzina_koniec TIME DEFAULT NULL,
+        pozycja_harmonogram INT DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
-    
+
+    // Tabela stałych zadań (cyklicznych)
+    $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $sql6 = "CREATE TABLE IF NOT EXISTS $table_stale (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nazwa VARCHAR(255) NOT NULL,
+        kategoria VARCHAR(50) NOT NULL,
+        planowany_czas INT DEFAULT 0,
+        typ_powtarzania ENUM('codziennie', 'dni_tygodnia', 'dzien_miesiaca') NOT NULL DEFAULT 'codziennie',
+        dni_tygodnia VARCHAR(50) DEFAULT NULL,
+        dzien_miesiaca INT DEFAULT NULL,
+        godzina_start TIME DEFAULT NULL,
+        godzina_koniec TIME DEFAULT NULL,
+        aktywne TINYINT(1) DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) $charset_collate;";
+
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql1);
     dbDelta($sql2);
     dbDelta($sql3);
     dbDelta($sql4);
     dbDelta($sql5);
+    dbDelta($sql6);
 }
 
 add_action('admin_init', function() {
@@ -133,6 +153,26 @@ add_action('admin_init', function() {
     }
     if (!in_array('uwagi', $columns)) {
         $wpdb->query("ALTER TABLE $table_cele_okres ADD COLUMN uwagi TEXT");
+    }
+
+    // Migracja - dodaj kolumny harmonogramu do zadań
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $zadania_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_zadania");
+
+    if (!in_array('godzina_start', $zadania_columns)) {
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN godzina_start TIME DEFAULT NULL");
+    }
+    if (!in_array('godzina_koniec', $zadania_columns)) {
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN godzina_koniec TIME DEFAULT NULL");
+    }
+    if (!in_array('pozycja_harmonogram', $zadania_columns)) {
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN pozycja_harmonogram INT DEFAULT NULL");
+    }
+
+    // Utwórz tabelę stałych zadań jeśli nie istnieje
+    $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    if($wpdb->get_var("SHOW TABLES LIKE '$table_stale'") != $table_stale) {
+        zadaniomat_create_tables();
     }
 });
 
@@ -509,6 +549,238 @@ add_action('wp_ajax_zadaniomat_reset_kategorie', function() {
 });
 
 // =============================================
+// HARMONOGRAM DNIA - AJAX HANDLERS
+// =============================================
+
+// Pobierz stałe zadania
+add_action('wp_ajax_zadaniomat_get_stale_zadania', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $stale = $wpdb->get_results("SELECT * FROM $table ORDER BY godzina_start ASC, id ASC");
+
+    foreach ($stale as &$s) {
+        $s->kategoria_label = zadaniomat_get_kategoria_label($s->kategoria);
+    }
+
+    wp_send_json_success(['stale_zadania' => $stale]);
+});
+
+// Dodaj stałe zadanie
+add_action('wp_ajax_zadaniomat_add_stale_zadanie', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+
+    $wpdb->insert($table, [
+        'nazwa' => sanitize_text_field($_POST['nazwa']),
+        'kategoria' => sanitize_text_field($_POST['kategoria']),
+        'planowany_czas' => intval($_POST['planowany_czas']),
+        'typ_powtarzania' => sanitize_text_field($_POST['typ_powtarzania']),
+        'dni_tygodnia' => sanitize_text_field($_POST['dni_tygodnia'] ?? ''),
+        'dzien_miesiaca' => !empty($_POST['dzien_miesiaca']) ? intval($_POST['dzien_miesiaca']) : null,
+        'godzina_start' => !empty($_POST['godzina_start']) ? sanitize_text_field($_POST['godzina_start']) : null,
+        'godzina_koniec' => !empty($_POST['godzina_koniec']) ? sanitize_text_field($_POST['godzina_koniec']) : null,
+        'aktywne' => 1
+    ]);
+
+    $id = $wpdb->insert_id;
+    $zadanie = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
+    $zadanie->kategoria_label = zadaniomat_get_kategoria_label($zadanie->kategoria);
+
+    wp_send_json_success(['zadanie' => $zadanie]);
+});
+
+// Edytuj stałe zadanie
+add_action('wp_ajax_zadaniomat_edit_stale_zadanie', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $id = intval($_POST['id']);
+
+    $wpdb->update($table, [
+        'nazwa' => sanitize_text_field($_POST['nazwa']),
+        'kategoria' => sanitize_text_field($_POST['kategoria']),
+        'planowany_czas' => intval($_POST['planowany_czas']),
+        'typ_powtarzania' => sanitize_text_field($_POST['typ_powtarzania']),
+        'dni_tygodnia' => sanitize_text_field($_POST['dni_tygodnia'] ?? ''),
+        'dzien_miesiaca' => !empty($_POST['dzien_miesiaca']) ? intval($_POST['dzien_miesiaca']) : null,
+        'godzina_start' => !empty($_POST['godzina_start']) ? sanitize_text_field($_POST['godzina_start']) : null,
+        'godzina_koniec' => !empty($_POST['godzina_koniec']) ? sanitize_text_field($_POST['godzina_koniec']) : null
+    ], ['id' => $id]);
+
+    $zadanie = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
+    $zadanie->kategoria_label = zadaniomat_get_kategoria_label($zadanie->kategoria);
+
+    wp_send_json_success(['zadanie' => $zadanie]);
+});
+
+// Usuń stałe zadanie
+add_action('wp_ajax_zadaniomat_delete_stale_zadanie', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $id = intval($_POST['id']);
+
+    $wpdb->delete($table, ['id' => $id]);
+
+    wp_send_json_success();
+});
+
+// Toggle aktywność stałego zadania
+add_action('wp_ajax_zadaniomat_toggle_stale_zadanie', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $id = intval($_POST['id']);
+    $aktywne = intval($_POST['aktywne']);
+
+    $wpdb->update($table, ['aktywne' => $aktywne], ['id' => $id]);
+
+    wp_send_json_success();
+});
+
+// Pobierz stałe zadania dla danego dnia (sprawdza typ powtarzania)
+add_action('wp_ajax_zadaniomat_get_stale_for_day', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $dzien = sanitize_text_field($_POST['dzien']);
+    $date = new DateTime($dzien);
+    $dayOfWeek = strtolower($date->format('D')); // mon, tue, wed...
+    $dayOfWeekPl = ['mon' => 'pn', 'tue' => 'wt', 'wed' => 'sr', 'thu' => 'cz', 'fri' => 'pt', 'sat' => 'so', 'sun' => 'nd'];
+    $dayPl = $dayOfWeekPl[$dayOfWeek];
+    $dayOfMonth = intval($date->format('j'));
+
+    $stale = $wpdb->get_results("SELECT * FROM $table WHERE aktywne = 1 ORDER BY godzina_start ASC");
+
+    $matching = [];
+    foreach ($stale as $s) {
+        $match = false;
+
+        if ($s->typ_powtarzania === 'codziennie') {
+            $match = true;
+        } elseif ($s->typ_powtarzania === 'dni_tygodnia' && !empty($s->dni_tygodnia)) {
+            $dni = explode(',', $s->dni_tygodnia);
+            $match = in_array($dayPl, $dni);
+        } elseif ($s->typ_powtarzania === 'dzien_miesiaca' && $s->dzien_miesiaca) {
+            $match = ($dayOfMonth === intval($s->dzien_miesiaca));
+        }
+
+        if ($match) {
+            $s->kategoria_label = zadaniomat_get_kategoria_label($s->kategoria);
+            $matching[] = $s;
+        }
+    }
+
+    wp_send_json_success(['stale_zadania' => $matching]);
+});
+
+// Aktualizuj godziny zadania w harmonogramie
+add_action('wp_ajax_zadaniomat_update_harmonogram', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+    $id = intval($_POST['id']);
+    $godzina_start = !empty($_POST['godzina_start']) ? sanitize_text_field($_POST['godzina_start']) : null;
+    $godzina_koniec = !empty($_POST['godzina_koniec']) ? sanitize_text_field($_POST['godzina_koniec']) : null;
+    $pozycja = isset($_POST['pozycja']) ? intval($_POST['pozycja']) : null;
+
+    $wpdb->update($table, [
+        'godzina_start' => $godzina_start,
+        'godzina_koniec' => $godzina_koniec,
+        'pozycja_harmonogram' => $pozycja
+    ], ['id' => $id]);
+
+    wp_send_json_success();
+});
+
+// Pobierz zadania na dziś z harmonogramem
+add_action('wp_ajax_zadaniomat_get_harmonogram', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $dzien = sanitize_text_field($_POST['dzien']);
+
+    // Pobierz zadania na ten dzień
+    $zadania = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table_zadania WHERE dzien = %s ORDER BY godzina_start ASC, pozycja_harmonogram ASC, id ASC",
+        $dzien
+    ));
+
+    foreach ($zadania as &$z) {
+        $z->kategoria_label = zadaniomat_get_kategoria_label($z->kategoria);
+        $z->is_stale = false;
+    }
+
+    // Pobierz stałe zadania dla tego dnia
+    $date = new DateTime($dzien);
+    $dayOfWeek = strtolower($date->format('D'));
+    $dayOfWeekPl = ['mon' => 'pn', 'tue' => 'wt', 'wed' => 'sr', 'thu' => 'cz', 'fri' => 'pt', 'sat' => 'so', 'sun' => 'nd'];
+    $dayPl = $dayOfWeekPl[$dayOfWeek];
+    $dayOfMonth = intval($date->format('j'));
+
+    $stale = $wpdb->get_results("SELECT * FROM $table_stale WHERE aktywne = 1 ORDER BY godzina_start ASC");
+    $stale_matching = [];
+
+    foreach ($stale as $s) {
+        $match = false;
+
+        if ($s->typ_powtarzania === 'codziennie') {
+            $match = true;
+        } elseif ($s->typ_powtarzania === 'dni_tygodnia' && !empty($s->dni_tygodnia)) {
+            $dni = explode(',', $s->dni_tygodnia);
+            $match = in_array($dayPl, $dni);
+        } elseif ($s->typ_powtarzania === 'dzien_miesiaca' && $s->dzien_miesiaca) {
+            $match = ($dayOfMonth === intval($s->dzien_miesiaca));
+        }
+
+        if ($match) {
+            $s->kategoria_label = zadaniomat_get_kategoria_label($s->kategoria);
+            $s->is_stale = true;
+            $s->zadanie = $s->nazwa;
+            $stale_matching[] = $s;
+        }
+    }
+
+    wp_send_json_success([
+        'zadania' => $zadania,
+        'stale_zadania' => $stale_matching
+    ]);
+});
+
+// Zapisz godzinę startu dnia
+add_action('wp_ajax_zadaniomat_save_start_dnia', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $godzina = sanitize_text_field($_POST['godzina']);
+    $dzien = sanitize_text_field($_POST['dzien']);
+
+    update_option('zadaniomat_start_dnia_' . $dzien, $godzina);
+
+    wp_send_json_success();
+});
+
+// Pobierz godzinę startu dnia
+add_action('wp_ajax_zadaniomat_get_start_dnia', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $dzien = sanitize_text_field($_POST['dzien']);
+    $godzina = get_option('zadaniomat_start_dnia_' . $dzien, '');
+
+    wp_send_json_success(['godzina' => $godzina]);
+});
+
+// =============================================
 // STYLE CSS
 // =============================================
 add_action('admin_head', function() {
@@ -756,6 +1028,432 @@ add_action('admin_head', function() {
             .day-info .date-big { font-size: 24px; font-weight: 600; color: #667eea; }
             .day-info .day-name { font-size: 14px; color: #888; margin-top: 4px; }
             .day-info .okres-name { font-size: 12px; color: #28a745; margin-top: 8px; }
+
+            /* ========== HARMONOGRAM DNIA ========== */
+
+            /* Modal startu dnia */
+            .start-day-modal-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.6);
+                z-index: 10000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                animation: fadeIn 0.3s ease;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            .start-day-modal {
+                background: #fff;
+                border-radius: 16px;
+                padding: 30px;
+                max-width: 400px;
+                width: 90%;
+                text-align: center;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                animation: slideUp 0.3s ease;
+            }
+            @keyframes slideUp {
+                from { transform: translateY(20px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+            }
+            .start-day-modal h2 {
+                margin: 0 0 10px 0;
+                font-size: 24px;
+                color: #333;
+            }
+            .start-day-modal p {
+                color: #666;
+                margin-bottom: 20px;
+            }
+            .start-day-modal .current-time {
+                font-size: 48px;
+                font-weight: 700;
+                color: #667eea;
+                margin: 20px 0;
+            }
+            .start-day-modal input[type="time"] {
+                font-size: 24px;
+                padding: 10px 20px;
+                border: 2px solid #ddd;
+                border-radius: 10px;
+                text-align: center;
+                width: 150px;
+            }
+            .start-day-modal input[type="time"]:focus {
+                border-color: #667eea;
+                outline: none;
+            }
+            .start-day-modal .btn-start-now {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: #fff;
+                border: none;
+                padding: 15px 40px;
+                border-radius: 10px;
+                font-size: 18px;
+                font-weight: 600;
+                cursor: pointer;
+                margin: 20px 10px 10px;
+                transition: transform 0.2s, box-shadow 0.2s;
+            }
+            .start-day-modal .btn-start-now:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 20px rgba(102,126,234,0.4);
+            }
+            .start-day-modal .btn-skip {
+                background: transparent;
+                border: none;
+                color: #888;
+                cursor: pointer;
+                font-size: 14px;
+                padding: 10px;
+            }
+            .start-day-modal .btn-skip:hover {
+                color: #333;
+            }
+
+            /* Harmonogram godzinowy */
+            .harmonogram-container {
+                background: #fff;
+                border-radius: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+                padding: 20px;
+                margin-bottom: 20px;
+            }
+            .harmonogram-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+                padding-bottom: 15px;
+                border-bottom: 2px solid #f0f0f0;
+            }
+            .harmonogram-header h2 {
+                margin: 0;
+                font-size: 18px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .harmonogram-header .start-time-badge {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: #fff;
+                padding: 5px 12px;
+                border-radius: 20px;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            .harmonogram-actions {
+                display: flex;
+                gap: 10px;
+            }
+            .btn-change-start {
+                background: #f0f0f0;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 13px;
+            }
+            .btn-change-start:hover {
+                background: #e0e0e0;
+            }
+            .btn-toggle-view {
+                background: #667eea;
+                color: #fff;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 13px;
+            }
+            .btn-toggle-view:hover {
+                background: #5a6fd6;
+            }
+
+            /* Timeline */
+            .harmonogram-timeline {
+                position: relative;
+                min-height: 600px;
+            }
+            .timeline-hour {
+                display: flex;
+                min-height: 60px;
+                border-bottom: 1px solid #f0f0f0;
+                position: relative;
+            }
+            .timeline-hour:last-child {
+                border-bottom: none;
+            }
+            .timeline-hour-label {
+                width: 60px;
+                padding: 8px 10px;
+                font-size: 13px;
+                font-weight: 600;
+                color: #888;
+                flex-shrink: 0;
+                border-right: 2px solid #f0f0f0;
+            }
+            .timeline-hour-content {
+                flex: 1;
+                min-height: 60px;
+                position: relative;
+                padding: 5px;
+            }
+            .timeline-hour-content.dragover {
+                background: rgba(102,126,234,0.1);
+            }
+            .timeline-current-time {
+                position: absolute;
+                left: 60px;
+                right: 0;
+                height: 2px;
+                background: #e53e3e;
+                z-index: 10;
+            }
+            .timeline-current-time::before {
+                content: '';
+                position: absolute;
+                left: -6px;
+                top: -4px;
+                width: 10px;
+                height: 10px;
+                background: #e53e3e;
+                border-radius: 50%;
+            }
+
+            /* Zadania w harmonogramie */
+            .harmonogram-task {
+                background: #fff;
+                border: 1px solid #e0e0e0;
+                border-left: 4px solid #667eea;
+                border-radius: 8px;
+                padding: 10px 12px;
+                margin: 3px 0;
+                cursor: grab;
+                transition: all 0.2s;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .harmonogram-task:hover {
+                box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+                transform: translateY(-1px);
+            }
+            .harmonogram-task.dragging {
+                opacity: 0.5;
+                cursor: grabbing;
+            }
+            .harmonogram-task.is-stale {
+                background: #f8f9fa;
+                border-style: dashed;
+            }
+            .harmonogram-task.zapianowany { border-left-color: #28a745; }
+            .harmonogram-task.klejpan { border-left-color: #17a2b8; }
+            .harmonogram-task.marka_langer { border-left-color: #ffc107; }
+            .harmonogram-task.marketing_construction { border-left-color: #dc3545; }
+            .harmonogram-task.fjo { border-left-color: #6f42c1; }
+            .harmonogram-task.obsluga_telefoniczna { border-left-color: #e91e63; }
+            .harmonogram-task.sprawy_organizacyjne { border-left-color: #607d8b; }
+
+            .harmonogram-task-info {
+                flex: 1;
+            }
+            .harmonogram-task-name {
+                font-weight: 600;
+                color: #333;
+                font-size: 14px;
+            }
+            .harmonogram-task-meta {
+                font-size: 12px;
+                color: #888;
+                margin-top: 3px;
+                display: flex;
+                gap: 10px;
+                align-items: center;
+            }
+            .harmonogram-task-time {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                font-size: 12px;
+                color: #667eea;
+                font-weight: 500;
+            }
+            .harmonogram-task-actions {
+                display: flex;
+                gap: 5px;
+            }
+            .harmonogram-task-actions button {
+                background: none;
+                border: none;
+                cursor: pointer;
+                padding: 5px;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            .harmonogram-task-actions button:hover {
+                background: #f0f0f0;
+            }
+
+            /* Nieprzypisane zadania */
+            .unscheduled-tasks {
+                background: #f8f9fa;
+                border-radius: 12px;
+                padding: 15px;
+                margin-bottom: 20px;
+            }
+            .unscheduled-tasks h3 {
+                margin: 0 0 15px 0;
+                font-size: 14px;
+                color: #666;
+            }
+            .unscheduled-tasks-list {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            .unscheduled-task {
+                background: #fff;
+                border: 1px solid #ddd;
+                border-left: 3px solid #667eea;
+                border-radius: 6px;
+                padding: 8px 12px;
+                cursor: grab;
+                font-size: 13px;
+                transition: all 0.2s;
+            }
+            .unscheduled-task:hover {
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }
+            .unscheduled-task.dragging {
+                opacity: 0.5;
+            }
+
+            /* Stałe zadania badge */
+            .stale-badge {
+                background: #e9ecef;
+                color: #495057;
+                padding: 2px 8px;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: 600;
+            }
+
+            /* Widok listy vs timeline toggle */
+            .view-toggle {
+                display: flex;
+                gap: 5px;
+                background: #f0f0f0;
+                padding: 3px;
+                border-radius: 8px;
+            }
+            .view-toggle button {
+                background: transparent;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 13px;
+            }
+            .view-toggle button.active {
+                background: #fff;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }
+
+            /* Stałe zadania w ustawieniach */
+            .stale-zadania-table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            .stale-zadania-table th,
+            .stale-zadania-table td {
+                padding: 12px;
+                text-align: left;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            .stale-zadania-table th {
+                background: #f8f9fa;
+                font-size: 12px;
+                text-transform: uppercase;
+                color: #666;
+            }
+            .stale-zadania-form {
+                background: #f8f9fa;
+                padding: 20px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+            }
+            .stale-zadania-form .form-row {
+                display: flex;
+                gap: 15px;
+                flex-wrap: wrap;
+                margin-bottom: 15px;
+            }
+            .dni-tygodnia-checkboxes {
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .dni-tygodnia-checkboxes label {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                padding: 5px 10px;
+                background: #fff;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 13px;
+            }
+            .dni-tygodnia-checkboxes input:checked + span {
+                color: #667eea;
+                font-weight: 600;
+            }
+            .toggle-switch {
+                position: relative;
+                width: 50px;
+                height: 26px;
+            }
+            .toggle-switch input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .toggle-slider {
+                position: absolute;
+                cursor: pointer;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: #ccc;
+                border-radius: 26px;
+                transition: 0.3s;
+            }
+            .toggle-slider:before {
+                content: '';
+                position: absolute;
+                height: 20px;
+                width: 20px;
+                left: 3px;
+                bottom: 3px;
+                background: #fff;
+                border-radius: 50%;
+                transition: 0.3s;
+            }
+            .toggle-switch input:checked + .toggle-slider {
+                background: #28a745;
+            }
+            .toggle-switch input:checked + .toggle-slider:before {
+                transform: translateX(24px);
+            }
         </style>
         <?php
     }
@@ -905,6 +1603,34 @@ function zadaniomat_page_main() {
                     </form>
                 </div>
                 
+                <!-- Harmonogram dnia - pokazuje się tylko dla dzisiaj -->
+                <div id="harmonogram-section" style="display: none;">
+                    <div class="harmonogram-container">
+                        <div class="harmonogram-header">
+                            <h2>
+                                📅 Harmonogram dnia
+                                <span class="start-time-badge" id="start-time-badge">Start: --:--</span>
+                            </h2>
+                            <div class="harmonogram-actions">
+                                <button class="btn-change-start" onclick="showStartDayModal()">⏰ Zmień start</button>
+                                <div class="view-toggle">
+                                    <button class="active" data-view="timeline" onclick="toggleHarmonogramView('timeline')">📊 Timeline</button>
+                                    <button data-view="list" onclick="toggleHarmonogramView('list')">📋 Lista</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Nieprzypisane zadania (do przeciągnięcia) -->
+                        <div class="unscheduled-tasks" id="unscheduled-tasks">
+                            <h3>📦 Zadania do przypisania <span id="unscheduled-count"></span></h3>
+                            <div class="unscheduled-tasks-list" id="unscheduled-list"></div>
+                        </div>
+
+                        <!-- Timeline godzinowy -->
+                        <div class="harmonogram-timeline" id="harmonogram-timeline"></div>
+                    </div>
+                </div>
+
                 <!-- Zadania -->
                 <div class="zadaniomat-card">
                     <h2>📋 Zadania</h2>
@@ -913,7 +1639,10 @@ function zadaniomat_page_main() {
             </div>
         </div>
     </div>
-    
+
+    <!-- Modal startu dnia -->
+    <div id="start-day-modal-container"></div>
+
     <!-- Toast container -->
     <div id="toast-container"></div>
     
@@ -1542,7 +2271,421 @@ function zadaniomat_page_main() {
             $('#toast-container').append(toast);
             setTimeout(function() { toast.fadeOut(300, function() { $(this).remove(); }); }, 3000);
         };
-        
+
+        // ==================== HARMONOGRAM DNIA ====================
+        var startDnia = null;
+        var harmonogramView = 'timeline';
+        var harmonogramTasks = [];
+        var harmonogramStale = [];
+        var draggedTask = null;
+
+        // Sprawdź czy pokazać harmonogram (tylko dla dzisiaj)
+        window.checkShowHarmonogram = function() {
+            if (selectedDate === today) {
+                $('#harmonogram-section').show();
+                checkStartDnia();
+            } else {
+                $('#harmonogram-section').hide();
+            }
+        };
+
+        // Sprawdź czy użytkownik ustawił godzinę startu
+        window.checkStartDnia = function() {
+            // Sprawdź localStorage najpierw
+            var savedStart = localStorage.getItem('zadaniomat_start_' + today);
+            if (savedStart) {
+                startDnia = savedStart;
+                updateStartBadge();
+                loadHarmonogram();
+                return;
+            }
+
+            // Sprawdź w bazie
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_start_dnia',
+                nonce: nonce,
+                dzien: today
+            }, function(response) {
+                if (response.success && response.data.godzina) {
+                    startDnia = response.data.godzina;
+                    localStorage.setItem('zadaniomat_start_' + today, startDnia);
+                    updateStartBadge();
+                    loadHarmonogram();
+                } else {
+                    // Pokaż modal startu dnia
+                    showStartDayModal();
+                }
+            });
+        };
+
+        // Modal startu dnia
+        window.showStartDayModal = function() {
+            var now = new Date();
+            var currentTime = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+
+            var html = '<div class="start-day-modal-overlay" onclick="closeStartDayModal(event)">';
+            html += '<div class="start-day-modal" onclick="event.stopPropagation()">';
+            html += '<h2>☀️ Dzień dobry!</h2>';
+            html += '<p>O której godzinie zaczynasz dzisiaj pracę?</p>';
+            html += '<div class="current-time">' + currentTime + '</div>';
+            html += '<div style="margin: 20px 0;">';
+            html += '<input type="time" id="start-time-input" value="' + currentTime + '">';
+            html += '</div>';
+            html += '<button class="btn-start-now" onclick="setStartDnia()">🚀 Zaczynam!</button>';
+            html += '<br><button class="btn-skip" onclick="skipStartDnia()">Pomiń na dziś</button>';
+            html += '</div></div>';
+
+            $('#start-day-modal-container').html(html);
+        };
+
+        window.closeStartDayModal = function(event) {
+            if (event && event.target !== event.currentTarget) return;
+            $('#start-day-modal-container').html('');
+        };
+
+        window.setStartDnia = function() {
+            startDnia = $('#start-time-input').val();
+
+            // Zapisz w localStorage
+            localStorage.setItem('zadaniomat_start_' + today, startDnia);
+
+            // Zapisz w bazie
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_start_dnia',
+                nonce: nonce,
+                dzien: today,
+                godzina: startDnia
+            });
+
+            closeStartDayModal();
+            updateStartBadge();
+            loadHarmonogram();
+            showToast('Dzień rozpoczęty o ' + startDnia + '!', 'success');
+        };
+
+        window.skipStartDnia = function() {
+            startDnia = null;
+            localStorage.setItem('zadaniomat_start_' + today, 'skipped');
+            closeStartDayModal();
+            $('#harmonogram-section').hide();
+        };
+
+        window.updateStartBadge = function() {
+            if (startDnia && startDnia !== 'skipped') {
+                $('#start-time-badge').text('Start: ' + startDnia);
+            }
+        };
+
+        // Załaduj harmonogram
+        window.loadHarmonogram = function() {
+            if (!startDnia || startDnia === 'skipped') return;
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_harmonogram',
+                nonce: nonce,
+                dzien: today
+            }, function(response) {
+                if (response.success) {
+                    harmonogramTasks = response.data.zadania;
+                    harmonogramStale = response.data.stale_zadania;
+                    renderHarmonogram();
+                }
+            });
+        };
+
+        // Renderuj harmonogram
+        window.renderHarmonogram = function() {
+            if (harmonogramView === 'timeline') {
+                renderTimelineView();
+            } else {
+                renderListView();
+            }
+            renderUnscheduledTasks();
+            updateCurrentTimeLine();
+        };
+
+        // Renderuj widok timeline
+        window.renderTimelineView = function() {
+            var startHour = parseInt(startDnia.split(':')[0]);
+            var endHour = 20; // Domyślny koniec dnia
+
+            var html = '';
+
+            // Stwórz godziny
+            for (var h = startHour; h <= endHour; h++) {
+                var hourStr = String(h).padStart(2, '0') + ':00';
+                var tasksInHour = getTasksForHour(h);
+
+                html += '<div class="timeline-hour" data-hour="' + h + '">';
+                html += '<div class="timeline-hour-label">' + hourStr + '</div>';
+                html += '<div class="timeline-hour-content" ondragover="handleDragOver(event)" ondrop="handleDrop(event, ' + h + ')" ondragleave="handleDragLeave(event)">';
+
+                // Renderuj zadania w tej godzinie
+                tasksInHour.forEach(function(task) {
+                    html += renderHarmonogramTask(task);
+                });
+
+                // Renderuj stałe zadania w tej godzinie
+                harmonogramStale.forEach(function(stale) {
+                    if (stale.godzina_start) {
+                        var staleHour = parseInt(stale.godzina_start.split(':')[0]);
+                        if (staleHour === h) {
+                            html += renderHarmonogramTask(stale, true);
+                        }
+                    }
+                });
+
+                html += '</div></div>';
+            }
+
+            $('#harmonogram-timeline').html(html);
+        };
+
+        // Pobierz zadania dla godziny
+        window.getTasksForHour = function(hour) {
+            return harmonogramTasks.filter(function(task) {
+                if (task.godzina_start) {
+                    var taskHour = parseInt(task.godzina_start.split(':')[0]);
+                    return taskHour === hour;
+                }
+                return false;
+            });
+        };
+
+        // Renderuj pojedyncze zadanie w harmonogramie
+        window.renderHarmonogramTask = function(task, isStale) {
+            var staleClass = isStale ? ' is-stale' : '';
+            var taskId = isStale ? 'stale-' + task.id : task.id;
+            var draggable = !isStale ? 'draggable="true" ondragstart="handleDragStart(event, ' + task.id + ')"' : '';
+
+            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + '" data-id="' + taskId + '" ' + draggable + '>';
+            html += '<div class="harmonogram-task-info">';
+            html += '<div class="harmonogram-task-name">' + escapeHtml(task.zadanie || task.nazwa) + '</div>';
+            html += '<div class="harmonogram-task-meta">';
+            html += '<span class="kategoria-badge ' + task.kategoria + '">' + task.kategoria_label + '</span>';
+            if (task.planowany_czas) {
+                html += '<span>⏱️ ' + task.planowany_czas + ' min</span>';
+            }
+            if (isStale) {
+                html += '<span class="stale-badge">🔄 Stałe</span>';
+            }
+            html += '</div></div>';
+
+            if (task.godzina_start) {
+                html += '<div class="harmonogram-task-time">';
+                html += task.godzina_start.substring(0, 5);
+                if (task.godzina_koniec) {
+                    html += ' - ' + task.godzina_koniec.substring(0, 5);
+                }
+                html += '</div>';
+            }
+
+            if (!isStale) {
+                html += '<div class="harmonogram-task-actions">';
+                html += '<button onclick="removeFromHarmonogram(' + task.id + ')" title="Usuń z harmonogramu">❌</button>';
+                html += '</div>';
+            }
+
+            html += '</div>';
+            return html;
+        };
+
+        // Renderuj nieprzypisane zadania
+        window.renderUnscheduledTasks = function() {
+            var unscheduled = harmonogramTasks.filter(function(task) {
+                return !task.godzina_start;
+            });
+
+            if (unscheduled.length === 0) {
+                $('#unscheduled-tasks').hide();
+                return;
+            }
+
+            $('#unscheduled-tasks').show();
+            $('#unscheduled-count').text('(' + unscheduled.length + ')');
+
+            var html = '';
+            unscheduled.forEach(function(task) {
+                html += '<div class="unscheduled-task ' + task.kategoria + '" draggable="true" ondragstart="handleDragStart(event, ' + task.id + ')" data-id="' + task.id + '">';
+                html += '<strong>' + escapeHtml(task.zadanie) + '</strong>';
+                if (task.planowany_czas) {
+                    html += ' <span style="color:#888;">(' + task.planowany_czas + ' min)</span>';
+                }
+                html += '</div>';
+            });
+
+            $('#unscheduled-list').html(html);
+        };
+
+        // Drag & Drop
+        window.handleDragStart = function(event, taskId) {
+            draggedTask = taskId;
+            event.target.classList.add('dragging');
+            event.dataTransfer.setData('text/plain', taskId);
+        };
+
+        window.handleDragOver = function(event) {
+            event.preventDefault();
+            event.currentTarget.classList.add('dragover');
+        };
+
+        window.handleDragLeave = function(event) {
+            event.currentTarget.classList.remove('dragover');
+        };
+
+        window.handleDrop = function(event, hour) {
+            event.preventDefault();
+            event.currentTarget.classList.remove('dragover');
+
+            if (!draggedTask) return;
+
+            var godzina = String(hour).padStart(2, '0') + ':00';
+            var task = harmonogramTasks.find(function(t) { return t.id == draggedTask; });
+
+            if (task) {
+                // Oblicz godzinę końcową
+                var godzinaKoniec = null;
+                if (task.planowany_czas) {
+                    var endMinutes = hour * 60 + parseInt(task.planowany_czas);
+                    var endHour = Math.floor(endMinutes / 60);
+                    var endMin = endMinutes % 60;
+                    godzinaKoniec = String(endHour).padStart(2, '0') + ':' + String(endMin).padStart(2, '0');
+                }
+
+                // Aktualizuj w bazie
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_update_harmonogram',
+                    nonce: nonce,
+                    id: draggedTask,
+                    godzina_start: godzina,
+                    godzina_koniec: godzinaKoniec
+                }, function(response) {
+                    if (response.success) {
+                        // Aktualizuj lokalnie
+                        task.godzina_start = godzina;
+                        task.godzina_koniec = godzinaKoniec;
+                        renderHarmonogram();
+                        showToast('Zadanie przypisane do ' + godzina, 'success');
+                    }
+                });
+            }
+
+            draggedTask = null;
+            $('.dragging').removeClass('dragging');
+        };
+
+        // Usuń z harmonogramu
+        window.removeFromHarmonogram = function(taskId) {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_update_harmonogram',
+                nonce: nonce,
+                id: taskId,
+                godzina_start: '',
+                godzina_koniec: ''
+            }, function(response) {
+                if (response.success) {
+                    var task = harmonogramTasks.find(function(t) { return t.id == taskId; });
+                    if (task) {
+                        task.godzina_start = null;
+                        task.godzina_koniec = null;
+                    }
+                    renderHarmonogram();
+                    showToast('Zadanie usunięte z harmonogramu', 'success');
+                }
+            });
+        };
+
+        // Toggle widok
+        window.toggleHarmonogramView = function(view) {
+            harmonogramView = view;
+            $('.view-toggle button').removeClass('active');
+            $('.view-toggle button[data-view="' + view + '"]').addClass('active');
+            renderHarmonogram();
+        };
+
+        // Renderuj widok listy
+        window.renderListView = function() {
+            var allTasks = [];
+
+            // Dodaj zwykłe zadania
+            harmonogramTasks.forEach(function(task) {
+                if (task.godzina_start) {
+                    allTasks.push({ task: task, isStale: false, time: task.godzina_start });
+                }
+            });
+
+            // Dodaj stałe zadania
+            harmonogramStale.forEach(function(stale) {
+                if (stale.godzina_start) {
+                    allTasks.push({ task: stale, isStale: true, time: stale.godzina_start });
+                }
+            });
+
+            // Sortuj po czasie
+            allTasks.sort(function(a, b) {
+                return a.time.localeCompare(b.time);
+            });
+
+            var html = '<div style="padding: 10px;">';
+            allTasks.forEach(function(item) {
+                html += renderHarmonogramTask(item.task, item.isStale);
+            });
+
+            if (allTasks.length === 0) {
+                html += '<p style="color: #888; text-align: center; padding: 40px;">Przeciągnij zadania na timeline, aby ułożyć harmonogram</p>';
+            }
+
+            html += '</div>';
+            $('#harmonogram-timeline').html(html);
+        };
+
+        // Aktualizuj linię aktualnego czasu
+        window.updateCurrentTimeLine = function() {
+            if (harmonogramView !== 'timeline') return;
+
+            var now = new Date();
+            var currentHour = now.getHours();
+            var currentMinute = now.getMinutes();
+
+            // Usuń poprzednią linię
+            $('.timeline-current-time').remove();
+
+            // Znajdź godzinę
+            var $hourDiv = $('.timeline-hour[data-hour="' + currentHour + '"]');
+            if ($hourDiv.length) {
+                var percentInHour = (currentMinute / 60) * 100;
+                var line = $('<div class="timeline-current-time"></div>');
+                line.css('top', percentInHour + '%');
+                $hourDiv.find('.timeline-hour-content').append(line);
+            }
+        };
+
+        // Aktualizuj linię co minutę
+        setInterval(updateCurrentTimeLine, 60000);
+
+        // Modyfikuj init żeby sprawdzić harmonogram
+        var originalInit = $(document).ready;
+        $(document).ready(function() {
+            renderCalendar();
+            loadOverdueTasks();
+            loadTasks();
+            updateDateInfo();
+            bindEvents();
+            checkShowHarmonogram();
+        });
+
+        // Modyfikuj selectDate żeby sprawdzić harmonogram
+        var originalSelectDate = window.selectDate;
+        window.selectDate = function(date) {
+            selectedDate = date;
+            $('.calendar-day').removeClass('selected');
+            $('.calendar-day[data-date="' + date + '"]').addClass('selected');
+            loadTasks();
+            updateDateInfo();
+            $('#task-date').val(date);
+            checkShowHarmonogram();
+        };
+
     })(jQuery);
     </script>
     <?php
@@ -1744,6 +2887,87 @@ function zadaniomat_page_settings() {
             </div>
         </div>
         <?php endif; ?>
+
+        <div class="zadaniomat-card">
+            <h2>🔄 Stałe zadania (cykliczne)</h2>
+            <p style="color: #666; margin-bottom: 15px;">Definiuj zadania, które powtarzają się regularnie. Będą automatycznie pojawiać się w harmonogramie dnia.</p>
+
+            <!-- Formularz dodawania stałego zadania -->
+            <div class="stale-zadania-form">
+                <h4 style="margin-top: 0;">➕ Dodaj stałe zadanie</h4>
+                <div class="form-row">
+                    <div class="form-group" style="flex: 2;">
+                        <label>Nazwa zadania</label>
+                        <input type="text" id="stale-nazwa" placeholder="np. Sprawdzenie maili">
+                    </div>
+                    <div class="form-group">
+                        <label>Kategoria</label>
+                        <select id="stale-kategoria">
+                            <?php foreach (ZADANIOMAT_KATEGORIE_ZADANIA as $key => $label): ?>
+                                <option value="<?php echo $key; ?>"><?php echo $label; ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Czas (min)</label>
+                        <input type="number" id="stale-czas" min="0" placeholder="30" style="width: 80px;">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Typ powtarzania</label>
+                        <select id="stale-typ" onchange="toggleStaleOptions()">
+                            <option value="codziennie">Codziennie</option>
+                            <option value="dni_tygodnia">Wybrane dni tygodnia</option>
+                            <option value="dzien_miesiaca">Dzień miesiąca</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="stale-dni-wrap" style="display: none;">
+                        <label>Dni tygodnia</label>
+                        <div class="dni-tygodnia-checkboxes">
+                            <label><input type="checkbox" value="pn"><span>Pn</span></label>
+                            <label><input type="checkbox" value="wt"><span>Wt</span></label>
+                            <label><input type="checkbox" value="sr"><span>Śr</span></label>
+                            <label><input type="checkbox" value="cz"><span>Cz</span></label>
+                            <label><input type="checkbox" value="pt"><span>Pt</span></label>
+                            <label><input type="checkbox" value="so"><span>So</span></label>
+                            <label><input type="checkbox" value="nd"><span>Nd</span></label>
+                        </div>
+                    </div>
+                    <div class="form-group" id="stale-dzien-wrap" style="display: none;">
+                        <label>Dzień miesiąca</label>
+                        <input type="number" id="stale-dzien-miesiaca" min="1" max="31" placeholder="1-31" style="width: 80px;">
+                    </div>
+                    <div class="form-group">
+                        <label>Godzina start</label>
+                        <input type="time" id="stale-godzina-start">
+                    </div>
+                    <div class="form-group">
+                        <label>Godzina koniec</label>
+                        <input type="time" id="stale-godzina-koniec">
+                    </div>
+                </div>
+                <button type="button" class="button button-primary" onclick="addStaleZadanie()">➕ Dodaj stałe zadanie</button>
+            </div>
+
+            <!-- Lista stałych zadań -->
+            <table class="stale-zadania-table" id="stale-zadania-table">
+                <thead>
+                    <tr>
+                        <th>Aktywne</th>
+                        <th>Nazwa</th>
+                        <th>Kategoria</th>
+                        <th>Powtarzanie</th>
+                        <th>Godziny</th>
+                        <th>Czas</th>
+                        <th>Akcje</th>
+                    </tr>
+                </thead>
+                <tbody id="stale-zadania-body">
+                    <!-- Wypełniane przez JavaScript -->
+                </tbody>
+            </table>
+        </div>
 
         <div class="zadaniomat-card">
             <h2>📁 Zarządzanie kategoriami</h2>
@@ -2029,8 +3253,163 @@ function zadaniomat_page_settings() {
             });
         };
 
+        // ==================== STAŁE ZADANIA ====================
+        var staleZadania = [];
+
+        window.toggleStaleOptions = function() {
+            var typ = $('#stale-typ').val();
+            $('#stale-dni-wrap').toggle(typ === 'dni_tygodnia');
+            $('#stale-dzien-wrap').toggle(typ === 'dzien_miesiaca');
+        };
+
+        window.loadStaleZadania = function() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_stale_zadania',
+                nonce: nonce
+            }, function(response) {
+                if (response.success) {
+                    staleZadania = response.data.stale_zadania;
+                    renderStaleZadania();
+                }
+            });
+        };
+
+        window.renderStaleZadania = function() {
+            var html = '';
+
+            if (staleZadania.length === 0) {
+                html = '<tr><td colspan="7" style="text-align: center; color: #888; padding: 30px;">Brak stałych zadań. Dodaj pierwsze zadanie powyżej.</td></tr>';
+            } else {
+                staleZadania.forEach(function(zadanie) {
+                    var powtarzanie = '';
+                    if (zadanie.typ_powtarzania === 'codziennie') {
+                        powtarzanie = '📅 Codziennie';
+                    } else if (zadanie.typ_powtarzania === 'dni_tygodnia') {
+                        powtarzanie = '📆 ' + (zadanie.dni_tygodnia || '').toUpperCase().replace(/,/g, ', ');
+                    } else if (zadanie.typ_powtarzania === 'dzien_miesiaca') {
+                        powtarzanie = '🗓️ ' + zadanie.dzien_miesiaca + ' dnia miesiąca';
+                    }
+
+                    var godziny = '-';
+                    if (zadanie.godzina_start) {
+                        godziny = zadanie.godzina_start.substring(0, 5);
+                        if (zadanie.godzina_koniec) {
+                            godziny += ' - ' + zadanie.godzina_koniec.substring(0, 5);
+                        }
+                    }
+
+                    html += '<tr data-id="' + zadanie.id + '">';
+                    html += '<td>';
+                    html += '<label class="toggle-switch">';
+                    html += '<input type="checkbox" ' + (zadanie.aktywne == 1 ? 'checked' : '') + ' onchange="toggleStaleAktywne(' + zadanie.id + ', this.checked)">';
+                    html += '<span class="toggle-slider"></span>';
+                    html += '</label>';
+                    html += '</td>';
+                    html += '<td><strong>' + escapeHtml(zadanie.nazwa) + '</strong></td>';
+                    html += '<td><span class="kategoria-badge ' + zadanie.kategoria + '">' + zadanie.kategoria_label + '</span></td>';
+                    html += '<td>' + powtarzanie + '</td>';
+                    html += '<td>' + godziny + '</td>';
+                    html += '<td>' + (zadanie.planowany_czas || '-') + ' min</td>';
+                    html += '<td>';
+                    html += '<button class="btn-delete" onclick="deleteStaleZadanie(' + zadanie.id + ')" title="Usuń">🗑️</button>';
+                    html += '</td>';
+                    html += '</tr>';
+                });
+            }
+
+            $('#stale-zadania-body').html(html);
+        };
+
+        window.addStaleZadanie = function() {
+            var nazwa = $('#stale-nazwa').val().trim();
+            if (!nazwa) {
+                alert('Wpisz nazwę zadania!');
+                return;
+            }
+
+            var typ = $('#stale-typ').val();
+            var dniTygodnia = '';
+            if (typ === 'dni_tygodnia') {
+                var selected = [];
+                $('.dni-tygodnia-checkboxes input:checked').each(function() {
+                    selected.push($(this).val());
+                });
+                dniTygodnia = selected.join(',');
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_add_stale_zadanie',
+                nonce: nonce,
+                nazwa: nazwa,
+                kategoria: $('#stale-kategoria').val(),
+                planowany_czas: $('#stale-czas').val() || 0,
+                typ_powtarzania: typ,
+                dni_tygodnia: dniTygodnia,
+                dzien_miesiaca: $('#stale-dzien-miesiaca').val(),
+                godzina_start: $('#stale-godzina-start').val(),
+                godzina_koniec: $('#stale-godzina-koniec').val()
+            }, function(response) {
+                if (response.success) {
+                    staleZadania.push(response.data.zadanie);
+                    renderStaleZadania();
+
+                    // Reset formularza
+                    $('#stale-nazwa').val('');
+                    $('#stale-czas').val('');
+                    $('#stale-godzina-start').val('');
+                    $('#stale-godzina-koniec').val('');
+                    $('#stale-typ').val('codziennie');
+                    toggleStaleOptions();
+                    $('.dni-tygodnia-checkboxes input').prop('checked', false);
+                    $('#stale-dzien-miesiaca').val('');
+
+                    showToast('Stałe zadanie dodane!', 'success');
+                }
+            });
+        };
+
+        window.toggleStaleAktywne = function(id, aktywne) {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_toggle_stale_zadanie',
+                nonce: nonce,
+                id: id,
+                aktywne: aktywne ? 1 : 0
+            }, function(response) {
+                if (response.success) {
+                    var zadanie = staleZadania.find(function(z) { return z.id == id; });
+                    if (zadanie) {
+                        zadanie.aktywne = aktywne ? 1 : 0;
+                    }
+                    showToast(aktywne ? 'Zadanie aktywowane' : 'Zadanie dezaktywowane', 'success');
+                }
+            });
+        };
+
+        window.deleteStaleZadanie = function(id) {
+            if (!confirm('Na pewno usunąć to stałe zadanie?')) return;
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_delete_stale_zadanie',
+                nonce: nonce,
+                id: id
+            }, function(response) {
+                if (response.success) {
+                    staleZadania = staleZadania.filter(function(z) { return z.id != id; });
+                    renderStaleZadania();
+                    showToast('Stałe zadanie usunięte', 'success');
+                }
+            });
+        };
+
+        window.showToast = function(message, type) {
+            var toast = $('<div style="position:fixed;bottom:20px;right:20px;background:' + (type === 'success' ? '#28a745' : '#dc3545') + ';color:#fff;padding:12px 20px;border-radius:8px;z-index:9999;">' + message + '</div>');
+            $('body').append(toast);
+            setTimeout(function() { toast.fadeOut(300, function() { $(this).remove(); }); }, 3000);
+        };
+
         // Inicjalizacja
         renderKategorieList();
+        loadStaleZadania();
     });
     </script>
     <?php
