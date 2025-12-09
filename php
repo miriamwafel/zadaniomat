@@ -838,262 +838,889 @@ add_action('admin_head', function() {
     if (strpos($page, 'zadaniomat') !== false) {
         ?>
         <style>
-            .zadaniomat-wrap { max-width: 1600px; margin: 20px auto; }
-            .zadaniomat-card { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; }
-            .zadaniomat-card h2 { margin-top: 0; border-bottom: 2px solid #f0f0f0; padding-bottom: 12px; font-size: 18px; }
-            
-            .main-layout { display: grid; grid-template-columns: 320px 1fr; gap: 20px; }
-            @media (max-width: 1200px) { .main-layout { grid-template-columns: 1fr; } }
-            
-            /* Kalendarz */
-            .calendar-wrap { background: #fff; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-            .calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-            .calendar-header h3 { margin: 0; font-size: 16px; }
-            .calendar-nav { display: flex; gap: 5px; }
-            .calendar-nav button { background: #f0f0f0; border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
-            .calendar-nav button:hover { background: #e0e0e0; }
-            .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-            .calendar-day-header { text-align: center; font-size: 11px; font-weight: 600; color: #888; padding: 8px 0; }
-            .calendar-day { 
-                aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; 
-                border-radius: 8px; cursor: pointer; font-size: 14px; position: relative; transition: all 0.2s;
+            /* ========== LANCER BRAND IDENTITY ========== */
+            /* Google Fonts Import */
+            @import url('https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Inter:wght@400;500;600;700&display=swap');
+
+            /* CSS Variables - LANCER Color Palette */
+            :root {
+                --lancer-deep-blue: #0F1629;
+                --lancer-flame: #FF4D00;
+                --lancer-flame-dark: #E64500;
+                --lancer-flame-light: #FF6B2C;
+                --lancer-cobalt: #0029FF;
+                --lancer-cobalt-dark: #0020CC;
+                --lancer-cobalt-light: #3355FF;
+                --lancer-ash-grey: #C8C8C8;
+                --lancer-light-grey: #F5F5F5;
+                --lancer-cream: #FAF9F6;
+                --lancer-white: #FFFFFF;
+                --lancer-text-dark: #0F1629;
+                --lancer-text-medium: #4A5568;
+                --lancer-text-light: #718096;
+
+                /* Font families */
+                --font-display: 'Exo 2', 'Helvetica Neue', sans-serif;
+                --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+                /* Shadows */
+                --shadow-sm: 0 1px 3px rgba(15, 22, 41, 0.08);
+                --shadow-md: 0 4px 12px rgba(15, 22, 41, 0.12);
+                --shadow-lg: 0 10px 40px rgba(15, 22, 41, 0.2);
+                --shadow-flame: 0 4px 20px rgba(255, 77, 0, 0.3);
+                --shadow-cobalt: 0 4px 20px rgba(0, 41, 255, 0.3);
             }
-            .calendar-day:hover { background: #f5f5f5; }
-            .calendar-day.other-month { color: #ccc; }
-            .calendar-day.today { background: #e3f2fd; font-weight: 600; }
-            .calendar-day.selected { background: #667eea; color: #fff; }
-            .calendar-day.has-tasks::after { content: ''; width: 6px; height: 6px; background: #28a745; border-radius: 50%; position: absolute; bottom: 4px; }
-            .calendar-day.selected.has-tasks::after { background: #fff; }
-            
-            /* Okres banner */
-            .okres-banner { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
-            .okres-banner h2 { margin: 0 0 5px 0; color: #fff; border: none; padding: 0; font-size: 20px; }
-            .okres-banner .dates { opacity: 0.9; font-size: 14px; }
-            .no-okres-banner { background: #f8d7da; color: #721c24; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
-            
-            /* Cele grid */
-            .cele-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-            .cel-card { background: #f8f9fa; padding: 12px; border-radius: 8px; border-left: 4px solid #007bff; }
-            .cel-card.zapianowany { border-left-color: #28a745; }
-            .cel-card.klejpan { border-left-color: #17a2b8; }
-            .cel-card.marka_langer { border-left-color: #ffc107; }
-            .cel-card.marketing_construction { border-left-color: #dc3545; }
-            .cel-card.fjo { border-left-color: #6f42c1; }
-            .cel-card.obsluga_telefoniczna { border-left-color: #e91e63; }
-            .cel-card h4 { margin: 0 0 8px 0; font-size: 12px; color: #666; }
-            .cel-card textarea { width: 100%; min-height: 50px; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; resize: vertical; }
-            .cel-card .status-row { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
-            .cel-card .status-row select { padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid #ddd; }
-            
-            /* Formularz */
-            .task-form { background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
-            .task-form h3 { margin: 0 0 15px 0; font-size: 16px; }
-            .form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+
+            /* Base typography */
+            .zadaniomat-wrap {
+                max-width: 1600px;
+                margin: 20px auto;
+                font-family: var(--font-body);
+                color: var(--lancer-text-dark);
+            }
+            .zadaniomat-wrap h1, .zadaniomat-wrap h2, .zadaniomat-wrap h3, .zadaniomat-wrap h4 {
+                font-family: var(--font-display);
+                font-weight: 700;
+                letter-spacing: -0.02em;
+            }
+
+            .zadaniomat-card {
+                background: var(--lancer-white);
+                padding: 24px;
+                border-radius: 16px;
+                box-shadow: var(--shadow-md);
+                margin-bottom: 24px;
+                border: 1px solid rgba(15, 22, 41, 0.05);
+            }
+            .zadaniomat-card h2 {
+                margin-top: 0;
+                border-bottom: 2px solid var(--lancer-light-grey);
+                padding-bottom: 14px;
+                font-size: 20px;
+                color: var(--lancer-deep-blue);
+            }
+
+            .main-layout { display: grid; grid-template-columns: 340px 1fr; gap: 24px; }
+            @media (max-width: 1200px) { .main-layout { grid-template-columns: 1fr; } }
+
+            /* Kalendarz - LANCER Style */
+            .calendar-wrap {
+                background: var(--lancer-white);
+                border-radius: 16px;
+                padding: 20px;
+                box-shadow: var(--shadow-md);
+                border: 1px solid rgba(15, 22, 41, 0.05);
+            }
+            .calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+            .calendar-header h3 {
+                margin: 0;
+                font-size: 18px;
+                font-family: var(--font-display);
+                font-weight: 700;
+                color: var(--lancer-deep-blue);
+            }
+            .calendar-nav { display: flex; gap: 6px; }
+            .calendar-nav button {
+                background: var(--lancer-light-grey);
+                border: none;
+                padding: 8px 14px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-family: var(--font-display);
+                font-weight: 600;
+                color: var(--lancer-text-dark);
+                transition: all 0.2s ease;
+            }
+            .calendar-nav button:hover {
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
+                transform: translateY(-1px);
+            }
+            .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+            .calendar-day-header {
+                text-align: center;
+                font-size: 11px;
+                font-weight: 700;
+                color: var(--lancer-text-light);
+                padding: 10px 0;
+                font-family: var(--font-display);
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }
+            .calendar-day {
+                aspect-ratio: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                border-radius: 10px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+                position: relative;
+                transition: all 0.2s ease;
+                font-family: var(--font-body);
+            }
+            .calendar-day:hover { background: var(--lancer-light-grey); }
+            .calendar-day.other-month { color: var(--lancer-ash-grey); }
+            .calendar-day.today {
+                background: rgba(0, 41, 255, 0.1);
+                font-weight: 700;
+                color: var(--lancer-cobalt);
+            }
+            .calendar-day.selected {
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
+                box-shadow: var(--shadow-flame);
+            }
+            .calendar-day.has-tasks::after {
+                content: '';
+                width: 6px;
+                height: 6px;
+                background: var(--lancer-cobalt);
+                border-radius: 50%;
+                position: absolute;
+                bottom: 5px;
+            }
+            .calendar-day.selected.has-tasks::after { background: var(--lancer-white); }
+
+            /* Okres banner - LANCER Gradient */
+            .okres-banner {
+                background: var(--lancer-deep-blue);
+                color: var(--lancer-white);
+                padding: 28px;
+                border-radius: 16px;
+                margin-bottom: 24px;
+                position: relative;
+                overflow: hidden;
+            }
+            .okres-banner::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 200px;
+                height: 100%;
+                background: linear-gradient(135deg, var(--lancer-flame) 0%, var(--lancer-flame-light) 100%);
+                clip-path: polygon(30% 0, 100% 0, 100% 100%, 0% 100%);
+            }
+            .okres-banner h2 {
+                margin: 0 0 8px 0;
+                color: var(--lancer-white);
+                border: none;
+                padding: 0;
+                font-size: 24px;
+                font-family: var(--font-display);
+                font-weight: 800;
+                position: relative;
+                z-index: 1;
+            }
+            .okres-banner .dates {
+                opacity: 0.9;
+                font-size: 15px;
+                position: relative;
+                z-index: 1;
+            }
+            .no-okres-banner {
+                background: linear-gradient(135deg, #FFF5F5 0%, #FED7D7 100%);
+                color: #C53030;
+                padding: 24px;
+                border-radius: 16px;
+                margin-bottom: 24px;
+                border-left: 4px solid #E53E3E;
+            }
+
+            /* Cele grid - LANCER Style */
+            .cele-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+            .cel-card {
+                background: var(--lancer-cream);
+                padding: 16px;
+                border-radius: 12px;
+                border-left: 4px solid var(--lancer-cobalt);
+                transition: all 0.2s ease;
+            }
+            .cel-card:hover {
+                transform: translateY(-2px);
+                box-shadow: var(--shadow-sm);
+            }
+            .cel-card.zapianowany { border-left-color: #22C55E; }
+            .cel-card.klejpan { border-left-color: var(--lancer-cobalt); }
+            .cel-card.marka_langer { border-left-color: var(--lancer-flame); }
+            .cel-card.marketing_construction { border-left-color: #EF4444; }
+            .cel-card.fjo { border-left-color: #8B5CF6; }
+            .cel-card.obsluga_telefoniczna { border-left-color: #EC4899; }
+            .cel-card h4 {
+                margin: 0 0 10px 0;
+                font-size: 12px;
+                color: var(--lancer-text-medium);
+                font-family: var(--font-display);
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+            }
+            .cel-card textarea {
+                width: 100%;
+                min-height: 55px;
+                padding: 10px;
+                border: 1px solid rgba(15, 22, 41, 0.1);
+                border-radius: 8px;
+                font-size: 13px;
+                resize: vertical;
+                font-family: var(--font-body);
+                background: var(--lancer-white);
+                transition: all 0.2s ease;
+            }
+            .cel-card textarea:focus {
+                border-color: var(--lancer-flame);
+                box-shadow: 0 0 0 3px rgba(255, 77, 0, 0.1);
+                outline: none;
+            }
+            .cel-card .status-row { margin-top: 10px; display: flex; align-items: center; gap: 10px; }
+            .cel-card .status-row select {
+                padding: 6px 10px;
+                font-size: 12px;
+                border-radius: 6px;
+                border: 1px solid rgba(15, 22, 41, 0.15);
+                font-family: var(--font-body);
+            }
+
+            /* Formularz - LANCER Style */
+            .task-form {
+                background: var(--lancer-cream);
+                padding: 24px;
+                border-radius: 16px;
+                margin-bottom: 24px;
+                border: 1px solid rgba(15, 22, 41, 0.05);
+            }
+            .task-form h3 {
+                margin: 0 0 18px 0;
+                font-size: 18px;
+                font-family: var(--font-display);
+                font-weight: 700;
+                color: var(--lancer-deep-blue);
+            }
+            .form-row { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
             .form-group { flex: 1; min-width: 150px; }
             .form-group.wide { flex: 2; min-width: 300px; }
-            .form-group label { display: block; font-size: 12px; font-weight: 600; color: #555; margin-bottom: 4px; }
-            .form-group input, .form-group select, .form-group textarea { 
-                width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; box-sizing: border-box;
+            .form-group label {
+                display: block;
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--lancer-text-medium);
+                margin-bottom: 6px;
+                font-family: var(--font-display);
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
             }
-            .form-group textarea { min-height: 60px; resize: vertical; }
-            .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #667eea; outline: none; box-shadow: 0 0 0 3px rgba(102,126,234,0.1); }
+            .form-group input, .form-group select, .form-group textarea {
+                width: 100%;
+                padding: 12px 14px;
+                border: 1px solid rgba(15, 22, 41, 0.12);
+                border-radius: 10px;
+                font-size: 14px;
+                box-sizing: border-box;
+                font-family: var(--font-body);
+                background: var(--lancer-white);
+                transition: all 0.2s ease;
+            }
+            .form-group textarea { min-height: 65px; resize: vertical; }
+            .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+                border-color: var(--lancer-flame);
+                outline: none;
+                box-shadow: 0 0 0 3px rgba(255, 77, 0, 0.1);
+            }
             
-            /* Dzienne sekcje */
-            .day-section { margin-bottom: 25px; }
-            .day-header { background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); padding: 12px 16px; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #dee2e6; }
-            .day-header.today-header { background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%); border-bottom-color: #28a745; }
-            .day-header h3 { margin: 0; font-size: 15px; }
-            .day-header .day-stats { font-size: 13px; color: #666; }
-            
-            .day-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 0 0 10px 10px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-            .day-table th, .day-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
-            .day-table th { background: #fafafa; font-weight: 600; font-size: 11px; text-transform: uppercase; color: #888; }
+            /* Dzienne sekcje - LANCER Style */
+            .day-section { margin-bottom: 28px; }
+            .day-header {
+                background: var(--lancer-light-grey);
+                padding: 14px 18px;
+                border-radius: 12px 12px 0 0;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 3px solid var(--lancer-ash-grey);
+            }
+            .day-header.today-header {
+                background: var(--lancer-deep-blue);
+                border-bottom-color: var(--lancer-flame);
+            }
+            .day-header.today-header h3 { color: var(--lancer-white); }
+            .day-header.today-header .day-stats { color: rgba(255,255,255,0.8); }
+            .day-header h3 {
+                margin: 0;
+                font-size: 16px;
+                font-family: var(--font-display);
+                font-weight: 700;
+                color: var(--lancer-deep-blue);
+            }
+            .day-header .day-stats {
+                font-size: 13px;
+                color: var(--lancer-text-medium);
+                font-family: var(--font-body);
+            }
+
+            .day-table {
+                width: 100%;
+                border-collapse: collapse;
+                background: var(--lancer-white);
+                border-radius: 0 0 12px 12px;
+                overflow: hidden;
+                box-shadow: var(--shadow-sm);
+            }
+            .day-table th, .day-table td {
+                padding: 12px 14px;
+                text-align: left;
+                border-bottom: 1px solid var(--lancer-light-grey);
+                font-size: 13px;
+                font-family: var(--font-body);
+            }
+            .day-table th {
+                background: var(--lancer-cream);
+                font-weight: 600;
+                font-size: 11px;
+                text-transform: uppercase;
+                color: var(--lancer-text-light);
+                font-family: var(--font-display);
+                letter-spacing: 0.04em;
+            }
             .day-table tr:last-child td { border-bottom: none; }
-            .day-table tr:hover { background: #fafafa; }
-            
-            .status-done { background-color: #d4edda !important; }
-            .status-partial { background-color: #fff3cd !important; }
-            .status-none { background-color: #f8d7da !important; }
-            
-            .inline-input { width: 60px; padding: 6px; border: 1px solid #ddd; border-radius: 6px; text-align: center; font-size: 13px; }
-            .inline-select { padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
-            
-            .btn-delete { color: #dc3545; background: none; border: none; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
-            .btn-delete:hover { background: #f8d7da; }
-            .btn-edit { color: #007bff; background: none; border: none; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
-            .btn-edit:hover { background: #e3f2fd; }
+            .day-table tr:hover { background: rgba(255, 77, 0, 0.03); }
 
-            /* Bulk actions */
-            .task-checkbox { width: 18px; height: 18px; cursor: pointer; accent-color: #667eea; }
-            .bulk-actions { display: none; align-items: center; gap: 10px; margin-left: 15px; }
+            .status-done { background-color: rgba(34, 197, 94, 0.15) !important; }
+            .status-partial { background-color: rgba(255, 77, 0, 0.1) !important; }
+            .status-none { background-color: rgba(239, 68, 68, 0.1) !important; }
+
+            .inline-input {
+                width: 65px;
+                padding: 8px;
+                border: 1px solid rgba(15, 22, 41, 0.12);
+                border-radius: 8px;
+                text-align: center;
+                font-size: 13px;
+                font-family: var(--font-body);
+                transition: all 0.2s ease;
+            }
+            .inline-input:focus {
+                border-color: var(--lancer-flame);
+                box-shadow: 0 0 0 2px rgba(255, 77, 0, 0.1);
+                outline: none;
+            }
+            .inline-select {
+                padding: 8px 10px;
+                border: 1px solid rgba(15, 22, 41, 0.12);
+                border-radius: 8px;
+                font-size: 13px;
+                font-family: var(--font-body);
+            }
+
+            .btn-delete {
+                color: #EF4444;
+                background: none;
+                border: none;
+                cursor: pointer;
+                padding: 6px 10px;
+                border-radius: 6px;
+                transition: all 0.2s ease;
+            }
+            .btn-delete:hover { background: rgba(239, 68, 68, 0.1); }
+            .btn-edit {
+                color: var(--lancer-cobalt);
+                background: none;
+                border: none;
+                cursor: pointer;
+                padding: 6px 10px;
+                border-radius: 6px;
+                transition: all 0.2s ease;
+            }
+            .btn-edit:hover { background: rgba(0, 41, 255, 0.1); }
+
+            /* Bulk actions - LANCER Style */
+            .task-checkbox {
+                width: 18px;
+                height: 18px;
+                cursor: pointer;
+                accent-color: var(--lancer-flame);
+            }
+            .bulk-actions { display: none; align-items: center; gap: 12px; margin-left: 18px; }
             .bulk-actions.visible { display: flex; }
-            .bulk-actions button { padding: 5px 12px; font-size: 12px; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; }
-            .btn-bulk-delete { background: #dc3545; color: #fff; }
-            .btn-bulk-delete:hover { background: #c82333; }
-            .btn-bulk-copy { background: #667eea; color: #fff; }
-            .btn-bulk-copy:hover { background: #5a6fd6; }
-            .bulk-copy-date { padding: 4px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; }
-            .select-all-label { font-size: 12px; color: #666; display: flex; align-items: center; gap: 5px; cursor: pointer; }
-            .day-header-left { display: flex; align-items: center; gap: 10px; }
-            .selected-count { font-size: 12px; color: #667eea; font-weight: 600; }
-            
-            .kategoria-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
-            .kategoria-badge.zapianowany { background: #d4edda; color: #155724; }
-            .kategoria-badge.klejpan { background: #d1ecf1; color: #0c5460; }
-            .kategoria-badge.marka_langer { background: #fff3cd; color: #856404; }
-            .kategoria-badge.marketing_construction { background: #f8d7da; color: #721c24; }
-            .kategoria-badge.fjo { background: #e2d9f3; color: #4a235a; }
-            .kategoria-badge.sprawy_organizacyjne { background: #e2e3e5; color: #383d41; }
-            .kategoria-badge.obsluga_telefoniczna { background: #fce4ec; color: #880e4f; }
+            .bulk-actions button {
+                padding: 6px 14px;
+                font-size: 12px;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                font-family: var(--font-display);
+                font-weight: 600;
+                transition: all 0.2s ease;
+            }
+            .btn-bulk-delete {
+                background: #EF4444;
+                color: var(--lancer-white);
+            }
+            .btn-bulk-delete:hover {
+                background: #DC2626;
+                transform: translateY(-1px);
+            }
+            .btn-bulk-copy {
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
+            }
+            .btn-bulk-copy:hover {
+                background: var(--lancer-flame-dark);
+                transform: translateY(-1px);
+            }
+            .bulk-copy-date {
+                padding: 6px 10px;
+                border: 1px solid rgba(15, 22, 41, 0.15);
+                border-radius: 8px;
+                font-size: 12px;
+                font-family: var(--font-body);
+            }
+            .select-all-label {
+                font-size: 12px;
+                color: var(--lancer-text-medium);
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                cursor: pointer;
+                font-family: var(--font-body);
+            }
+            .day-header-left { display: flex; align-items: center; gap: 12px; }
+            .selected-count {
+                font-size: 12px;
+                color: var(--lancer-flame);
+                font-weight: 700;
+                font-family: var(--font-display);
+            }
 
-            .saved-flash { animation: flash-green 0.5s ease; }
-            @keyframes flash-green { 0% { background-color: #28a745; color: #fff; } 100% { background-color: transparent; } }
+            /* Kategoria badges - LANCER Style */
+            .kategoria-badge {
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 11px;
+                font-weight: 600;
+                font-family: var(--font-display);
+                text-transform: uppercase;
+                letter-spacing: 0.02em;
+            }
+            .kategoria-badge.zapianowany { background: rgba(34, 197, 94, 0.15); color: #16A34A; }
+            .kategoria-badge.klejpan { background: rgba(0, 41, 255, 0.1); color: var(--lancer-cobalt); }
+            .kategoria-badge.marka_langer { background: rgba(255, 77, 0, 0.12); color: var(--lancer-flame-dark); }
+            .kategoria-badge.marketing_construction { background: rgba(239, 68, 68, 0.12); color: #DC2626; }
+            .kategoria-badge.fjo { background: rgba(139, 92, 246, 0.12); color: #7C3AED; }
+            .kategoria-badge.sprawy_organizacyjne { background: rgba(15, 22, 41, 0.08); color: var(--lancer-text-medium); }
+            .kategoria-badge.obsluga_telefoniczna { background: rgba(236, 72, 153, 0.12); color: #DB2777; }
+
+            .saved-flash { animation: flash-flame 0.5s ease; }
+            @keyframes flash-flame { 0% { background-color: var(--lancer-flame); color: #fff; } 100% { background-color: transparent; } }
             
-            .empty-day { text-align: center; padding: 30px; color: #999; font-size: 14px; background: #fff; border-radius: 0 0 10px 10px; }
-            .empty-day-cell { text-align: center; padding: 20px; color: #999; font-size: 14px; }
-            
-            /* Empty slots for today */
-            .empty-slot { background: #f8f9fa; }
-            .empty-slot:hover { background: #f0f0f0; }
-            .slot-input { 
-                width: 100%; 
-                padding: 8px 10px; 
-                border: 1px dashed #ccc; 
-                border-radius: 6px; 
-                font-size: 13px; 
-                background: #fff;
-                transition: all 0.2s;
+            .empty-day {
+                text-align: center;
+                padding: 35px;
+                color: var(--lancer-text-light);
+                font-size: 14px;
+                background: var(--lancer-white);
+                border-radius: 0 0 12px 12px;
+                font-family: var(--font-body);
+            }
+            .empty-day-cell {
+                text-align: center;
+                padding: 24px;
+                color: var(--lancer-text-light);
+                font-size: 14px;
+            }
+
+            /* Empty slots for today - LANCER Style */
+            .empty-slot { background: var(--lancer-cream); }
+            .empty-slot:hover { background: var(--lancer-light-grey); }
+            .slot-input {
+                width: 100%;
+                padding: 10px 12px;
+                border: 2px dashed var(--lancer-ash-grey);
+                border-radius: 8px;
+                font-size: 13px;
+                background: var(--lancer-white);
+                transition: all 0.2s ease;
+                font-family: var(--font-body);
             }
             .slot-input:focus {
                 border-style: solid;
-                border-color: #667eea;
+                border-color: var(--lancer-flame);
                 outline: none;
-                box-shadow: 0 0 0 3px rgba(102,126,234,0.1);
+                box-shadow: 0 0 0 3px rgba(255, 77, 0, 0.1);
             }
-            .slot-input::placeholder { color: #bbb; }
+            .slot-input::placeholder { color: var(--lancer-ash-grey); }
             .btn-add-slot {
-                background: #28a745;
-                color: #fff;
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
                 border: none;
-                padding: 6px 12px;
-                border-radius: 6px;
+                padding: 8px 14px;
+                border-radius: 8px;
                 cursor: pointer;
                 font-size: 14px;
+                font-family: var(--font-display);
+                font-weight: 600;
+                transition: all 0.2s ease;
             }
-            .btn-add-slot:hover { background: #218838; }
-            
-            /* Copy/Paste buttons */
+            .btn-add-slot:hover {
+                background: var(--lancer-flame-dark);
+                transform: translateY(-1px);
+            }
+
+            /* Copy/Paste buttons - LANCER Style */
             .btn-copy {
                 background: none;
                 border: none;
                 cursor: pointer;
-                padding: 4px 6px;
-                border-radius: 4px;
-                font-size: 14px;
-                color: #6c757d;
-            }
-            .btn-copy:hover { background: #e9ecef; color: #495057; }
-            .btn-paste {
-                background: #17a2b8;
-                color: #fff;
-                border: none;
-                padding: 4px 10px;
+                padding: 6px 8px;
                 border-radius: 6px;
+                font-size: 14px;
+                color: var(--lancer-text-medium);
+                transition: all 0.2s ease;
+            }
+            .btn-copy:hover {
+                background: var(--lancer-light-grey);
+                color: var(--lancer-flame);
+            }
+            .btn-paste {
+                background: var(--lancer-cobalt);
+                color: var(--lancer-white);
+                border: none;
+                padding: 6px 12px;
+                border-radius: 8px;
                 cursor: pointer;
                 font-size: 12px;
-                margin-right: 10px;
+                margin-right: 12px;
+                font-family: var(--font-display);
+                font-weight: 600;
+                transition: all 0.2s ease;
             }
-            .btn-paste:hover { background: #138496; }
-            
+            .btn-paste:hover {
+                background: var(--lancer-cobalt-dark);
+                transform: translateY(-1px);
+            }
+
             .day-header-actions {
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: 12px;
             }
-            
+
             .action-buttons {
                 white-space: nowrap;
             }
             .action-buttons button {
-                margin-right: 2px;
+                margin-right: 3px;
             }
-            
-            /* Overdue alerts */
-            .overdue-alert { background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%); border: 1px solid #fc8181; border-left: 4px solid #e53e3e; border-radius: 8px; padding: 15px 20px; margin-bottom: 20px; }
-            .overdue-alert h3 { margin: 0 0 12px 0; color: #c53030; font-size: 16px; }
-            .overdue-task { background: #fff; border-radius: 8px; padding: 12px 15px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+            /* Overdue alerts - LANCER Style */
+            .overdue-alert {
+                background: linear-gradient(135deg, #FEF2F2 0%, #FEE2E2 100%);
+                border: 1px solid #FCA5A5;
+                border-left: 4px solid #EF4444;
+                border-radius: 12px;
+                padding: 18px 24px;
+                margin-bottom: 24px;
+            }
+            .overdue-alert h3 {
+                margin: 0 0 14px 0;
+                color: #DC2626;
+                font-size: 17px;
+                font-family: var(--font-display);
+                font-weight: 700;
+            }
+            .overdue-task {
+                background: var(--lancer-white);
+                border-radius: 10px;
+                padding: 14px 18px;
+                margin-bottom: 12px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 12px;
+                box-shadow: var(--shadow-sm);
+            }
             .overdue-task:last-child { margin-bottom: 0; }
             .overdue-task-info { flex: 1; min-width: 200px; }
-            .overdue-task-info .task-name { font-weight: 600; color: #333; }
-            .overdue-task-info .task-meta { font-size: 12px; color: #888; margin-top: 3px; }
-            .overdue-task-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-            .overdue-task-actions input[type="date"] { padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
-            .overdue-task-actions button, .overdue-task-actions .btn { padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; border: none; }
-            .btn-move { background: #4299e1; color: #fff; }
-            .btn-move:hover { background: #3182ce; }
-            .btn-complete { background: #48bb78; color: #fff; }
-            .btn-complete:hover { background: #38a169; }
-            .overdue-status-select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
-            
-            /* Toast notifications */
-            .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 12px 20px; border-radius: 8px; z-index: 9999; animation: slideIn 0.3s ease; }
-            .toast.success { background: #28a745; }
-            .toast.error { background: #dc3545; }
+            .overdue-task-info .task-name {
+                font-weight: 600;
+                color: var(--lancer-text-dark);
+                font-family: var(--font-body);
+            }
+            .overdue-task-info .task-meta {
+                font-size: 12px;
+                color: var(--lancer-text-light);
+                margin-top: 4px;
+            }
+            .overdue-task-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+            .overdue-task-actions input[type="date"] {
+                padding: 8px 12px;
+                border: 1px solid rgba(15, 22, 41, 0.15);
+                border-radius: 8px;
+                font-size: 13px;
+                font-family: var(--font-body);
+            }
+            .overdue-task-actions button, .overdue-task-actions .btn {
+                padding: 8px 14px;
+                border-radius: 8px;
+                font-size: 13px;
+                cursor: pointer;
+                border: none;
+                font-family: var(--font-display);
+                font-weight: 600;
+                transition: all 0.2s ease;
+            }
+            .btn-move {
+                background: var(--lancer-cobalt);
+                color: var(--lancer-white);
+            }
+            .btn-move:hover {
+                background: var(--lancer-cobalt-dark);
+                transform: translateY(-1px);
+            }
+            .btn-complete {
+                background: #22C55E;
+                color: var(--lancer-white);
+            }
+            .btn-complete:hover {
+                background: #16A34A;
+                transform: translateY(-1px);
+            }
+            .overdue-status-select {
+                padding: 8px 12px;
+                border: 1px solid rgba(15, 22, 41, 0.15);
+                border-radius: 8px;
+                font-size: 13px;
+                font-family: var(--font-body);
+            }
+
+            /* Toast notifications - LANCER Style */
+            .toast {
+                position: fixed;
+                bottom: 24px;
+                right: 24px;
+                background: var(--lancer-deep-blue);
+                color: var(--lancer-white);
+                padding: 14px 24px;
+                border-radius: 12px;
+                z-index: 9999;
+                animation: slideIn 0.3s ease;
+                font-family: var(--font-body);
+                font-weight: 500;
+                box-shadow: var(--shadow-lg);
+            }
+            .toast.success { background: #22C55E; }
+            .toast.error { background: #EF4444; }
             @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-            
+
             /* Loading overlay */
             .loading { opacity: 0.5; pointer-events: none; }
-            
-            /* Edit modal */
-            .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 9998; display: flex; align-items: center; justify-content: center; }
-            .modal { background: #fff; border-radius: 12px; padding: 25px; max-width: 700px; width: 90%; max-height: 90vh; overflow-y: auto; }
-            .modal h3 { margin: 0 0 20px 0; }
-            .modal-buttons { display: flex; gap: 10px; margin-top: 20px; }
-            .modal-close { position: absolute; top: 15px; right: 15px; background: none; border: none; font-size: 24px; cursor: pointer; color: #999; }
-            .modal-close:hover { color: #333; }
-            
-            /* Okres review modal */
-            .okres-modal { position: relative; }
-            .okres-modal-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 20px; margin: -25px -25px 20px -25px; border-radius: 12px 12px 0 0; }
-            .okres-modal-header h3 { color: #fff; margin: 0; }
-            .okres-modal-header .dates { opacity: 0.9; font-size: 14px; margin-top: 5px; }
-            .okres-modal-header.past { background: linear-gradient(135deg, #6c757d 0%, #495057 100%); }
-            
-            .cel-review-card { background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; border-left: 4px solid #007bff; }
-            .cel-review-card.zapianowany { border-left-color: #28a745; }
-            .cel-review-card.klejpan { border-left-color: #17a2b8; }
-            .cel-review-card.marka_langer { border-left-color: #ffc107; }
-            .cel-review-card.marketing_construction { border-left-color: #dc3545; }
-            .cel-review-card.fjo { border-left-color: #6f42c1; }
-            .cel-review-card.obsluga_telefoniczna { border-left-color: #e91e63; }
-            .cel-review-card h4 { margin: 0 0 10px 0; font-size: 14px; color: #333; }
-            .cel-review-card .cel-text { background: #fff; padding: 10px; border-radius: 6px; margin-bottom: 10px; font-size: 13px; color: #555; min-height: 40px; }
-            .cel-review-card .cel-text.empty { color: #999; font-style: italic; }
-            .cel-review-row { display: flex; gap: 15px; align-items: flex-start; flex-wrap: wrap; }
-            .cel-review-row .field { flex: 1; min-width: 150px; }
-            .cel-review-row label { display: block; font-size: 12px; font-weight: 600; color: #666; margin-bottom: 4px; }
-            .cel-review-row select, .cel-review-row textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
-            .cel-review-row textarea { min-height: 60px; resize: vertical; }
-            
-            .osiagniety-yes { background: #d4edda !important; border-color: #28a745 !important; }
-            .osiagniety-no { background: #f8d7da !important; border-color: #dc3545 !important; }
-            .osiagniety-partial { background: #fff3cd !important; border-color: #ffc107 !important; }
-            
-            /* Settings */
-            .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
-            .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 15px; }
-            .settings-table { width: 100%; border-collapse: collapse; }
-            .settings-table th, .settings-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
-            .settings-table th { background: #f8f9fa; }
-            
-            /* Info box */
-            .day-info { margin-top: 15px; padding: 15px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-            .day-info h4 { margin: 0 0 8px 0; font-size: 14px; color: #666; }
-            .day-info .date-big { font-size: 24px; font-weight: 600; color: #667eea; }
-            .day-info .day-name { font-size: 14px; color: #888; margin-top: 4px; }
-            .day-info .okres-name { font-size: 12px; color: #28a745; margin-top: 8px; }
 
-            /* ========== HARMONOGRAM DNIA ========== */
+            /* Edit modal - LANCER Style */
+            .modal-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(15, 22, 41, 0.6);
+                z-index: 9998;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                backdrop-filter: blur(4px);
+            }
+            .modal {
+                background: var(--lancer-white);
+                border-radius: 20px;
+                padding: 28px;
+                max-width: 720px;
+                width: 90%;
+                max-height: 90vh;
+                overflow-y: auto;
+                box-shadow: var(--shadow-lg);
+            }
+            .modal h3 {
+                margin: 0 0 24px 0;
+                font-family: var(--font-display);
+                font-weight: 700;
+                color: var(--lancer-deep-blue);
+            }
+            .modal-buttons { display: flex; gap: 12px; margin-top: 24px; }
+            .modal-close {
+                position: absolute;
+                top: 18px;
+                right: 18px;
+                background: none;
+                border: none;
+                font-size: 26px;
+                cursor: pointer;
+                color: var(--lancer-text-light);
+                transition: all 0.2s ease;
+            }
+            .modal-close:hover { color: var(--lancer-flame); }
+
+            /* Okres review modal - LANCER Style */
+            .okres-modal { position: relative; }
+            .okres-modal-header {
+                background: var(--lancer-deep-blue);
+                color: var(--lancer-white);
+                padding: 24px;
+                margin: -28px -28px 24px -28px;
+                border-radius: 20px 20px 0 0;
+                position: relative;
+                overflow: hidden;
+            }
+            .okres-modal-header::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 150px;
+                height: 100%;
+                background: var(--lancer-flame);
+                clip-path: polygon(30% 0, 100% 0, 100% 100%, 0% 100%);
+            }
+            .okres-modal-header h3 {
+                color: var(--lancer-white);
+                margin: 0;
+                position: relative;
+                z-index: 1;
+            }
+            .okres-modal-header .dates {
+                opacity: 0.9;
+                font-size: 14px;
+                margin-top: 6px;
+                position: relative;
+                z-index: 1;
+            }
+            .okres-modal-header.past {
+                background: var(--lancer-text-medium);
+            }
+            .okres-modal-header.past::before { background: var(--lancer-ash-grey); }
+
+            .cel-review-card {
+                background: var(--lancer-cream);
+                border-radius: 12px;
+                padding: 18px;
+                margin-bottom: 18px;
+                border-left: 4px solid var(--lancer-cobalt);
+            }
+            .cel-review-card.zapianowany { border-left-color: #22C55E; }
+            .cel-review-card.klejpan { border-left-color: var(--lancer-cobalt); }
+            .cel-review-card.marka_langer { border-left-color: var(--lancer-flame); }
+            .cel-review-card.marketing_construction { border-left-color: #EF4444; }
+            .cel-review-card.fjo { border-left-color: #8B5CF6; }
+            .cel-review-card.obsluga_telefoniczna { border-left-color: #EC4899; }
+            .cel-review-card h4 {
+                margin: 0 0 12px 0;
+                font-size: 14px;
+                color: var(--lancer-text-dark);
+                font-family: var(--font-display);
+                font-weight: 600;
+            }
+            .cel-review-card .cel-text {
+                background: var(--lancer-white);
+                padding: 12px;
+                border-radius: 8px;
+                margin-bottom: 12px;
+                font-size: 13px;
+                color: var(--lancer-text-medium);
+                min-height: 45px;
+                font-family: var(--font-body);
+            }
+            .cel-review-card .cel-text.empty { color: var(--lancer-ash-grey); font-style: italic; }
+            .cel-review-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+            .cel-review-row .field { flex: 1; min-width: 150px; }
+            .cel-review-row label {
+                display: block;
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--lancer-text-medium);
+                margin-bottom: 6px;
+                font-family: var(--font-display);
+                text-transform: uppercase;
+            }
+            .cel-review-row select, .cel-review-row textarea {
+                width: 100%;
+                padding: 10px;
+                border: 1px solid rgba(15, 22, 41, 0.12);
+                border-radius: 8px;
+                font-size: 13px;
+                font-family: var(--font-body);
+            }
+            .cel-review-row textarea { min-height: 65px; resize: vertical; }
+
+            .osiagniety-yes { background: rgba(34, 197, 94, 0.15) !important; border-color: #22C55E !important; }
+            .osiagniety-no { background: rgba(239, 68, 68, 0.12) !important; border-color: #EF4444 !important; }
+            .osiagniety-partial { background: rgba(255, 77, 0, 0.1) !important; border-color: var(--lancer-flame) !important; }
+
+            /* Settings - LANCER Style */
+            .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 24px; }
+            .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 18px; }
+            .settings-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-family: var(--font-body);
+            }
+            .settings-table th, .settings-table td {
+                padding: 12px 14px;
+                text-align: left;
+                border-bottom: 1px solid var(--lancer-light-grey);
+            }
+            .settings-table th {
+                background: var(--lancer-cream);
+                font-family: var(--font-display);
+                font-weight: 600;
+                font-size: 12px;
+                text-transform: uppercase;
+                color: var(--lancer-text-medium);
+            }
+
+            /* Info box - LANCER Style */
+            .day-info {
+                margin-top: 18px;
+                padding: 18px;
+                background: var(--lancer-white);
+                border-radius: 12px;
+                box-shadow: var(--shadow-md);
+                border: 1px solid rgba(15, 22, 41, 0.05);
+            }
+            .day-info h4 {
+                margin: 0 0 10px 0;
+                font-size: 13px;
+                color: var(--lancer-text-light);
+                font-family: var(--font-display);
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+            }
+            .day-info .date-big {
+                font-size: 28px;
+                font-weight: 800;
+                color: var(--lancer-flame);
+                font-family: var(--font-display);
+            }
+            .day-info .day-name {
+                font-size: 14px;
+                color: var(--lancer-text-medium);
+                margin-top: 5px;
+                font-family: var(--font-body);
+            }
+            .day-info .okres-name {
+                font-size: 12px;
+                color: var(--lancer-cobalt);
+                margin-top: 10px;
+                font-weight: 600;
+            }
+
+            /* ========== HARMONOGRAM DNIA - LANCER Style ========== */
 
             /* Modal startu dnia */
             .start-day-modal-overlay {
@@ -1102,25 +1729,26 @@ add_action('admin_head', function() {
                 left: 0;
                 right: 0;
                 bottom: 0;
-                background: rgba(0,0,0,0.6);
+                background: rgba(15, 22, 41, 0.7);
                 z-index: 10000;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 animation: fadeIn 0.3s ease;
+                backdrop-filter: blur(4px);
             }
             @keyframes fadeIn {
                 from { opacity: 0; }
                 to { opacity: 1; }
             }
             .start-day-modal {
-                background: #fff;
-                border-radius: 16px;
-                padding: 30px;
-                max-width: 400px;
+                background: var(--lancer-white);
+                border-radius: 24px;
+                padding: 36px;
+                max-width: 420px;
                 width: 90%;
                 text-align: center;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                box-shadow: var(--shadow-lg);
                 animation: slideUp 0.3s ease;
             }
             @keyframes slideUp {
@@ -1128,117 +1756,141 @@ add_action('admin_head', function() {
                 to { transform: translateY(0); opacity: 1; }
             }
             .start-day-modal h2 {
-                margin: 0 0 10px 0;
-                font-size: 24px;
-                color: #333;
+                margin: 0 0 12px 0;
+                font-size: 26px;
+                color: var(--lancer-deep-blue);
+                font-family: var(--font-display);
+                font-weight: 800;
             }
             .start-day-modal p {
-                color: #666;
-                margin-bottom: 20px;
+                color: var(--lancer-text-medium);
+                margin-bottom: 24px;
+                font-family: var(--font-body);
             }
             .start-day-modal .current-time {
-                font-size: 48px;
-                font-weight: 700;
-                color: #667eea;
-                margin: 20px 0;
+                font-size: 52px;
+                font-weight: 800;
+                color: var(--lancer-flame);
+                margin: 24px 0;
+                font-family: var(--font-display);
             }
             .start-day-modal input[type="time"] {
-                font-size: 24px;
-                padding: 10px 20px;
-                border: 2px solid #ddd;
-                border-radius: 10px;
+                font-size: 26px;
+                padding: 12px 24px;
+                border: 2px solid var(--lancer-ash-grey);
+                border-radius: 12px;
                 text-align: center;
-                width: 150px;
+                width: 160px;
+                font-family: var(--font-display);
+                font-weight: 600;
+                transition: all 0.2s ease;
             }
             .start-day-modal input[type="time"]:focus {
-                border-color: #667eea;
+                border-color: var(--lancer-flame);
                 outline: none;
+                box-shadow: 0 0 0 3px rgba(255, 77, 0, 0.1);
             }
             .start-day-modal .btn-start-now {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #fff;
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
                 border: none;
-                padding: 15px 40px;
-                border-radius: 10px;
+                padding: 16px 44px;
+                border-radius: 12px;
                 font-size: 18px;
-                font-weight: 600;
+                font-weight: 700;
                 cursor: pointer;
-                margin: 20px 10px 10px;
-                transition: transform 0.2s, box-shadow 0.2s;
+                margin: 24px 12px 12px;
+                transition: all 0.2s ease;
+                font-family: var(--font-display);
             }
             .start-day-modal .btn-start-now:hover {
                 transform: translateY(-2px);
-                box-shadow: 0 5px 20px rgba(102,126,234,0.4);
+                box-shadow: var(--shadow-flame);
+                background: var(--lancer-flame-dark);
             }
             .start-day-modal .btn-skip {
                 background: transparent;
                 border: none;
-                color: #888;
+                color: var(--lancer-text-light);
                 cursor: pointer;
                 font-size: 14px;
-                padding: 10px;
+                padding: 12px;
+                font-family: var(--font-body);
+                transition: color 0.2s ease;
             }
             .start-day-modal .btn-skip:hover {
-                color: #333;
+                color: var(--lancer-text-dark);
             }
 
             /* Harmonogram godzinowy */
             .harmonogram-container {
-                background: #fff;
-                border-radius: 12px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-                padding: 20px;
-                margin-bottom: 20px;
+                background: var(--lancer-white);
+                border-radius: 16px;
+                box-shadow: var(--shadow-md);
+                padding: 24px;
+                margin-bottom: 24px;
+                border: 1px solid rgba(15, 22, 41, 0.05);
             }
             .harmonogram-header {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                margin-bottom: 20px;
-                padding-bottom: 15px;
-                border-bottom: 2px solid #f0f0f0;
+                margin-bottom: 24px;
+                padding-bottom: 18px;
+                border-bottom: 2px solid var(--lancer-light-grey);
             }
             .harmonogram-header h2 {
                 margin: 0;
-                font-size: 18px;
+                font-size: 20px;
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: 12px;
+                font-family: var(--font-display);
+                font-weight: 700;
+                color: var(--lancer-deep-blue);
             }
             .harmonogram-header .start-time-badge {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #fff;
-                padding: 5px 12px;
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
+                padding: 6px 14px;
                 border-radius: 20px;
                 font-size: 13px;
-                font-weight: 500;
+                font-weight: 600;
+                font-family: var(--font-display);
             }
             .harmonogram-actions {
                 display: flex;
-                gap: 10px;
+                gap: 12px;
             }
             .btn-change-start {
-                background: #f0f0f0;
+                background: var(--lancer-light-grey);
                 border: none;
-                padding: 8px 15px;
-                border-radius: 8px;
+                padding: 10px 18px;
+                border-radius: 10px;
                 cursor: pointer;
                 font-size: 13px;
+                font-family: var(--font-display);
+                font-weight: 600;
+                color: var(--lancer-text-dark);
+                transition: all 0.2s ease;
             }
             .btn-change-start:hover {
-                background: #e0e0e0;
+                background: var(--lancer-ash-grey);
             }
             .btn-toggle-view {
-                background: #667eea;
-                color: #fff;
+                background: var(--lancer-cobalt);
+                color: var(--lancer-white);
                 border: none;
-                padding: 8px 15px;
-                border-radius: 8px;
+                padding: 10px 18px;
+                border-radius: 10px;
                 cursor: pointer;
                 font-size: 13px;
+                font-family: var(--font-display);
+                font-weight: 600;
+                transition: all 0.2s ease;
             }
             .btn-toggle-view:hover {
-                background: #5a6fd6;
+                background: var(--lancer-cobalt-dark);
             }
 
             /* Timeline */
@@ -1248,37 +1900,38 @@ add_action('admin_head', function() {
             }
             .timeline-hour {
                 display: flex;
-                min-height: 60px;
-                border-bottom: 1px solid #f0f0f0;
+                min-height: 65px;
+                border-bottom: 1px solid var(--lancer-light-grey);
                 position: relative;
             }
             .timeline-hour:last-child {
                 border-bottom: none;
             }
             .timeline-hour-label {
-                width: 60px;
-                padding: 8px 10px;
+                width: 65px;
+                padding: 10px 12px;
                 font-size: 13px;
-                font-weight: 600;
-                color: #888;
+                font-weight: 700;
+                color: var(--lancer-text-light);
                 flex-shrink: 0;
-                border-right: 2px solid #f0f0f0;
+                border-right: 2px solid var(--lancer-light-grey);
+                font-family: var(--font-display);
             }
             .timeline-hour-content {
                 flex: 1;
-                min-height: 60px;
+                min-height: 65px;
                 position: relative;
-                padding: 5px;
+                padding: 6px;
             }
             .timeline-hour-content.dragover {
-                background: rgba(102,126,234,0.1);
+                background: rgba(255, 77, 0, 0.08);
             }
             .timeline-current-time {
                 position: absolute;
-                left: 60px;
+                left: 65px;
                 right: 0;
                 height: 2px;
-                background: #e53e3e;
+                background: var(--lancer-flame);
                 z-index: 10;
             }
             .timeline-current-time::before {
@@ -1288,141 +1941,154 @@ add_action('admin_head', function() {
                 top: -4px;
                 width: 10px;
                 height: 10px;
-                background: #e53e3e;
+                background: var(--lancer-flame);
                 border-radius: 50%;
             }
 
             /* Zadania w harmonogramie */
             .harmonogram-task {
-                background: #fff;
-                border: 1px solid #e0e0e0;
-                border-left: 4px solid #667eea;
-                border-radius: 8px;
-                padding: 10px 12px;
-                margin: 3px 0;
+                background: var(--lancer-white);
+                border: 1px solid rgba(15, 22, 41, 0.1);
+                border-left: 4px solid var(--lancer-flame);
+                border-radius: 10px;
+                padding: 12px 14px;
+                margin: 4px 0;
                 cursor: grab;
-                transition: all 0.2s;
+                transition: all 0.2s ease;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
             }
             .harmonogram-task:hover {
-                box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-                transform: translateY(-1px);
+                box-shadow: var(--shadow-md);
+                transform: translateY(-2px);
             }
             .harmonogram-task.dragging {
                 opacity: 0.5;
                 cursor: grabbing;
             }
             .harmonogram-task.is-stale {
-                background: #f8f9fa;
+                background: var(--lancer-cream);
                 border-style: dashed;
             }
-            .harmonogram-task.zapianowany { border-left-color: #28a745; }
-            .harmonogram-task.klejpan { border-left-color: #17a2b8; }
-            .harmonogram-task.marka_langer { border-left-color: #ffc107; }
-            .harmonogram-task.marketing_construction { border-left-color: #dc3545; }
-            .harmonogram-task.fjo { border-left-color: #6f42c1; }
-            .harmonogram-task.obsluga_telefoniczna { border-left-color: #e91e63; }
-            .harmonogram-task.sprawy_organizacyjne { border-left-color: #607d8b; }
+            .harmonogram-task.zapianowany { border-left-color: #22C55E; }
+            .harmonogram-task.klejpan { border-left-color: var(--lancer-cobalt); }
+            .harmonogram-task.marka_langer { border-left-color: var(--lancer-flame); }
+            .harmonogram-task.marketing_construction { border-left-color: #EF4444; }
+            .harmonogram-task.fjo { border-left-color: #8B5CF6; }
+            .harmonogram-task.obsluga_telefoniczna { border-left-color: #EC4899; }
+            .harmonogram-task.sprawy_organizacyjne { border-left-color: var(--lancer-text-medium); }
 
             .harmonogram-task-info {
                 flex: 1;
             }
             .harmonogram-task-name {
                 font-weight: 600;
-                color: #333;
+                color: var(--lancer-text-dark);
                 font-size: 14px;
+                font-family: var(--font-body);
             }
             .harmonogram-task-meta {
                 font-size: 12px;
-                color: #888;
-                margin-top: 3px;
+                color: var(--lancer-text-light);
+                margin-top: 4px;
                 display: flex;
-                gap: 10px;
+                gap: 12px;
                 align-items: center;
             }
             .harmonogram-task-time {
                 display: flex;
                 align-items: center;
-                gap: 5px;
+                gap: 6px;
                 font-size: 12px;
-                color: #667eea;
-                font-weight: 500;
+                color: var(--lancer-flame);
+                font-weight: 600;
+                font-family: var(--font-display);
             }
             .harmonogram-task-actions {
                 display: flex;
-                gap: 5px;
+                gap: 6px;
             }
             .harmonogram-task-actions button {
                 background: none;
                 border: none;
                 cursor: pointer;
-                padding: 5px;
-                border-radius: 4px;
+                padding: 6px;
+                border-radius: 6px;
                 font-size: 14px;
+                color: var(--lancer-text-medium);
+                transition: all 0.2s ease;
             }
             .harmonogram-task-actions button:hover {
-                background: #f0f0f0;
+                background: var(--lancer-light-grey);
+                color: var(--lancer-flame);
             }
 
             /* Edytowalna godzina */
             .harmonogram-task-time-edit {
                 display: flex;
                 align-items: center;
-                gap: 3px;
-                margin-right: 10px;
+                gap: 4px;
+                margin-right: 12px;
             }
             .time-input-small {
-                width: 85px;
-                padding: 4px 6px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
+                width: 90px;
+                padding: 5px 8px;
+                border: 1px solid rgba(15, 22, 41, 0.15);
+                border-radius: 6px;
                 font-size: 12px;
                 cursor: pointer;
+                font-family: var(--font-body);
+                transition: all 0.2s ease;
             }
             .time-input-small:hover {
-                border-color: #667eea;
+                border-color: var(--lancer-flame);
             }
             .time-input-small:focus {
-                border-color: #667eea;
+                border-color: var(--lancer-flame);
                 outline: none;
-                box-shadow: 0 0 0 2px rgba(102,126,234,0.2);
+                box-shadow: 0 0 0 2px rgba(255, 77, 0, 0.1);
             }
             .end-time {
                 font-size: 12px;
-                color: #888;
+                color: var(--lancer-text-light);
             }
 
             /* Nieprzypisane zadania */
             .unscheduled-tasks {
-                background: #f8f9fa;
-                border-radius: 12px;
-                padding: 15px;
-                margin-bottom: 20px;
+                background: var(--lancer-cream);
+                border-radius: 14px;
+                padding: 18px;
+                margin-bottom: 24px;
             }
             .unscheduled-tasks h3 {
-                margin: 0 0 15px 0;
+                margin: 0 0 16px 0;
                 font-size: 14px;
-                color: #666;
+                color: var(--lancer-text-medium);
+                font-family: var(--font-display);
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
             }
             .unscheduled-tasks-list {
                 display: flex;
                 flex-wrap: wrap;
-                gap: 10px;
+                gap: 12px;
             }
             .unscheduled-task {
-                background: #fff;
-                border: 1px solid #ddd;
-                border-left: 3px solid #667eea;
-                border-radius: 6px;
-                padding: 8px 12px;
+                background: var(--lancer-white);
+                border: 1px solid rgba(15, 22, 41, 0.1);
+                border-left: 3px solid var(--lancer-flame);
+                border-radius: 8px;
+                padding: 10px 14px;
                 cursor: grab;
                 font-size: 13px;
-                transition: all 0.2s;
+                transition: all 0.2s ease;
+                font-family: var(--font-body);
             }
             .unscheduled-task:hover {
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                box-shadow: var(--shadow-sm);
+                transform: translateY(-1px);
             }
             .unscheduled-task.dragging {
                 opacity: 0.5;
@@ -1430,33 +2096,40 @@ add_action('admin_head', function() {
 
             /* Stałe zadania badge */
             .stale-badge {
-                background: #e9ecef;
-                color: #495057;
-                padding: 2px 8px;
-                border-radius: 10px;
+                background: var(--lancer-light-grey);
+                color: var(--lancer-text-medium);
+                padding: 3px 10px;
+                border-radius: 12px;
                 font-size: 10px;
-                font-weight: 600;
+                font-weight: 700;
+                font-family: var(--font-display);
+                text-transform: uppercase;
             }
 
             /* Widok listy vs timeline toggle */
             .view-toggle {
                 display: flex;
-                gap: 5px;
-                background: #f0f0f0;
-                padding: 3px;
-                border-radius: 8px;
+                gap: 6px;
+                background: var(--lancer-light-grey);
+                padding: 4px;
+                border-radius: 10px;
             }
             .view-toggle button {
                 background: transparent;
                 border: none;
-                padding: 6px 12px;
-                border-radius: 6px;
+                padding: 8px 14px;
+                border-radius: 8px;
                 cursor: pointer;
                 font-size: 13px;
+                font-family: var(--font-display);
+                font-weight: 600;
+                color: var(--lancer-text-medium);
+                transition: all 0.2s ease;
             }
             .view-toggle button.active {
-                background: #fff;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                background: var(--lancer-white);
+                box-shadow: var(--shadow-sm);
+                color: var(--lancer-flame);
             }
 
             /* Stałe zadania w ustawieniach */
@@ -1466,27 +2139,30 @@ add_action('admin_head', function() {
             }
             .stale-zadania-table th,
             .stale-zadania-table td {
-                padding: 12px;
+                padding: 14px;
                 text-align: left;
-                border-bottom: 1px solid #f0f0f0;
+                border-bottom: 1px solid var(--lancer-light-grey);
+                font-family: var(--font-body);
             }
             .stale-zadania-table th {
-                background: #f8f9fa;
+                background: var(--lancer-cream);
                 font-size: 12px;
                 text-transform: uppercase;
-                color: #666;
+                color: var(--lancer-text-medium);
+                font-family: var(--font-display);
+                font-weight: 600;
             }
             .stale-zadania-form {
-                background: #f8f9fa;
-                padding: 20px;
-                border-radius: 10px;
-                margin-bottom: 20px;
+                background: var(--lancer-cream);
+                padding: 24px;
+                border-radius: 14px;
+                margin-bottom: 24px;
             }
             .stale-zadania-form .form-row {
                 display: flex;
-                gap: 15px;
+                gap: 16px;
                 flex-wrap: wrap;
-                margin-bottom: 15px;
+                margin-bottom: 16px;
             }
             .dni-tygodnia-checkboxes {
                 display: flex;
@@ -1496,22 +2172,27 @@ add_action('admin_head', function() {
             .dni-tygodnia-checkboxes label {
                 display: flex;
                 align-items: center;
-                gap: 5px;
-                padding: 5px 10px;
-                background: #fff;
-                border: 1px solid #ddd;
-                border-radius: 6px;
+                gap: 6px;
+                padding: 6px 12px;
+                background: var(--lancer-white);
+                border: 1px solid rgba(15, 22, 41, 0.12);
+                border-radius: 8px;
                 cursor: pointer;
                 font-size: 13px;
+                font-family: var(--font-body);
+                transition: all 0.2s ease;
+            }
+            .dni-tygodnia-checkboxes label:hover {
+                border-color: var(--lancer-flame);
             }
             .dni-tygodnia-checkboxes input:checked + span {
-                color: #667eea;
-                font-weight: 600;
+                color: var(--lancer-flame);
+                font-weight: 700;
             }
             .toggle-switch {
                 position: relative;
-                width: 50px;
-                height: 26px;
+                width: 52px;
+                height: 28px;
             }
             .toggle-switch input {
                 opacity: 0;
@@ -1525,84 +2206,87 @@ add_action('admin_head', function() {
                 left: 0;
                 right: 0;
                 bottom: 0;
-                background: #ccc;
-                border-radius: 26px;
+                background: var(--lancer-ash-grey);
+                border-radius: 28px;
                 transition: 0.3s;
             }
             .toggle-slider:before {
                 content: '';
                 position: absolute;
-                height: 20px;
-                width: 20px;
+                height: 22px;
+                width: 22px;
                 left: 3px;
                 bottom: 3px;
-                background: #fff;
+                background: var(--lancer-white);
                 border-radius: 50%;
                 transition: 0.3s;
             }
             .toggle-switch input:checked + .toggle-slider {
-                background: #28a745;
+                background: var(--lancer-flame);
             }
             .toggle-switch input:checked + .toggle-slider:before {
                 transform: translateX(24px);
             }
 
-            /* ========== TIMER / CZASOMIERZ ========== */
+            /* ========== TIMER / CZASOMIERZ - LANCER Style ========== */
             .timer-btn {
                 background: none;
                 border: none;
                 cursor: pointer;
                 font-size: 16px;
-                padding: 4px 8px;
-                border-radius: 6px;
-                transition: all 0.2s;
+                padding: 6px 10px;
+                border-radius: 8px;
+                transition: all 0.2s ease;
             }
             .timer-btn:hover {
-                background: #f0f0f0;
+                background: var(--lancer-light-grey);
+                color: var(--lancer-flame);
             }
             .timer-btn.running {
-                background: #e8f5e9;
-                animation: pulse 1.5s infinite;
+                background: rgba(255, 77, 0, 0.1);
+                color: var(--lancer-flame);
+                animation: timerPulse 1.5s infinite;
             }
-            @keyframes pulse {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.6; }
+            @keyframes timerPulse {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.7; transform: scale(1.05); }
             }
             .timer-display {
                 display: inline-flex;
                 align-items: center;
-                gap: 8px;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #fff;
-                padding: 6px 12px;
-                border-radius: 20px;
+                gap: 10px;
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
+                padding: 8px 14px;
+                border-radius: 24px;
                 font-size: 14px;
-                font-weight: 600;
-                font-family: 'Courier New', monospace;
+                font-weight: 700;
+                font-family: var(--font-display);
             }
             .timer-display.warning {
-                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-                animation: pulse 0.5s infinite;
+                background: #EF4444;
+                animation: timerPulse 0.5s infinite;
             }
             .timer-display .timer-time {
-                min-width: 60px;
+                min-width: 65px;
                 text-align: center;
             }
             .timer-display button {
-                background: rgba(255,255,255,0.2);
+                background: rgba(255,255,255,0.25);
                 border: none;
-                color: #fff;
-                width: 24px;
-                height: 24px;
+                color: var(--lancer-white);
+                width: 26px;
+                height: 26px;
                 border-radius: 50%;
                 cursor: pointer;
                 font-size: 12px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                transition: all 0.2s ease;
             }
             .timer-display button:hover {
-                background: rgba(255,255,255,0.3);
+                background: rgba(255,255,255,0.4);
             }
 
             /* Timer w wierszu zadania */
@@ -1612,20 +2296,22 @@ add_action('admin_head', function() {
             .task-timer-cell .timer-cell-content {
                 display: inline-flex;
                 align-items: center;
-                gap: 5px;
+                gap: 6px;
             }
             .time-tracked {
                 font-size: 12px;
-                color: #28a745;
-                font-weight: 600;
+                color: #22C55E;
+                font-weight: 700;
+                font-family: var(--font-display);
             }
             .time-edit-input {
-                width: 50px;
-                padding: 2px 4px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
+                width: 55px;
+                padding: 4px 6px;
+                border: 1px solid rgba(15, 22, 41, 0.15);
+                border-radius: 6px;
                 font-size: 12px;
                 text-align: center;
+                font-family: var(--font-body);
             }
 
             /* Modal timera */
@@ -1635,136 +2321,151 @@ add_action('admin_head', function() {
                 left: 0;
                 right: 0;
                 bottom: 0;
-                background: rgba(0,0,0,0.7);
+                background: rgba(15, 22, 41, 0.8);
                 z-index: 10001;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 animation: fadeIn 0.3s ease;
+                backdrop-filter: blur(6px);
             }
             .timer-modal {
-                background: #fff;
-                border-radius: 20px;
-                padding: 40px;
-                max-width: 450px;
+                background: var(--lancer-white);
+                border-radius: 28px;
+                padding: 44px;
+                max-width: 480px;
                 width: 90%;
                 text-align: center;
-                box-shadow: 0 25px 80px rgba(0,0,0,0.4);
+                box-shadow: var(--shadow-lg);
                 animation: slideUp 0.3s ease;
             }
             .timer-modal h2 {
-                margin: 0 0 10px 0;
-                font-size: 28px;
+                margin: 0 0 12px 0;
+                font-size: 30px;
+                font-family: var(--font-display);
+                font-weight: 800;
+                color: var(--lancer-deep-blue);
             }
             .timer-modal .task-name {
-                color: #666;
+                color: var(--lancer-text-medium);
                 font-size: 16px;
-                margin-bottom: 20px;
+                margin-bottom: 24px;
+                font-family: var(--font-body);
             }
             .timer-modal .timer-big {
-                font-size: 64px;
-                font-weight: 700;
-                font-family: 'Courier New', monospace;
-                color: #667eea;
-                margin: 30px 0;
+                font-size: 72px;
+                font-weight: 800;
+                font-family: var(--font-display);
+                color: var(--lancer-flame);
+                margin: 36px 0;
             }
             .timer-modal .timer-big.overtime {
-                color: #e53e3e;
+                color: #EF4444;
             }
             .timer-modal .time-info {
                 font-size: 14px;
-                color: #888;
-                margin-bottom: 30px;
+                color: var(--lancer-text-light);
+                margin-bottom: 36px;
+                font-family: var(--font-body);
             }
             .timer-modal-actions {
                 display: flex;
-                gap: 15px;
+                gap: 16px;
                 justify-content: center;
                 flex-wrap: wrap;
             }
             .timer-modal-actions button {
-                padding: 12px 25px;
-                border-radius: 10px;
+                padding: 14px 28px;
+                border-radius: 12px;
                 border: none;
                 font-size: 15px;
-                font-weight: 600;
+                font-weight: 700;
                 cursor: pointer;
-                transition: all 0.2s;
+                transition: all 0.2s ease;
+                font-family: var(--font-display);
             }
             .btn-timer-done {
-                background: #28a745;
-                color: #fff;
+                background: #22C55E;
+                color: var(--lancer-white);
             }
             .btn-timer-done:hover {
-                background: #218838;
+                background: #16A34A;
                 transform: translateY(-2px);
             }
             .btn-timer-extend {
-                background: #667eea;
-                color: #fff;
+                background: var(--lancer-cobalt);
+                color: var(--lancer-white);
             }
             .btn-timer-extend:hover {
-                background: #5a6fd6;
+                background: var(--lancer-cobalt-dark);
                 transform: translateY(-2px);
             }
             .btn-timer-stop {
-                background: #dc3545;
-                color: #fff;
+                background: #EF4444;
+                color: var(--lancer-white);
             }
             .btn-timer-stop:hover {
-                background: #c82333;
+                background: #DC2626;
             }
             .btn-timer-cancel {
-                background: #f0f0f0;
-                color: #333;
+                background: var(--lancer-light-grey);
+                color: var(--lancer-text-dark);
+            }
+            .btn-timer-cancel:hover {
+                background: var(--lancer-ash-grey);
             }
 
             /* Extend options */
             .extend-options {
                 display: flex;
-                gap: 10px;
+                gap: 12px;
                 justify-content: center;
-                margin-top: 20px;
+                margin-top: 24px;
             }
             .extend-options button {
-                padding: 8px 16px;
-                border-radius: 8px;
-                border: 2px solid #667eea;
-                background: #fff;
-                color: #667eea;
-                font-weight: 600;
+                padding: 10px 20px;
+                border-radius: 10px;
+                border: 2px solid var(--lancer-flame);
+                background: var(--lancer-white);
+                color: var(--lancer-flame);
+                font-weight: 700;
                 cursor: pointer;
+                font-family: var(--font-display);
+                transition: all 0.2s ease;
             }
             .extend-options button:hover {
-                background: #667eea;
-                color: #fff;
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
+                transform: translateY(-1px);
             }
 
             /* Floating timer */
             .floating-timer {
                 position: fixed;
-                bottom: 30px;
-                right: 30px;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #fff;
-                padding: 15px 25px;
+                bottom: 32px;
+                right: 32px;
+                background: var(--lancer-deep-blue);
+                color: var(--lancer-white);
+                padding: 16px 28px;
                 border-radius: 50px;
-                box-shadow: 0 10px 40px rgba(102,126,234,0.4);
+                box-shadow: var(--shadow-lg);
                 z-index: 9999;
                 display: flex;
                 align-items: center;
-                gap: 15px;
+                gap: 16px;
                 cursor: pointer;
                 animation: slideUp 0.3s ease;
+                border: 3px solid var(--lancer-flame);
             }
             .floating-timer:hover {
                 transform: translateY(-3px);
-                box-shadow: 0 15px 50px rgba(102,126,234,0.5);
+                box-shadow: 0 15px 50px rgba(15, 22, 41, 0.4);
             }
             .floating-timer .ft-time {
-                font-size: 24px;
-                font-weight: 700;
-                font-family: 'Courier New', monospace;
+                font-size: 26px;
+                font-weight: 800;
+                font-family: var(--font-display);
+                color: var(--lancer-flame);
             }
             .floating-timer .ft-task {
                 font-size: 13px;
@@ -1772,26 +2473,109 @@ add_action('admin_head', function() {
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
+                font-family: var(--font-body);
             }
             .floating-timer .ft-actions {
                 display: flex;
-                gap: 8px;
+                gap: 10px;
             }
             .floating-timer .ft-actions button {
-                background: rgba(255,255,255,0.2);
+                background: var(--lancer-flame);
                 border: none;
-                color: #fff;
-                width: 32px;
-                height: 32px;
+                color: var(--lancer-white);
+                width: 34px;
+                height: 34px;
                 border-radius: 50%;
                 cursor: pointer;
                 font-size: 14px;
+                transition: all 0.2s ease;
             }
             .floating-timer .ft-actions button:hover {
-                background: rgba(255,255,255,0.3);
+                background: var(--lancer-flame-dark);
+                transform: scale(1.1);
             }
             .floating-timer.overtime {
-                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                border-color: #EF4444;
+            }
+            .floating-timer.overtime .ft-time {
+                color: #EF4444;
+            }
+
+            /* ========== ADDITIONAL LANCER STYLING ========== */
+
+            /* Primary Button Style */
+            button[type="submit"], .btn-primary {
+                background: var(--lancer-flame);
+                color: var(--lancer-white);
+                border: none;
+                padding: 12px 24px;
+                border-radius: 10px;
+                font-size: 14px;
+                font-weight: 700;
+                cursor: pointer;
+                font-family: var(--font-display);
+                transition: all 0.2s ease;
+            }
+            button[type="submit"]:hover, .btn-primary:hover {
+                background: var(--lancer-flame-dark);
+                transform: translateY(-2px);
+                box-shadow: var(--shadow-flame);
+            }
+
+            /* Secondary Button Style */
+            .btn-secondary {
+                background: var(--lancer-light-grey);
+                color: var(--lancer-text-dark);
+                border: none;
+                padding: 12px 24px;
+                border-radius: 10px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                font-family: var(--font-display);
+                transition: all 0.2s ease;
+            }
+            .btn-secondary:hover {
+                background: var(--lancer-ash-grey);
+            }
+
+            /* Scrollbar styling */
+            .zadaniomat-wrap ::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
+            }
+            .zadaniomat-wrap ::-webkit-scrollbar-track {
+                background: var(--lancer-light-grey);
+                border-radius: 4px;
+            }
+            .zadaniomat-wrap ::-webkit-scrollbar-thumb {
+                background: var(--lancer-ash-grey);
+                border-radius: 4px;
+            }
+            .zadaniomat-wrap ::-webkit-scrollbar-thumb:hover {
+                background: var(--lancer-flame);
+            }
+
+            /* Selection styling */
+            .zadaniomat-wrap ::selection {
+                background: rgba(255, 77, 0, 0.2);
+                color: var(--lancer-deep-blue);
+            }
+
+            /* Link styling */
+            .zadaniomat-wrap a {
+                color: var(--lancer-flame);
+                text-decoration: none;
+                transition: color 0.2s ease;
+            }
+            .zadaniomat-wrap a:hover {
+                color: var(--lancer-flame-dark);
+            }
+
+            /* Focus visible styling for accessibility */
+            .zadaniomat-wrap *:focus-visible {
+                outline: 2px solid var(--lancer-flame);
+                outline-offset: 2px;
             }
         </style>
         <?php
@@ -1833,7 +2617,7 @@ function zadaniomat_page_main() {
     
     ?>
     <div class="wrap zadaniomat-wrap">
-        <h1 style="margin-bottom: 20px;">📋 Zadaniomat</h1>
+        <h1 style="margin-bottom: 24px; font-family: 'Exo 2', sans-serif; font-weight: 800; font-size: 32px; color: #0F1629; letter-spacing: -0.02em;">ZADANIOMAT</h1>
         
         <!-- Overdue alerts container -->
         <div id="overdue-container"></div>
@@ -1854,7 +2638,7 @@ function zadaniomat_page_main() {
                 </div>
                 
                 <div class="day-info">
-                    <h4>📅 Wybrany dzień</h4>
+                    <h4>Wybrany dzień</h4>
                     <div class="date-big" id="selected-date-display"></div>
                     <div class="day-name" id="selected-day-name"></div>
                     <div class="okres-name" id="selected-okres-name"></div>
@@ -1865,15 +2649,15 @@ function zadaniomat_page_main() {
             <div class="content">
                 <?php if ($current_okres): ?>
                     <div class="okres-banner">
-                        <h2>🎯 <?php echo esc_html($current_okres->nazwa); ?></h2>
+                        <h2><?php echo esc_html($current_okres->nazwa); ?></h2>
                         <div class="dates"><?php echo date('d.m', strtotime($current_okres->data_start)); ?> - <?php echo date('d.m.Y', strtotime($current_okres->data_koniec)); ?></div>
                         <?php if ($current_rok): ?>
-                            <div style="opacity: 0.8; font-size: 13px; margin-top: 5px;">📅 <?php echo esc_html($current_rok->nazwa); ?></div>
+                            <div style="opacity: 0.85; font-size: 14px; margin-top: 8px; font-weight: 500;"><?php echo esc_html($current_rok->nazwa); ?></div>
                         <?php endif; ?>
                     </div>
                     
                     <div class="zadaniomat-card">
-                        <h2>🎯 Cele na ten okres (2 tygodnie)</h2>
+                        <h2>Cele na ten okres (2 tygodnie)</h2>
                         <div class="cele-grid">
                             <?php foreach (ZADANIOMAT_KATEGORIE as $key => $label): 
                                 $cel_data = $cele_okres[$key] ?? ['cel' => '', 'status' => null, 'id' => null];
