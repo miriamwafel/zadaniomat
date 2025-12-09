@@ -1607,7 +1607,10 @@ add_action('admin_head', function() {
 
             /* Timer w wierszu zadania */
             .task-timer-cell {
-                display: flex;
+                white-space: nowrap;
+            }
+            .task-timer-cell .timer-cell-content {
+                display: inline-flex;
                 align-items: center;
                 gap: 5px;
             }
@@ -2241,16 +2244,18 @@ function zadaniomat_page_main() {
 
             // Kolumna czasu z timerem
             html += '<td class="task-timer-cell">';
+            html += '<div class="timer-cell-content">';
             html += '<span>' + planowany + '</span>';
             if (planowany > 0) {
                 html += '<button class="timer-btn' + (isActiveTimer ? ' running' : '') + '" onclick="startTimer(' + t.id + ', \'' + escapeHtml(t.zadanie).replace(/'/g, "\\'") + '\', ' + planowany + ')" title="' + (isActiveTimer ? 'Timer działa' : 'Uruchom timer') + '">';
                 html += isActiveTimer ? '⏸️' : '▶️';
                 html += '</button>';
             }
-            html += '</td>';
+            html += '</div></td>';
 
             // Faktyczny czas z możliwością edycji
             html += '<td class="task-timer-cell">';
+            html += '<div class="timer-cell-content">';
             if (faktyczny > 0) {
                 html += '<span class="time-tracked" onclick="editFaktycznyCzas(' + t.id + ', ' + faktyczny + ')" style="cursor:pointer;" title="Kliknij aby edytować">' + faktyczny + ' min</span>';
             } else {
@@ -2262,7 +2267,7 @@ function zadaniomat_page_main() {
                 html += '➕';
                 html += '</button>';
             }
-            html += '</td>';
+            html += '</div></td>';
 
             html += '<td><select class="inline-select quick-update" data-field="status" data-id="' + t.id + '">';
             html += '<option value=""' + (t.status === null ? ' selected' : '') + '>-</option>';
