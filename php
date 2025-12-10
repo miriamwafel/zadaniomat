@@ -1377,38 +1377,131 @@ add_action('admin_head', function() {
                 font-size: 13px;
                 font-weight: 500;
             }
-            .harmonogram-date-nav {
+            /* Nawigacja daty - wspólne style */
+            .date-nav {
                 display: flex;
                 align-items: center;
-                gap: 5px;
-                background: #f8f9fa;
-                padding: 5px 10px;
-                border-radius: 8px;
+                gap: 8px;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                padding: 8px 15px;
+                border-radius: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
             }
-            .harmonogram-date-nav button {
+            .date-nav .nav-btn {
                 background: #fff;
-                border: 1px solid #ddd;
-                padding: 5px 10px;
-                border-radius: 4px;
+                border: none;
+                width: 36px;
+                height: 36px;
+                border-radius: 50%;
+                cursor: pointer;
+                font-size: 16px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .date-nav .nav-btn:hover {
+                background: #667eea;
+                color: white;
+                transform: scale(1.1);
+            }
+            .date-nav .date-display {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                padding: 0 10px;
+                min-width: 120px;
+            }
+            .date-nav .date-day {
+                font-size: 11px;
+                color: #888;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            .date-nav .date-value {
+                font-size: 15px;
+                font-weight: 600;
+                color: #333;
+                cursor: pointer;
+            }
+            .date-nav .date-value:hover {
+                color: #667eea;
+            }
+            .date-nav input[type="date"] {
+                position: absolute;
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .date-nav .btn-today {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 20px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 600;
+                transition: all 0.2s;
+                box-shadow: 0 2px 8px rgba(102,126,234,0.3);
+            }
+            .date-nav .btn-today:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+            }
+            .harmonogram-date-nav, .tasks-date-nav {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                padding: 8px 15px;
+                border-radius: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            }
+            .harmonogram-date-nav button, .tasks-date-nav button {
+                background: #fff;
+                border: none;
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
                 cursor: pointer;
                 font-size: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
             }
-            .harmonogram-date-nav button:hover {
-                background: #e9ecef;
-            }
-            .harmonogram-date-nav button.btn-today {
-                background: #007bff;
+            .harmonogram-date-nav button:hover, .tasks-date-nav button:hover {
+                background: #667eea;
                 color: white;
-                border-color: #007bff;
+                transform: scale(1.1);
             }
-            .harmonogram-date-nav button.btn-today:hover {
-                background: #0056b3;
+            .harmonogram-date-nav button.btn-today, .tasks-date-nav button.btn-today {
+                width: auto;
+                padding: 0 14px;
+                border-radius: 16px;
+                background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+                color: white;
+                font-weight: 600;
+                font-size: 12px;
             }
-            .harmonogram-date-nav input[type="date"] {
-                padding: 5px 10px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 14px;
+            .harmonogram-date-nav button.btn-today:hover, .tasks-date-nav button.btn-today:hover {
+                background: linear-gradient(135deg, #218838 0%, #1aa179 100%);
+            }
+            .harmonogram-date-nav input[type="date"], .tasks-date-nav input[type="date"] {
+                padding: 6px 12px;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
+                background: #fff;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                cursor: pointer;
+            }
+            .harmonogram-date-nav input[type="date"]:hover, .tasks-date-nav input[type="date"]:hover {
+                box-shadow: 0 2px 8px rgba(102,126,234,0.3);
             }
             .tasks-header {
                 display: flex;
@@ -1418,39 +1511,6 @@ add_action('admin_head', function() {
             }
             .tasks-header h2 {
                 margin: 0;
-            }
-            .tasks-date-nav {
-                display: flex;
-                align-items: center;
-                gap: 5px;
-                background: #f8f9fa;
-                padding: 5px 10px;
-                border-radius: 8px;
-            }
-            .tasks-date-nav button {
-                background: #fff;
-                border: 1px solid #ddd;
-                padding: 5px 10px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 14px;
-            }
-            .tasks-date-nav button:hover {
-                background: #e9ecef;
-            }
-            .tasks-date-nav button.btn-today {
-                background: #007bff;
-                color: white;
-                border-color: #007bff;
-            }
-            .tasks-date-nav button.btn-today:hover {
-                background: #0056b3;
-            }
-            .tasks-date-nav input[type="date"] {
-                padding: 5px 10px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 14px;
             }
             .harmonogram-actions {
                 display: flex;
@@ -1633,24 +1693,34 @@ add_action('admin_head', function() {
                 margin-right: 10px;
             }
             .time-input-small {
-                width: 85px;
-                padding: 4px 6px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 12px;
+                width: 80px;
+                padding: 6px 10px;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
                 cursor: pointer;
+                background: linear-gradient(135deg, #f0f4ff 0%, #e8ecf8 100%);
+                color: #4a5568;
+                transition: all 0.2s;
             }
             .time-input-small:hover {
-                border-color: #667eea;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                transform: scale(1.05);
             }
             .time-input-small:focus {
-                border-color: #667eea;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
                 outline: none;
-                box-shadow: 0 0 0 2px rgba(102,126,234,0.2);
+                box-shadow: 0 2px 10px rgba(102,126,234,0.4);
             }
             .end-time {
                 font-size: 12px;
                 color: #888;
+                background: #f0f0f0;
+                padding: 4px 8px;
+                border-radius: 6px;
             }
 
             /* Nieprzypisane zadania */
@@ -2402,14 +2472,12 @@ function zadaniomat_page_main() {
         };
         
         window.selectDate = function(date) {
-            selectedDate = date;
+            syncDates(date);
             $('.calendar-day').removeClass('selected');
             $('.calendar-day[data-date="' + date + '"]').addClass('selected');
-            loadTasks();
             updateDateInfo();
-            $('#task-date').val(date);
         };
-        
+
         window.updateDateInfo = function() {
             var d = new Date(selectedDate);
             $('#selected-date-display').text(d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear());
@@ -3388,13 +3456,20 @@ function zadaniomat_page_main() {
             selectedDate = dateStr;
             harmonogramDate = dateStr;
 
+            // Aktualizuj wszystkie kontrolki daty
             $('#harmonogram-date').val(dateStr);
             $('#tasks-list-date').val(dateStr);
             $('#task-date').val(dateStr);
 
+            // Aktualizuj kalendarz
+            $('.calendar-day').removeClass('selected');
+            $('.calendar-day[data-date="' + dateStr + '"]').addClass('selected');
+
+            // Aktualizuj nagłówki
             updateHarmonogramHeader();
             updateTasksHeader();
 
+            // Przeładuj dane
             loadTasks();
             checkStartDnia();
         };
