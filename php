@@ -1090,6 +1090,16 @@ add_action('admin_head', function() {
             /* Empty slots for today */
             .empty-slot { background: #f8f9fa; }
             .empty-slot:hover { background: #f0f0f0; }
+            .quick-add-row { background: #e8f4f8; border-top: 2px solid #007bff; }
+            .quick-add-row:hover { background: #dbeef5; }
+            .quick-add-kategoria {
+                width: 100%;
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 12px;
+                background: #fff;
+            }
             .slot-input { 
                 width: 100%; 
                 padding: 8px 10px; 
@@ -1392,6 +1402,48 @@ add_action('admin_head', function() {
                 border-radius: 4px;
                 font-size: 14px;
             }
+            .tasks-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 15px;
+            }
+            .tasks-header h2 {
+                margin: 0;
+            }
+            .tasks-date-nav {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                background: #f8f9fa;
+                padding: 5px 10px;
+                border-radius: 8px;
+            }
+            .tasks-date-nav button {
+                background: #fff;
+                border: 1px solid #ddd;
+                padding: 5px 10px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+            }
+            .tasks-date-nav button:hover {
+                background: #e9ecef;
+            }
+            .tasks-date-nav button.btn-today {
+                background: #007bff;
+                color: white;
+                border-color: #007bff;
+            }
+            .tasks-date-nav button.btn-today:hover {
+                background: #0056b3;
+            }
+            .tasks-date-nav input[type="date"] {
+                padding: 5px 10px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 14px;
+            }
             .harmonogram-actions {
                 display: flex;
                 gap: 10px;
@@ -1504,6 +1556,26 @@ add_action('admin_head', function() {
             .harmonogram-task.fjo { border-left-color: #6f42c1; }
             .harmonogram-task.obsluga_telefoniczna { border-left-color: #e91e63; }
             .harmonogram-task.sprawy_organizacyjne { border-left-color: #607d8b; }
+
+            .harmonogram-task-done {
+                background: #d4edda !important;
+                border-color: #28a745 !important;
+            }
+            .harmonogram-task-done .harmonogram-task-name {
+                text-decoration: line-through;
+                color: #666;
+            }
+            .harmonogram-task-checkbox {
+                width: 18px;
+                height: 18px;
+                margin-right: 10px;
+                cursor: pointer;
+                accent-color: #28a745;
+            }
+            .done-badge {
+                color: #28a745;
+                font-weight: bold;
+            }
 
             .harmonogram-task-info {
                 flex: 1;
@@ -2114,9 +2186,57 @@ function zadaniomat_page_main() {
                     </div>
                 <?php endif; ?>
 
+                <!-- Formularz zadania -->
+                <div class="task-form">
+                    <h3 id="form-title">➕ Dodaj zadanie</h3>
+                    <form id="task-form">
+                        <input type="hidden" id="edit-task-id" value="">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>📅 Dzień</label>
+                                <input type="date" id="task-date" required value="<?php echo $today; ?>">
+                            </div>
+                            <div class="form-group">
+                                <label>📁 Kategoria</label>
+                                <select id="task-kategoria" required>
+                                    <?php foreach (ZADANIOMAT_KATEGORIE_ZADANIA as $key => $label): ?>
+                                        <option value="<?php echo $key; ?>"><?php echo $label; ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>⏱️ Planowany czas (min)</label>
+                                <input type="number" id="task-czas" min="0" placeholder="np. 30">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group wide">
+                                <label>📝 Zadanie</label>
+                                <input type="text" id="task-nazwa" required placeholder="Co masz do zrobienia?">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group wide">
+                                <label>🎯 Określony cel TO DO</label>
+                                <textarea id="task-cel" placeholder="Szczegółowy opis celu..."></textarea>
+                            </div>
+                        </div>
+                        <button type="submit" class="button button-primary button-large" id="submit-btn">➕ Dodaj zadanie</button>
+                        <button type="button" class="button button-large" id="cancel-edit-btn" style="display:none;" onclick="cancelEdit()">Anuluj</button>
+                    </form>
+                </div>
+
                 <!-- Zadania na dziś -->
                 <div class="zadaniomat-card" id="today-tasks-section">
-                    <h2>📋 Zadania na dziś</h2>
+                    <div class="tasks-header">
+                        <h2>📋 Zadania na dziś</h2>
+                        <div class="tasks-date-nav">
+                            <button onclick="changeTasksDate(-1)" title="Poprzedni dzień">←</button>
+                            <input type="date" id="tasks-list-date" value="<?php echo $today; ?>" onchange="loadTasksForDate(this.value)">
+                            <button onclick="changeTasksDate(1)" title="Następny dzień">→</button>
+                            <button onclick="goToTodayTasks()" class="btn-today">Dziś</button>
+                        </div>
+                    </div>
                     <div id="today-tasks-container"></div>
                 </div>
 
@@ -2158,46 +2278,6 @@ function zadaniomat_page_main() {
                 <div class="zadaniomat-card">
                     <h2>📋 Zadania - inne dni</h2>
                     <div id="tasks-container"></div>
-                </div>
-
-                <!-- Formularz zadania -->
-                <div class="task-form">
-                    <h3 id="form-title">➕ Dodaj zadanie</h3>
-                    <form id="task-form">
-                        <input type="hidden" id="edit-task-id" value="">
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>📅 Dzień</label>
-                                <input type="date" id="task-date" required value="<?php echo $today; ?>">
-                            </div>
-                            <div class="form-group">
-                                <label>📁 Kategoria</label>
-                                <select id="task-kategoria" required>
-                                    <?php foreach (ZADANIOMAT_KATEGORIE_ZADANIA as $key => $label): ?>
-                                        <option value="<?php echo $key; ?>"><?php echo $label; ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>⏱️ Planowany czas (min)</label>
-                                <input type="number" id="task-czas" min="0" placeholder="np. 30">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group wide">
-                                <label>📝 Zadanie</label>
-                                <input type="text" id="task-nazwa" required placeholder="Co masz do zrobienia?">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group wide">
-                                <label>🎯 Określony cel TO DO</label>
-                                <textarea id="task-cel" placeholder="Szczegółowy opis celu..."></textarea>
-                            </div>
-                        </div>
-                        <button type="submit" class="button button-primary button-large" id="submit-btn">➕ Dodaj zadanie</button>
-                        <button type="button" class="button button-large" id="cancel-edit-btn" style="display:none;" onclick="cancelEdit()">Anuluj</button>
-                    </form>
                 </div>
             </div>
         </div>
@@ -2477,6 +2557,9 @@ function zadaniomat_page_main() {
                         html += '<a href="#" onclick="showAllCategories(\'' + current + '\'); return false;">👁️ Pokaż ' + hiddenCount + ' ukryte kategorie</a>';
                         html += '</td></tr>';
                     }
+
+                    // Dodaj wiersz szybkiego dodawania zadań
+                    html += renderQuickAddRow(current);
                 } else {
                     // Dla innych dni - normalne wyświetlanie
                     if (dayTasks.length === 0) {
@@ -2682,6 +2765,62 @@ function zadaniomat_page_main() {
             html += '</td>';
             html += '</tr>';
             return html;
+        };
+
+        // Renderuj wiersz szybkiego dodawania z wyborem kategorii
+        window.renderQuickAddRow = function(day) {
+            var html = '<tr class="quick-add-row" data-day="' + day + '">';
+            html += '<td></td>';
+            html += '<td>';
+            html += '<select class="quick-add-kategoria">';
+            for (var kat in kategorie) {
+                html += '<option value="' + kat + '">' + kategorie[kat] + '</option>';
+            }
+            html += '</select>';
+            html += '</td>';
+            html += '<td><input type="text" class="slot-input quick-add-zadanie" placeholder="Wpisz zadanie..." data-field="zadanie"></td>';
+            html += '<td><input type="text" class="slot-input quick-add-cel" placeholder="Cel TO DO..." data-field="cel_todo"></td>';
+            html += '<td><input type="number" class="slot-input quick-add-czas" placeholder="-" min="0" style="width:45px;" data-field="planowany_czas"></td>';
+            html += '<td>-</td>';
+            html += '<td>-</td>';
+            html += '<td class="action-buttons">';
+            html += '<button class="btn-add-slot" onclick="saveQuickAdd(this)" title="Dodaj">➕</button>';
+            html += '</td>';
+            html += '</tr>';
+            return html;
+        };
+
+        // Zapisz zadanie z quick add wiersza
+        window.saveQuickAdd = function(btn) {
+            var $row = $(btn).closest('tr');
+            var day = $row.data('day');
+            var kategoria = $row.find('.quick-add-kategoria').val();
+            var zadanie = $row.find('.quick-add-zadanie').val().trim();
+            var cel = $row.find('.quick-add-cel').val().trim();
+            var czas = $row.find('.quick-add-czas').val();
+
+            if (!zadanie) {
+                showToast('Wpisz nazwę zadania', 'error');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_task',
+                nonce: nonce,
+                dzien: day,
+                kategoria: kategoria,
+                zadanie: zadanie,
+                cel_todo: cel,
+                planowany_czas: czas || 0
+            }, function(response) {
+                if (response.success) {
+                    showToast('Zadanie dodane!', 'success');
+                    loadTasks();
+                    if (harmonogramDate === day) loadHarmonogram();
+                } else {
+                    showToast('Błąd: ' + response.data, 'error');
+                }
+            });
         };
         
         // Zapisz zadanie z empty slotu
@@ -2912,6 +3051,9 @@ function zadaniomat_page_main() {
                             if (val >= 1) $row.addClass('status-done');
                             else if (val > 0) $row.addClass('status-partial');
                             else if (!isNaN(val)) $row.addClass('status-none');
+
+                            // Odśwież harmonogram aby zsynchronizować status
+                            loadHarmonogram();
                         }
                     }
                 });
@@ -3228,27 +3370,42 @@ function zadaniomat_page_main() {
             checkStartDnia();
         };
 
-        // Zmiana daty harmonogramu
+        // Zmiana daty harmonogramu - synchronizuje też z listą zadań
         window.changeHarmonogramDate = function(delta) {
             var currentDate = new Date(harmonogramDate);
             currentDate.setDate(currentDate.getDate() + delta);
-            harmonogramDate = currentDate.toISOString().split('T')[0];
-            $('#harmonogram-date').val(harmonogramDate);
-            updateHarmonogramHeader();
-            checkStartDnia();
+            var newDate = currentDate.toISOString().split('T')[0];
+            syncDates(newDate);
         };
 
         window.loadHarmonogramForDate = function(dateStr) {
-            harmonogramDate = dateStr;
-            updateHarmonogramHeader();
-            checkStartDnia();
+            syncDates(dateStr);
         };
 
         window.goToTodayHarmonogram = function() {
-            harmonogramDate = today;
-            $('#harmonogram-date').val(today);
+            syncDates(today);
+        };
+
+        // Synchronizacja dat między harmonogramem a listą zadań
+        window.syncDates = function(dateStr) {
+            selectedDate = dateStr;
+            harmonogramDate = dateStr;
+
+            $('#harmonogram-date').val(dateStr);
+            $('#tasks-list-date').val(dateStr);
+            $('#task-date').val(dateStr);
+
             updateHarmonogramHeader();
+            updateTasksHeader();
+
+            loadTasks();
             checkStartDnia();
+        };
+
+        window.updateTasksHeader = function() {
+            var isToday = selectedDate === today;
+            var headerText = isToday ? '📋 Zadania na dziś' : '📋 Zadania: ' + selectedDate;
+            $('#today-tasks-section .tasks-header h2').text(headerText);
         };
 
         window.updateHarmonogramHeader = function() {
@@ -3258,6 +3415,22 @@ function zadaniomat_page_main() {
             var dayName = days[dateObj.getDay()];
             var headerText = isToday ? '📅 Harmonogram dnia' : '📅 Harmonogram: ' + dayName + ' ' + harmonogramDate;
             $('#harmonogram-section h2').contents().first().replaceWith(headerText + ' ');
+        };
+
+        // ==================== NAWIGACJA DATY LISTY ZADAŃ ====================
+        window.changeTasksDate = function(delta) {
+            var currentDate = new Date(selectedDate);
+            currentDate.setDate(currentDate.getDate() + delta);
+            var newDate = currentDate.toISOString().split('T')[0];
+            syncDates(newDate);
+        };
+
+        window.loadTasksForDate = function(dateStr) {
+            syncDates(dateStr);
+        };
+
+        window.goToTodayTasks = function() {
+            syncDates(today);
         };
 
         // Sprawdź czy użytkownik ustawił godzinę startu
@@ -3365,7 +3538,11 @@ function zadaniomat_page_main() {
             }, function(response) {
                 if (response.success) {
                     harmonogramTasks = response.data.zadania;
-                    harmonogramStale = response.data.stale_zadania;
+                    // Filtruj stałe zadania - te z "dodaj do listy" nie pokazuj w harmonogramie
+                    // bo są już widoczne w liście zadań
+                    harmonogramStale = response.data.stale_zadania.filter(function(s) {
+                        return s.dodaj_do_listy != 1;
+                    });
                     loadStaleModifications(); // Zastosuj modyfikacje dla wybranego dnia
                     renderHarmonogram();
                 }
@@ -3437,7 +3614,17 @@ function zadaniomat_page_main() {
             var taskId = isStale ? 'stale-' + task.id : task.id;
             var draggable = 'draggable="true" ondragstart="handleDragStart(event, \'' + taskId + '\')"';
 
-            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
+            // Sprawdź czy zadanie jest wykonane
+            var isDone = !isStale && task.status !== null && parseFloat(task.status) >= 1;
+            var doneClass = isDone ? ' harmonogram-task-done' : '';
+
+            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + doneClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
+
+            // Checkbox dla oznaczenia wykonania (tylko dla zwykłych zadań)
+            if (!isStale) {
+                html += '<input type="checkbox" class="harmonogram-task-checkbox" ' + (isDone ? 'checked' : '') + ' onchange="toggleHarmonogramTaskDone(' + task.id + ', this.checked)" title="Oznacz jako ' + (isDone ? 'niewykonane' : 'wykonane') + '">';
+            }
+
             html += '<div class="harmonogram-task-info">';
             html += '<div class="harmonogram-task-name">' + escapeHtml(task.zadanie || task.nazwa) + '</div>';
             html += '<div class="harmonogram-task-meta">';
@@ -3447,6 +3634,9 @@ function zadaniomat_page_main() {
             }
             if (isStale) {
                 html += '<span class="stale-badge">🔄 Stałe</span>';
+            }
+            if (isDone) {
+                html += '<span class="done-badge">✅</span>';
             }
             html += '</div></div>';
 
@@ -3475,6 +3665,33 @@ function zadaniomat_page_main() {
 
             html += '</div>';
             return html;
+        };
+
+        // Przełącz status wykonania zadania w harmonogramie
+        window.toggleHarmonogramTaskDone = function(taskId, isDone) {
+            var newStatus = isDone ? '1' : '0';
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_quick_update',
+                nonce: nonce,
+                id: taskId,
+                field: 'status',
+                value: newStatus
+            }, function(response) {
+                if (response.success) {
+                    // Aktualizuj zadanie w tablicy harmonogramTasks
+                    var task = harmonogramTasks.find(function(t) { return t.id == taskId; });
+                    if (task) {
+                        task.status = newStatus;
+                    }
+
+                    // Odśwież widok
+                    renderHarmonogram();
+                    loadTasks(); // Odśwież też listę zadań
+
+                    showToast(isDone ? 'Zadanie wykonane!' : 'Zadanie oznaczone jako niewykonane', 'success');
+                }
+            });
         };
 
         // Aktualizuj godzinę zadania
