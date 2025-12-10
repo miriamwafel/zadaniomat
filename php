@@ -123,6 +123,9 @@ function zadaniomat_create_tables() {
         dni_tygodnia VARCHAR(50) DEFAULT NULL,
         dzien_miesiaca INT DEFAULT NULL,
         dni_przed_koncem_roku INT DEFAULT NULL,
+        dni_przed_koncem_okresu INT DEFAULT NULL,
+        minuty_po_starcie INT DEFAULT NULL,
+        dodaj_do_listy TINYINT(1) DEFAULT 0,
         godzina_start TIME DEFAULT NULL,
         godzina_koniec TIME DEFAULT NULL,
         aktywne TINYINT(1) DEFAULT 1,
@@ -176,10 +179,19 @@ add_action('admin_init', function() {
         zadaniomat_create_tables();
     }
 
-    // Migracja - dodaj kolumnę dni_przed_koncem_roku do stałych zadań
+    // Migracja - dodaj kolumny do stałych zadań
     $stale_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_stale");
     if (!in_array('dni_przed_koncem_roku', $stale_columns)) {
         $wpdb->query("ALTER TABLE $table_stale ADD COLUMN dni_przed_koncem_roku INT DEFAULT NULL");
+    }
+    if (!in_array('dni_przed_koncem_okresu', $stale_columns)) {
+        $wpdb->query("ALTER TABLE $table_stale ADD COLUMN dni_przed_koncem_okresu INT DEFAULT NULL");
+    }
+    if (!in_array('minuty_po_starcie', $stale_columns)) {
+        $wpdb->query("ALTER TABLE $table_stale ADD COLUMN minuty_po_starcie INT DEFAULT NULL");
+    }
+    if (!in_array('dodaj_do_listy', $stale_columns)) {
+        $wpdb->query("ALTER TABLE $table_stale ADD COLUMN dodaj_do_listy TINYINT(1) DEFAULT 0");
     }
 
     // Migracja - zmień typ_powtarzania na VARCHAR jeśli jest ENUM
@@ -645,6 +657,9 @@ add_action('wp_ajax_zadaniomat_add_stale_zadanie', function() {
         'dni_tygodnia' => sanitize_text_field($_POST['dni_tygodnia'] ?? ''),
         'dzien_miesiaca' => !empty($_POST['dzien_miesiaca']) ? intval($_POST['dzien_miesiaca']) : null,
         'dni_przed_koncem_roku' => !empty($_POST['dni_przed_koncem_roku']) ? intval($_POST['dni_przed_koncem_roku']) : null,
+        'dni_przed_koncem_okresu' => !empty($_POST['dni_przed_koncem_okresu']) ? intval($_POST['dni_przed_koncem_okresu']) : null,
+        'minuty_po_starcie' => !empty($_POST['minuty_po_starcie']) ? intval($_POST['minuty_po_starcie']) : null,
+        'dodaj_do_listy' => !empty($_POST['dodaj_do_listy']) ? 1 : 0,
         'godzina_start' => !empty($_POST['godzina_start']) ? sanitize_text_field($_POST['godzina_start']) : null,
         'godzina_koniec' => !empty($_POST['godzina_koniec']) ? sanitize_text_field($_POST['godzina_koniec']) : null,
         'aktywne' => 1
@@ -673,6 +688,9 @@ add_action('wp_ajax_zadaniomat_edit_stale_zadanie', function() {
         'dni_tygodnia' => sanitize_text_field($_POST['dni_tygodnia'] ?? ''),
         'dzien_miesiaca' => !empty($_POST['dzien_miesiaca']) ? intval($_POST['dzien_miesiaca']) : null,
         'dni_przed_koncem_roku' => !empty($_POST['dni_przed_koncem_roku']) ? intval($_POST['dni_przed_koncem_roku']) : null,
+        'dni_przed_koncem_okresu' => !empty($_POST['dni_przed_koncem_okresu']) ? intval($_POST['dni_przed_koncem_okresu']) : null,
+        'minuty_po_starcie' => !empty($_POST['minuty_po_starcie']) ? intval($_POST['minuty_po_starcie']) : null,
+        'dodaj_do_listy' => !empty($_POST['dodaj_do_listy']) ? 1 : 0,
         'godzina_start' => !empty($_POST['godzina_start']) ? sanitize_text_field($_POST['godzina_start']) : null,
         'godzina_koniec' => !empty($_POST['godzina_koniec']) ? sanitize_text_field($_POST['godzina_koniec']) : null
     ], ['id' => $id]);
@@ -725,8 +743,12 @@ add_action('wp_ajax_zadaniomat_get_stale_for_day', function() {
 
     $stale = $wpdb->get_results("SELECT * FROM $table WHERE aktywne = 1 ORDER BY godzina_start ASC");
 
-    // Pobierz aktualny rok (90-dniowy okres) dla tego dnia
+    // Pobierz aktualny rok (90-dniowy okres) i okres dla tego dnia
     $current_rok = zadaniomat_get_current_rok($dzien);
+    $current_okres = zadaniomat_get_current_okres($dzien);
+
+    // Pobierz godzinę startu dnia (dla minuty_po_starcie)
+    $start_dnia = get_option('zadaniomat_start_dnia_' . $dzien, '');
 
     $matching = [];
     foreach ($stale as $s) {
@@ -740,17 +762,31 @@ add_action('wp_ajax_zadaniomat_get_stale_for_day', function() {
         } elseif ($s->typ_powtarzania === 'dzien_miesiaca' && $s->dzien_miesiaca) {
             $match = ($dayOfMonth === intval($s->dzien_miesiaca));
         } elseif ($s->typ_powtarzania === 'dni_przed_koncem_roku' && $s->dni_przed_koncem_roku && $current_rok) {
-            // Oblicz ile dni przed końcem roku (90-dniowego okresu)
             $rok_koniec = new DateTime($current_rok->data_koniec);
             $diff = $rok_koniec->diff($date);
-            // Sprawdź czy dzień wypada dokładnie X dni przed końcem roku
             if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_roku)) {
+                $match = true;
+            }
+        } elseif ($s->typ_powtarzania === 'dni_przed_koncem_okresu' && $s->dni_przed_koncem_okresu && $current_okres) {
+            $okres_koniec = new DateTime($current_okres->data_koniec);
+            $diff = $okres_koniec->diff($date);
+            if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_okresu)) {
                 $match = true;
             }
         }
 
         if ($match) {
             $s->kategoria_label = zadaniomat_get_kategoria_label($s->kategoria);
+
+            // Oblicz godzinę startu jeśli ustawiono minuty_po_starcie
+            if ($s->minuty_po_starcie && $start_dnia) {
+                $start_time = DateTime::createFromFormat('H:i', $start_dnia);
+                if ($start_time) {
+                    $start_time->modify('+' . intval($s->minuty_po_starcie) . ' minutes');
+                    $s->godzina_start = $start_time->format('H:i:s');
+                }
+            }
+
             $matching[] = $s;
         }
     }
@@ -808,8 +844,12 @@ add_action('wp_ajax_zadaniomat_get_harmonogram', function() {
     $stale = $wpdb->get_results("SELECT * FROM $table_stale WHERE aktywne = 1 ORDER BY godzina_start ASC");
     $stale_matching = [];
 
-    // Pobierz aktualny rok (90-dniowy okres) dla tego dnia
+    // Pobierz aktualny rok (90-dniowy okres) i okres dla tego dnia
     $current_rok = zadaniomat_get_current_rok($dzien);
+    $current_okres = zadaniomat_get_current_okres($dzien);
+
+    // Pobierz godzinę startu dnia (dla minuty_po_starcie)
+    $start_dnia = get_option('zadaniomat_start_dnia_' . $dzien, '');
 
     foreach ($stale as $s) {
         $match = false;
@@ -825,8 +865,14 @@ add_action('wp_ajax_zadaniomat_get_harmonogram', function() {
             // Oblicz ile dni przed końcem roku (90-dniowego okresu)
             $rok_koniec = new DateTime($current_rok->data_koniec);
             $diff = $rok_koniec->diff($date);
-            // Sprawdź czy dzień wypada dokładnie X dni przed końcem roku
             if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_roku)) {
+                $match = true;
+            }
+        } elseif ($s->typ_powtarzania === 'dni_przed_koncem_okresu' && $s->dni_przed_koncem_okresu && $current_okres) {
+            // Oblicz ile dni przed końcem okresu 2-tygodniowego
+            $okres_koniec = new DateTime($current_okres->data_koniec);
+            $diff = $okres_koniec->diff($date);
+            if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_okresu)) {
                 $match = true;
             }
         }
@@ -835,6 +881,16 @@ add_action('wp_ajax_zadaniomat_get_harmonogram', function() {
             $s->kategoria_label = zadaniomat_get_kategoria_label($s->kategoria);
             $s->is_stale = true;
             $s->zadanie = $s->nazwa;
+
+            // Oblicz godzinę startu jeśli ustawiono minuty_po_starcie
+            if ($s->minuty_po_starcie && $start_dnia) {
+                $start_time = DateTime::createFromFormat('H:i', $start_dnia);
+                if ($start_time) {
+                    $start_time->modify('+' . intval($s->minuty_po_starcie) . ' minutes');
+                    $s->godzina_start = $start_time->format('H:i:s');
+                }
+            }
+
             $stale_matching[] = $s;
         }
     }
@@ -1486,6 +1542,28 @@ add_action('admin_head', function() {
                 font-weight: 600;
             }
 
+            .stale-task-row {
+                background: #f8f9fa;
+                border-left: 3px solid #6c757d;
+            }
+
+            .stale-task-row td {
+                color: #6c757d;
+            }
+
+            .btn-convert-stale {
+                background: #17a2b8;
+                color: white;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+
+            .btn-convert-stale:hover {
+                background: #138496;
+            }
+
             /* Widok listy vs timeline toggle */
             .view-toggle {
                 display: flex;
@@ -1911,40 +1989,6 @@ function zadaniomat_page_main() {
             
             <!-- CONTENT -->
             <div class="content">
-                <!-- Harmonogram dnia - NA GÓRZE, pokazuje się tylko dla dzisiaj -->
-                <div id="harmonogram-section" style="display: none;">
-                    <div class="harmonogram-container">
-                        <div class="harmonogram-header">
-                            <h2>
-                                📅 Harmonogram dnia
-                                <span class="start-time-badge" id="start-time-badge">Start: --:--</span>
-                            </h2>
-                            <div class="harmonogram-actions">
-                                <button class="btn-change-start" onclick="showStartDayModal()">⏰ Zmień start</button>
-                                <div class="view-toggle">
-                                    <button class="active" data-view="timeline" onclick="toggleHarmonogramView('timeline')">📊 Timeline</button>
-                                    <button data-view="list" onclick="toggleHarmonogramView('list')">📋 Lista</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Nieprzypisane zadania (do przeciągnięcia) -->
-                        <div class="unscheduled-tasks" id="unscheduled-tasks">
-                            <h3>📦 Zadania do przypisania <span id="unscheduled-count"></span></h3>
-                            <div class="unscheduled-tasks-list" id="unscheduled-list"></div>
-                        </div>
-
-                        <!-- Timeline godzinowy -->
-                        <div class="harmonogram-timeline" id="harmonogram-timeline"></div>
-                    </div>
-                </div>
-
-                <!-- Zadania na dziś - TUŻ POD HARMONOGRAMEM -->
-                <div class="zadaniomat-card">
-                    <h2>📋 Zadania</h2>
-                    <div id="tasks-container"></div>
-                </div>
-
                 <?php if ($current_okres): ?>
                     <div class="okres-banner">
                         <h2>🎯 <?php echo esc_html($current_okres->nazwa); ?></h2>
@@ -1983,6 +2027,46 @@ function zadaniomat_page_main() {
                         Przejdź do <a href="<?php echo admin_url('admin.php?page=zadaniomat-settings'); ?>">Ustawień</a> i dodaj rok oraz okresy 2-tygodniowe.
                     </div>
                 <?php endif; ?>
+
+                <!-- Zadania na dziś -->
+                <div class="zadaniomat-card" id="today-tasks-section">
+                    <h2>📋 Zadania na dziś</h2>
+                    <div id="today-tasks-container"></div>
+                </div>
+
+                <!-- Harmonogram dnia - pokazuje się tylko dla dzisiaj -->
+                <div id="harmonogram-section" style="display: none;">
+                    <div class="harmonogram-container">
+                        <div class="harmonogram-header">
+                            <h2>
+                                📅 Harmonogram dnia
+                                <span class="start-time-badge" id="start-time-badge">Start: --:--</span>
+                            </h2>
+                            <div class="harmonogram-actions">
+                                <button class="btn-change-start" onclick="showStartDayModal()">⏰ Zmień start</button>
+                                <div class="view-toggle">
+                                    <button class="active" data-view="timeline" onclick="toggleHarmonogramView('timeline')">📊 Timeline</button>
+                                    <button data-view="list" onclick="toggleHarmonogramView('list')">📋 Lista</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Nieprzypisane zadania (do przeciągnięcia) -->
+                        <div class="unscheduled-tasks" id="unscheduled-tasks">
+                            <h3>📦 Zadania do przypisania <span id="unscheduled-count"></span></h3>
+                            <div class="unscheduled-tasks-list" id="unscheduled-list"></div>
+                        </div>
+
+                        <!-- Timeline godzinowy -->
+                        <div class="harmonogram-timeline" id="harmonogram-timeline"></div>
+                    </div>
+                </div>
+
+                <!-- Inne dni -->
+                <div class="zadaniomat-card">
+                    <h2>📋 Zadania - inne dni</h2>
+                    <div id="tasks-container"></div>
+                </div>
 
                 <!-- Formularz zadania -->
                 <div class="task-form">
@@ -2154,22 +2238,44 @@ function zadaniomat_page_main() {
         };
         
         // ==================== TASKS ====================
+        var staleZadaniaForToday = [];
+
         window.loadTasks = function() {
             var start = addDays(selectedDate, -1);
             var end = addDays(selectedDate, 5);
-            
+
             $('#tasks-container').addClass('loading');
-            
-            $.post(ajaxurl, {
+            $('#today-tasks-container').addClass('loading');
+
+            // Pobierz zadania i stałe zadania dla dziś równolegle
+            var tasksRequest = $.post(ajaxurl, {
                 action: 'zadaniomat_get_tasks',
                 nonce: nonce,
                 start: start,
                 end: end
-            }, function(response) {
+            });
+
+            var staleRequest = $.post(ajaxurl, {
+                action: 'zadaniomat_get_stale_for_day',
+                nonce: nonce,
+                dzien: today
+            });
+
+            $.when(tasksRequest, staleRequest).done(function(tasksResp, staleResp) {
                 $('#tasks-container').removeClass('loading');
-                if (response.success) {
-                    renderTasks(response.data.tasks, start, end);
+                $('#today-tasks-container').removeClass('loading');
+
+                var tasks = tasksResp[0].success ? tasksResp[0].data.tasks : [];
+
+                // Pobierz stałe zadania z opcją "dodaj do listy"
+                staleZadaniaForToday = [];
+                if (staleResp[0].success) {
+                    staleZadaniaForToday = staleResp[0].data.stale_zadania.filter(function(s) {
+                        return s.dodaj_do_listy == 1;
+                    });
                 }
+
+                renderTasks(tasks, start, end);
             });
         };
         
@@ -2180,13 +2286,15 @@ function zadaniomat_page_main() {
                 if (!byDay[t.dzien]) byDay[t.dzien] = [];
                 byDay[t.dzien].push(t);
             });
-            
-            var html = '';
+
+            var todayHtml = '';
+            var otherDaysHtml = '';
             var current = start;
             while (current <= end) {
                 var dayTasks = byDay[current] || [];
                 var isToday = (current === today);
                 var isSelected = (current === selectedDate);
+                var html = '';
                 
                 // Calculate stats
                 var planned = 0, actual = 0;
@@ -2227,8 +2335,13 @@ function zadaniomat_page_main() {
                 html += '</div></div>';
 
                 html += '<table class="day-table"><thead><tr>';
-                if (dayTasks.length > 0) {
-                    html += '<th style="width:30px;"><input type="checkbox" class="select-all-checkbox" data-day="' + current + '" title="Zaznacz wszystkie"></th>';
+                // Zawsze dodaj kolumnę checkbox dla dzisiaj (lub gdy są zadania)
+                if (isToday || dayTasks.length > 0) {
+                    html += '<th style="width:30px;">';
+                    if (dayTasks.length > 0) {
+                        html += '<input type="checkbox" class="select-all-checkbox" data-day="' + current + '" title="Zaznacz wszystkie">';
+                    }
+                    html += '</th>';
                 }
                 html += '<th style="width:130px;">Kategoria</th><th>Zadanie</th><th style="width:180px;">Cel TO DO</th>';
                 html += '<th style="width:50px;">Plan</th><th style="width:70px;">Fakt</th><th style="width:70px;">Status</th><th style="width:90px;">Akcje</th>';
@@ -2243,6 +2356,15 @@ function zadaniomat_page_main() {
                     // Najpierw istniejące zadania
                     dayTasks.forEach(function(t) {
                         html += renderTaskRow(t, current);
+                    });
+
+                    // Potem stałe zadania z opcją "dodaj do listy"
+                    staleZadaniaForToday.forEach(function(stale) {
+                        // Sprawdź czy nie ma już zadania w tej kategorii (nie duplikuj)
+                        if (!usedKategorie[stale.kategoria]) {
+                            html += renderStaleTaskRow(stale, current);
+                            usedKategorie[stale.kategoria] = true;
+                        }
                     });
 
                     // Potem puste sloty dla brakujących kategorii (bez ukrytych)
@@ -2279,10 +2401,20 @@ function zadaniomat_page_main() {
                 }
                 
                 html += '</tbody></table></div>';
+
+                // Rozdziel dzisiejsze zadania od innych dni
+                if (isToday) {
+                    todayHtml += html;
+                } else {
+                    otherDaysHtml += html;
+                }
+
                 current = addDays(current, 1);
             }
-            
-            $('#tasks-container').html(html);
+
+            // Renderuj do osobnych kontenerów
+            $('#today-tasks-container').html(todayHtml || '<p style="color:#888;padding:20px;text-align:center;">Wybierz dziś w kalendarzu aby zobaczyć zadania</p>');
+            $('#tasks-container').html(otherDaysHtml || '<p style="color:#888;padding:20px;text-align:center;">Brak zadań na inne dni</p>');
         };
         
         window.renderTaskRow = function(t, day) {
@@ -2342,6 +2474,46 @@ function zadaniomat_page_main() {
             html += '<button class="btn-delete" onclick="deleteTask(' + t.id + ')" title="Usuń">🗑️</button>';
             html += '</td></tr>';
             return html;
+        };
+
+        // Renderuj wiersz stałego zadania (z opcją dodaj do listy)
+        window.renderStaleTaskRow = function(stale, day) {
+            var planowany = parseInt(stale.planowany_czas) || 0;
+
+            var html = '<tr class="stale-task-row" data-stale-id="' + stale.id + '">';
+            html += '<td></td>'; // Pusta komórka checkbox (stałe nie mają checkboxa)
+            html += '<td><span class="kategoria-badge ' + stale.kategoria + '">' + stale.kategoria_label + '</span></td>';
+            html += '<td><strong>' + escapeHtml(stale.nazwa) + '</strong> <span class="stale-badge">🔄 Stałe</span></td>';
+            html += '<td style="font-size:12px;color:#666;">-</td>'; // Brak celu TODO dla stałych
+            html += '<td>' + planowany + '</td>';
+            html += '<td>-</td>'; // Brak faktycznego czasu
+            html += '<td>-</td>'; // Brak statusu
+            html += '<td class="action-buttons">';
+            html += '<button class="btn-convert-stale" onclick="convertStaleToTask(' + stale.id + ', \'' + day + '\')" title="Przekształć w zadanie">📋</button>';
+            html += '</td></tr>';
+            return html;
+        };
+
+        // Przekształć stałe zadanie w zwykłe zadanie
+        window.convertStaleToTask = function(staleId, day) {
+            var stale = staleZadaniaForToday.find(function(s) { return s.id == staleId; });
+            if (!stale) return;
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_add_task',
+                nonce: nonce,
+                dzien: day,
+                kategoria: stale.kategoria,
+                zadanie: stale.nazwa,
+                cel_todo: '',
+                planowany_czas: stale.planowany_czas || 0
+            }, function(response) {
+                if (response.success) {
+                    showToast('Zadanie utworzone ze stałego!', 'success');
+                    loadTasks();
+                    loadCalendarDots();
+                }
+            });
         };
 
         // Prompt do dodatkowej sesji timera
@@ -4011,6 +4183,7 @@ function zadaniomat_page_settings() {
                             <option value="dni_tygodnia">Wybrane dni tygodnia</option>
                             <option value="dzien_miesiaca">Dzień miesiąca</option>
                             <option value="dni_przed_koncem_roku">Dni przed końcem roku (90-dni)</option>
+                            <option value="dni_przed_koncem_okresu">Dni przed końcem okresu (2 tyg)</option>
                         </select>
                     </div>
                     <div class="form-group" id="stale-dni-wrap" style="display: none;">
@@ -4033,6 +4206,10 @@ function zadaniomat_page_settings() {
                         <label>Ile dni przed końcem roku</label>
                         <input type="number" id="stale-dni-przed-koncem" min="1" max="90" placeholder="np. 7" style="width: 80px;">
                     </div>
+                    <div class="form-group" id="stale-dni-przed-okresu-wrap" style="display: none;">
+                        <label>Ile dni przed końcem okresu</label>
+                        <input type="number" id="stale-dni-przed-okresu" min="1" max="14" placeholder="np. 3" style="width: 80px;">
+                    </div>
                     <div class="form-group">
                         <label>Godzina start</label>
                         <input type="time" id="stale-godzina-start">
@@ -4040,6 +4217,20 @@ function zadaniomat_page_settings() {
                     <div class="form-group">
                         <label>Godzina koniec</label>
                         <input type="time" id="stale-godzina-koniec">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Minuty po starcie dnia</label>
+                        <input type="number" id="stale-minuty-po-starcie" min="0" max="480" placeholder="np. 30" style="width: 80px;">
+                        <span style="font-size:11px;color:#888;">(0 = domyślnie godzina start)</span>
+                    </div>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="stale-dodaj-do-listy" style="width:auto;">
+                            <span>Dodaj też do listy zadań</span>
+                        </label>
+                        <span style="font-size:11px;color:#888;">(nie tylko harmonogram)</span>
                     </div>
                 </div>
                 <button type="button" class="button button-primary" id="stale-submit-btn" onclick="saveStaleZadanie()">➕ Dodaj stałe zadanie</button>
@@ -4357,6 +4548,7 @@ function zadaniomat_page_settings() {
             $('#stale-dni-wrap').toggle(typ === 'dni_tygodnia');
             $('#stale-dzien-wrap').toggle(typ === 'dzien_miesiaca');
             $('#stale-dni-przed-wrap').toggle(typ === 'dni_przed_koncem_roku');
+            $('#stale-dni-przed-okresu-wrap').toggle(typ === 'dni_przed_koncem_okresu');
         };
 
         window.loadStaleZadania = function() {
@@ -4387,6 +4579,17 @@ function zadaniomat_page_settings() {
                         powtarzanie = '🗓️ ' + zadanie.dzien_miesiaca + ' dnia miesiąca';
                     } else if (zadanie.typ_powtarzania === 'dni_przed_koncem_roku') {
                         powtarzanie = '🎯 ' + zadanie.dni_przed_koncem_roku + ' dni przed końcem roku';
+                    } else if (zadanie.typ_powtarzania === 'dni_przed_koncem_okresu') {
+                        powtarzanie = '📊 ' + zadanie.dni_przed_koncem_okresu + ' dni przed końcem okresu';
+                    }
+
+                    // Dodatkowe info
+                    var extraInfo = [];
+                    if (zadanie.minuty_po_starcie) {
+                        extraInfo.push('⏰ +' + zadanie.minuty_po_starcie + ' min po starcie');
+                    }
+                    if (zadanie.dodaj_do_listy == 1) {
+                        extraInfo.push('📋 Lista');
                     }
 
                     var godziny = '-';
@@ -4406,7 +4609,11 @@ function zadaniomat_page_settings() {
                     html += '</td>';
                     html += '<td><strong>' + escapeHtml(zadanie.nazwa) + '</strong></td>';
                     html += '<td><span class="kategoria-badge ' + zadanie.kategoria + '">' + zadanie.kategoria_label + '</span></td>';
-                    html += '<td>' + powtarzanie + '</td>';
+                    html += '<td>' + powtarzanie;
+                    if (extraInfo.length > 0) {
+                        html += '<br><span style="font-size:11px;color:#888;">' + extraInfo.join(' • ') + '</span>';
+                    }
+                    html += '</td>';
                     html += '<td>' + godziny + '</td>';
                     html += '<td>' + (zadanie.planowany_czas || '-') + ' min</td>';
                     html += '<td class="action-buttons">';
@@ -4435,6 +4642,9 @@ function zadaniomat_page_settings() {
             $('#stale-godzina-koniec').val(zadanie.godzina_koniec ? zadanie.godzina_koniec.substring(0, 5) : '');
             $('#stale-dzien-miesiaca').val(zadanie.dzien_miesiaca || '');
             $('#stale-dni-przed-koncem').val(zadanie.dni_przed_koncem_roku || '');
+            $('#stale-dni-przed-okresu').val(zadanie.dni_przed_koncem_okresu || '');
+            $('#stale-minuty-po-starcie').val(zadanie.minuty_po_starcie || '');
+            $('#stale-dodaj-do-listy').prop('checked', zadanie.dodaj_do_listy == 1);
 
             // Zaznacz dni tygodnia
             $('.dni-tygodnia-checkboxes input').prop('checked', false);
@@ -4475,6 +4685,9 @@ function zadaniomat_page_settings() {
             $('.dni-tygodnia-checkboxes input').prop('checked', false);
             $('#stale-dzien-miesiaca').val('');
             $('#stale-dni-przed-koncem').val('');
+            $('#stale-dni-przed-okresu').val('');
+            $('#stale-minuty-po-starcie').val('');
+            $('#stale-dodaj-do-listy').prop('checked', false);
 
             // Przywróć tytuł i przyciski
             $('#stale-form-title').text('➕ Dodaj stałe zadanie');
@@ -4510,6 +4723,9 @@ function zadaniomat_page_settings() {
                 dni_tygodnia: dniTygodnia,
                 dzien_miesiaca: $('#stale-dzien-miesiaca').val(),
                 dni_przed_koncem_roku: $('#stale-dni-przed-koncem').val(),
+                dni_przed_koncem_okresu: $('#stale-dni-przed-okresu').val(),
+                minuty_po_starcie: $('#stale-minuty-po-starcie').val(),
+                dodaj_do_listy: $('#stale-dodaj-do-listy').is(':checked') ? 1 : 0,
                 godzina_start: $('#stale-godzina-start').val(),
                 godzina_koniec: $('#stale-godzina-koniec').val()
             };
