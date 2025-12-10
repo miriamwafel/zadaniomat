@@ -973,10 +973,52 @@ add_action('admin_head', function() {
             .cel-card.marketing_construction { border-left-color: #dc3545; }
             .cel-card.fjo { border-left-color: #6f42c1; }
             .cel-card.obsluga_telefoniczna { border-left-color: #e91e63; }
+            .cel-card.sprawy_organizacyjne { border-left-color: #6c757d; }
             .cel-card h4 { margin: 0 0 8px 0; font-size: 12px; color: #666; }
             .cel-card textarea { width: 100%; min-height: 50px; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; resize: vertical; }
+            .cel-card textarea.hidden { display: none; }
             .cel-card .status-row { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
             .cel-card .status-row select { padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid #ddd; }
+
+            .cel-rok-display {
+                font-size: 11px;
+                color: #666;
+                background: #e9ecef;
+                padding: 6px 8px;
+                border-radius: 4px;
+                margin-bottom: 8px;
+                line-height: 1.4;
+            }
+
+            .cel-okres-display {
+                font-size: 13px;
+                color: #333;
+                padding: 8px;
+                border: 1px dashed #ccc;
+                border-radius: 6px;
+                min-height: 40px;
+                cursor: pointer;
+                line-height: 1.5;
+                transition: background 0.2s;
+            }
+
+            .cel-okres-display:hover {
+                background: #fff;
+                border-color: #007bff;
+            }
+
+            .cel-okres-display.empty {
+                color: #999;
+                font-style: italic;
+            }
+
+            .cel-okres-display .placeholder {
+                color: #aaa;
+            }
+
+            .cel-okres-display.editing {
+                display: none;
+            }
             
             /* Formularz */
             .task-form { background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
@@ -1316,6 +1358,39 @@ add_action('admin_head', function() {
                 border-radius: 20px;
                 font-size: 13px;
                 font-weight: 500;
+            }
+            .harmonogram-date-nav {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                background: #f8f9fa;
+                padding: 5px 10px;
+                border-radius: 8px;
+            }
+            .harmonogram-date-nav button {
+                background: #fff;
+                border: 1px solid #ddd;
+                padding: 5px 10px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+            }
+            .harmonogram-date-nav button:hover {
+                background: #e9ecef;
+            }
+            .harmonogram-date-nav button.btn-today {
+                background: #007bff;
+                color: white;
+                border-color: #007bff;
+            }
+            .harmonogram-date-nav button.btn-today:hover {
+                background: #0056b3;
+            }
+            .harmonogram-date-nav input[type="date"] {
+                padding: 5px 10px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 14px;
             }
             .harmonogram-actions {
                 display: flex;
@@ -2008,11 +2083,22 @@ function zadaniomat_page_main() {
                                 <div class="cel-card <?php echo $key; ?>">
                                     <h4><?php echo $label; ?></h4>
                                     <?php if ($cel_rok): ?>
-                                        <div style="font-size: 11px; color: #888; margin-bottom: 6px; font-style: italic;">
-                                            Cel roczny: <?php echo esc_html(mb_substr($cel_rok, 0, 50)); ?><?php echo mb_strlen($cel_rok) > 50 ? '...' : ''; ?>
+                                        <div class="cel-rok-display">
+                                            <strong>Cel roczny:</strong> <?php echo esc_html($cel_rok); ?>
                                         </div>
                                     <?php endif; ?>
-                                    <textarea class="cel-okres-input"
+                                    <div class="cel-okres-display <?php echo empty($cel_data['cel']) ? 'empty' : ''; ?>"
+                                         data-okres="<?php echo $current_okres->id; ?>"
+                                         data-kategoria="<?php echo $key; ?>"
+                                         data-cel-id="<?php echo $cel_data['id'] ?: ''; ?>"
+                                         onclick="editCelOkres(this)">
+                                        <?php if ($cel_data['cel']): ?>
+                                            <?php echo nl2br(esc_html($cel_data['cel'])); ?>
+                                        <?php else: ?>
+                                            <span class="placeholder">Kliknij aby dodać cel na 2 tygodnie...</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <textarea class="cel-okres-input hidden"
                                               data-okres="<?php echo $current_okres->id; ?>"
                                               data-kategoria="<?php echo $key; ?>"
                                               data-cel-id="<?php echo $cel_data['id'] ?: ''; ?>"
@@ -2034,14 +2120,20 @@ function zadaniomat_page_main() {
                     <div id="today-tasks-container"></div>
                 </div>
 
-                <!-- Harmonogram dnia - pokazuje się tylko dla dzisiaj -->
-                <div id="harmonogram-section" style="display: none;">
+                <!-- Harmonogram dnia - z wyborem daty -->
+                <div id="harmonogram-section">
                     <div class="harmonogram-container">
                         <div class="harmonogram-header">
                             <h2>
                                 📅 Harmonogram dnia
                                 <span class="start-time-badge" id="start-time-badge">Start: --:--</span>
                             </h2>
+                            <div class="harmonogram-date-nav">
+                                <button onclick="changeHarmonogramDate(-1)" title="Poprzedni dzień">←</button>
+                                <input type="date" id="harmonogram-date" value="<?php echo $today; ?>" onchange="loadHarmonogramForDate(this.value)">
+                                <button onclick="changeHarmonogramDate(1)" title="Następny dzień">→</button>
+                                <button onclick="goToTodayHarmonogram()" class="btn-today">Dziś</button>
+                            </div>
                             <div class="harmonogram-actions">
                                 <button class="btn-change-start" onclick="showStartDayModal()">⏰ Zmień start</button>
                                 <div class="view-toggle">
@@ -2855,26 +2947,65 @@ function zadaniomat_page_main() {
                 });
             });
             
-            // Cele okresu
-            $(document).on('change', '.cel-okres-input', function() {
-                var $this = $(this);
+            // Edytuj cel okresu - kliknięcie na tekst
+            window.editCelOkres = function(element) {
+                var $display = $(element);
+                var $card = $display.closest('.cel-card');
+                var $textarea = $card.find('.cel-okres-input');
+
+                // Ukryj display, pokaż textarea
+                $display.addClass('editing');
+                $textarea.removeClass('hidden').focus();
+
+                // Zaznacz tekst
+                $textarea[0].select();
+            };
+
+            // Zapisz cel okresu i wróć do widoku
+            $(document).on('blur', '.cel-okres-input', function() {
+                var $textarea = $(this);
+                var $card = $textarea.closest('.cel-card');
+                var $display = $card.find('.cel-okres-display');
+                var cel = $textarea.val().trim();
+
+                // Ukryj textarea, pokaż display
+                $textarea.addClass('hidden');
+                $display.removeClass('editing');
+
+                // Aktualizuj tekst display
+                if (cel) {
+                    $display.html(cel.replace(/\n/g, '<br>')).removeClass('empty');
+                } else {
+                    $display.html('<span class="placeholder">Kliknij aby dodać cel na 2 tygodnie...</span>').addClass('empty');
+                }
+
+                // Zapisz do bazy
                 $.post(ajaxurl, {
                     action: 'zadaniomat_save_cel_okres',
                     nonce: nonce,
-                    okres_id: $this.data('okres'),
-                    kategoria: $this.data('kategoria'),
-                    cel: $this.val()
+                    okres_id: $textarea.data('okres'),
+                    kategoria: $textarea.data('kategoria'),
+                    cel: cel
                 }, function(response) {
                     if (response.success) {
-                        $this.addClass('saved-flash');
-                        setTimeout(function() { $this.removeClass('saved-flash'); }, 500);
+                        showToast('Cel zapisany!', 'success');
                         if (response.data.cel_id) {
-                            $this.data('cel-id', response.data.cel_id);
-                            var $statusRow = $this.siblings('.status-row');
-                            $statusRow.show().find('select').data('id', response.data.cel_id);
+                            $textarea.data('cel-id', response.data.cel_id);
+                            $display.data('cel-id', response.data.cel_id);
                         }
                     }
                 });
+            });
+
+            // Zapisz też na Enter (z Shift+Enter dla nowej linii)
+            $(document).on('keydown', '.cel-okres-input', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    $(this).blur();
+                }
+                if (e.key === 'Escape') {
+                    $(this).blur();
+                }
             });
             
             // Status celu okresu
@@ -3089,21 +3220,52 @@ function zadaniomat_page_main() {
         var harmonogramTasks = [];
         var harmonogramStale = [];
         var draggedTask = null;
+        var harmonogramDate = today; // Data aktualnie wyświetlana w harmonogramie
 
-        // Sprawdź czy pokazać harmonogram (tylko dla dzisiaj)
+        // Sprawdź czy pokazać harmonogram
         window.checkShowHarmonogram = function() {
-            if (selectedDate === today) {
-                $('#harmonogram-section').show();
-                checkStartDnia();
-            } else {
-                $('#harmonogram-section').hide();
-            }
+            $('#harmonogram-section').show();
+            checkStartDnia();
+        };
+
+        // Zmiana daty harmonogramu
+        window.changeHarmonogramDate = function(delta) {
+            var currentDate = new Date(harmonogramDate);
+            currentDate.setDate(currentDate.getDate() + delta);
+            harmonogramDate = currentDate.toISOString().split('T')[0];
+            $('#harmonogram-date').val(harmonogramDate);
+            updateHarmonogramHeader();
+            checkStartDnia();
+        };
+
+        window.loadHarmonogramForDate = function(dateStr) {
+            harmonogramDate = dateStr;
+            updateHarmonogramHeader();
+            checkStartDnia();
+        };
+
+        window.goToTodayHarmonogram = function() {
+            harmonogramDate = today;
+            $('#harmonogram-date').val(today);
+            updateHarmonogramHeader();
+            checkStartDnia();
+        };
+
+        window.updateHarmonogramHeader = function() {
+            var isToday = harmonogramDate === today;
+            var dateObj = new Date(harmonogramDate);
+            var days = ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'];
+            var dayName = days[dateObj.getDay()];
+            var headerText = isToday ? '📅 Harmonogram dnia' : '📅 Harmonogram: ' + dayName + ' ' + harmonogramDate;
+            $('#harmonogram-section h2').contents().first().replaceWith(headerText + ' ');
         };
 
         // Sprawdź czy użytkownik ustawił godzinę startu
         window.checkStartDnia = function() {
+            var isToday = harmonogramDate === today;
+
             // Sprawdź localStorage najpierw
-            var savedStart = localStorage.getItem('zadaniomat_start_' + today);
+            var savedStart = localStorage.getItem('zadaniomat_start_' + harmonogramDate);
             if (savedStart) {
                 startDnia = savedStart;
                 updateStartBadge();
@@ -3115,16 +3277,21 @@ function zadaniomat_page_main() {
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_start_dnia',
                 nonce: nonce,
-                dzien: today
+                dzien: harmonogramDate
             }, function(response) {
                 if (response.success && response.data.godzina) {
                     startDnia = response.data.godzina;
-                    localStorage.setItem('zadaniomat_start_' + today, startDnia);
+                    localStorage.setItem('zadaniomat_start_' + harmonogramDate, startDnia);
                     updateStartBadge();
                     loadHarmonogram();
-                } else {
-                    // Pokaż modal startu dnia
+                } else if (isToday) {
+                    // Pokaż modal startu dnia tylko dla dzisiaj
                     showStartDayModal();
+                } else {
+                    // Dla innych dni użyj domyślnej godziny jeśli nie ma zapisanej
+                    startDnia = '09:00';
+                    updateStartBadge();
+                    loadHarmonogram();
                 }
             });
         };
@@ -3158,13 +3325,13 @@ function zadaniomat_page_main() {
             startDnia = $('#start-time-input').val();
 
             // Zapisz w localStorage
-            localStorage.setItem('zadaniomat_start_' + today, startDnia);
+            localStorage.setItem('zadaniomat_start_' + harmonogramDate, startDnia);
 
             // Zapisz w bazie
             $.post(ajaxurl, {
                 action: 'zadaniomat_save_start_dnia',
                 nonce: nonce,
-                dzien: today,
+                dzien: harmonogramDate,
                 godzina: startDnia
             });
 
@@ -3176,7 +3343,7 @@ function zadaniomat_page_main() {
 
         window.skipStartDnia = function() {
             startDnia = null;
-            localStorage.setItem('zadaniomat_start_' + today, 'skipped');
+            localStorage.setItem('zadaniomat_start_' + harmonogramDate, 'skipped');
             closeStartDayModal();
             $('#harmonogram-section').hide();
         };
@@ -3194,12 +3361,12 @@ function zadaniomat_page_main() {
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_harmonogram',
                 nonce: nonce,
-                dzien: today
+                dzien: harmonogramDate
             }, function(response) {
                 if (response.success) {
                     harmonogramTasks = response.data.zadania;
                     harmonogramStale = response.data.stale_zadania;
-                    loadStaleModifications(); // Zastosuj dzisiejsze modyfikacje
+                    loadStaleModifications(); // Zastosuj modyfikacje dla wybranego dnia
                     renderHarmonogram();
                 }
             });
@@ -3361,19 +3528,19 @@ function zadaniomat_page_main() {
             }
         };
 
-        // Ukryj stałe zadanie na dzisiaj
+        // Ukryj stałe zadanie na wybrany dzień
         window.hideStaleForToday = function(staleId) {
-            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + today) || '[]');
+            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + harmonogramDate) || '[]');
             if (hidden.indexOf(staleId) === -1) {
                 hidden.push(staleId);
-                localStorage.setItem('zadaniomat_hidden_stale_' + today, JSON.stringify(hidden));
+                localStorage.setItem('zadaniomat_hidden_stale_' + harmonogramDate, JSON.stringify(hidden));
             }
             harmonogramStale = harmonogramStale.filter(function(s) { return s.id != staleId; });
             renderHarmonogram();
-            showToast('Stałe zadanie ukryte na dzisiaj', 'success');
+            showToast('Stałe zadanie ukryte na ten dzień', 'success');
         };
 
-        // Zapisz modyfikacje stałych na dzisiaj
+        // Zapisz modyfikacje stałych na wybrany dzień
         window.saveStaleModifications = function() {
             var mods = {};
             harmonogramStale.forEach(function(s) {
@@ -3382,13 +3549,13 @@ function zadaniomat_page_main() {
                     godzina_koniec: s.godzina_koniec
                 };
             });
-            localStorage.setItem('zadaniomat_stale_mods_' + today, JSON.stringify(mods));
+            localStorage.setItem('zadaniomat_stale_mods_' + harmonogramDate, JSON.stringify(mods));
         };
 
         // Załaduj modyfikacje stałych na dzisiaj
         window.loadStaleModifications = function() {
-            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + today) || '[]');
-            var mods = JSON.parse(localStorage.getItem('zadaniomat_stale_mods_' + today) || '{}');
+            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + harmonogramDate) || '[]');
+            var mods = JSON.parse(localStorage.getItem('zadaniomat_stale_mods_' + harmonogramDate) || '{}');
 
             // Filtruj ukryte
             harmonogramStale = harmonogramStale.filter(function(s) {
@@ -3578,14 +3745,15 @@ function zadaniomat_page_main() {
 
         // Aktualizuj linię aktualnego czasu
         window.updateCurrentTimeLine = function() {
-            if (harmonogramView !== 'timeline') return;
+            // Usuń poprzednią linię
+            $('.timeline-current-time').remove();
+
+            // Tylko dla dzisiaj pokazuj linię aktualnego czasu
+            if (harmonogramView !== 'timeline' || harmonogramDate !== today) return;
 
             var now = new Date();
             var currentHour = now.getHours();
             var currentMinute = now.getMinutes();
-
-            // Usuń poprzednią linię
-            $('.timeline-current-time').remove();
 
             // Znajdź godzinę
             var $hourDiv = $('.timeline-hour[data-hour="' + currentHour + '"]');
