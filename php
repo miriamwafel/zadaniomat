@@ -1047,8 +1047,16 @@ add_action('admin_head', function() {
             .day-table tr:hover { background: #fafafa; }
             
             .status-done { background-color: #d4edda !important; }
-            .status-partial { background-color: #fff3cd !important; }
-            .status-none { background-color: #f8d7da !important; }
+            .status-done td strong { text-decoration: line-through; color: #666; }
+            .task-done-checkbox {
+                width: 20px;
+                height: 20px;
+                cursor: pointer;
+                accent-color: #28a745;
+            }
+            .status-cell {
+                text-align: center;
+            }
             
             .inline-input { width: 60px; padding: 6px; border: 1px solid #ddd; border-radius: 6px; text-align: center; font-size: 13px; }
             .inline-select { padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
@@ -2516,7 +2524,7 @@ function zadaniomat_page_main() {
                     html += '</th>';
                 }
                 html += '<th style="width:130px;">Kategoria</th><th>Zadanie</th><th style="width:180px;">Cel TO DO</th>';
-                html += '<th style="width:50px;">Plan</th><th style="width:70px;">Fakt</th><th style="width:70px;">Status</th><th style="width:90px;">Akcje</th>';
+                html += '<th style="width:50px;">Plan</th><th style="width:70px;">Fakt</th><th style="width:50px;">✓</th><th style="width:90px;">Akcje</th>';
                 html += '</tr></thead><tbody>';
                 
                 // Dla dzisiaj - pokaż sloty dla każdej kategorii
@@ -2593,12 +2601,8 @@ function zadaniomat_page_main() {
         };
         
         window.renderTaskRow = function(t, day) {
-            var statusClass = '';
-            if (t.status !== null) {
-                if (parseFloat(t.status) >= 1) statusClass = 'status-done';
-                else if (parseFloat(t.status) > 0) statusClass = 'status-partial';
-                else statusClass = 'status-none';
-            }
+            var isDone = t.status !== null && parseFloat(t.status) >= 1;
+            var statusClass = isDone ? 'status-done' : '';
 
             var planowany = parseInt(t.planowany_czas) || 0;
             var faktyczny = parseInt(t.faktyczny_czas) || 0;
@@ -2637,12 +2641,9 @@ function zadaniomat_page_main() {
             }
             html += '</div></td>';
 
-            html += '<td><select class="inline-select quick-update" data-field="status" data-id="' + t.id + '">';
-            html += '<option value=""' + (t.status === null ? ' selected' : '') + '>-</option>';
-            ['0', '0.5', '0.9', '1'].forEach(function(s) {
-                html += '<option value="' + s + '"' + (t.status == s ? ' selected' : '') + '>' + s + '</option>';
-            });
-            html += '</select></td>';
+            html += '<td class="status-cell">';
+            html += '<input type="checkbox" class="task-done-checkbox" data-id="' + t.id + '" ' + (isDone ? 'checked' : '') + ' onchange="toggleTaskDone(' + t.id + ', this.checked)" title="' + (isDone ? 'Oznacz jako niezrobione' : 'Oznacz jako zrobione') + '">';
+            html += '</td>';
             html += '<td class="action-buttons">';
             html += '<button class="btn-copy" onclick="copyTask(' + t.id + ', this)" title="Kopiuj">📄</button>';
             html += '<button class="btn-edit" onclick="editTask(' + t.id + ', this)" title="Edytuj">✏️</button>';
@@ -2805,7 +2806,7 @@ function zadaniomat_page_main() {
             }
 
             $.post(ajaxurl, {
-                action: 'zadaniomat_save_task',
+                action: 'zadaniomat_add_task',
                 nonce: nonce,
                 dzien: day,
                 kategoria: kategoria,
@@ -2815,8 +2816,13 @@ function zadaniomat_page_main() {
             }, function(response) {
                 if (response.success) {
                     showToast('Zadanie dodane!', 'success');
+                    // Wyczyść pola
+                    $row.find('.quick-add-zadanie').val('');
+                    $row.find('.quick-add-cel').val('');
+                    $row.find('.quick-add-czas').val('');
+                    // Odśwież listę i harmonogram
                     loadTasks();
-                    if (harmonogramDate === day) loadHarmonogram();
+                    loadHarmonogram();
                 } else {
                     showToast('Błąd: ' + response.data, 'error');
                 }
@@ -2850,6 +2856,7 @@ function zadaniomat_page_main() {
                 if (response.success) {
                     showToast('Zadanie dodane!', 'success');
                     loadTasks();
+                    loadHarmonogram(); // Odśwież harmonogram
                     loadCalendarDots();
                 }
             });
@@ -3044,17 +3051,6 @@ function zadaniomat_page_main() {
                     if (response.success) {
                         $this.addClass('saved-flash');
                         setTimeout(function() { $this.removeClass('saved-flash'); }, 500);
-                        
-                        if ($this.data('field') === 'status') {
-                            $row.removeClass('status-done status-partial status-none');
-                            var val = parseFloat($this.val());
-                            if (val >= 1) $row.addClass('status-done');
-                            else if (val > 0) $row.addClass('status-partial');
-                            else if (!isNaN(val)) $row.addClass('status-none');
-
-                            // Odśwież harmonogram aby zsynchronizować status
-                            loadHarmonogram();
-                        }
                     }
                 });
             });
@@ -3083,6 +3079,7 @@ function zadaniomat_page_main() {
                         showToast(editId ? 'Zadanie zaktualizowane!' : 'Zadanie dodane!', 'success');
                         resetForm();
                         loadTasks();
+                        loadHarmonogram(); // Odśwież harmonogram
                         loadCalendarDots();
                         loadOverdueTasks();
                     }
@@ -3667,8 +3664,8 @@ function zadaniomat_page_main() {
             return html;
         };
 
-        // Przełącz status wykonania zadania w harmonogramie
-        window.toggleHarmonogramTaskDone = function(taskId, isDone) {
+        // Przełącz status wykonania zadania (wspólna funkcja)
+        window.toggleTaskDone = function(taskId, isDone) {
             var newStatus = isDone ? '1' : '0';
 
             $.post(ajaxurl, {
@@ -3685,14 +3682,17 @@ function zadaniomat_page_main() {
                         task.status = newStatus;
                     }
 
-                    // Odśwież widok
+                    // Odśwież oba widoki
                     renderHarmonogram();
-                    loadTasks(); // Odśwież też listę zadań
+                    loadTasks();
 
                     showToast(isDone ? 'Zadanie wykonane!' : 'Zadanie oznaczone jako niewykonane', 'success');
                 }
             });
         };
+
+        // Alias dla harmonogramu
+        window.toggleHarmonogramTaskDone = window.toggleTaskDone;
 
         // Aktualizuj godzinę zadania
         window.updateTaskTime = function(taskId, newTime, isStale) {
