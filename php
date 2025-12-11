@@ -2486,7 +2486,7 @@ function zadaniomat_page_main() {
         };
         
         // ==================== TASKS ====================
-        var staleZadaniaForToday = [];
+        var staleZadaniaForSelectedDate = [];
 
         window.loadTasks = function() {
             var start = addDays(selectedDate, -1);
@@ -2495,7 +2495,7 @@ function zadaniomat_page_main() {
             $('#tasks-container').addClass('loading');
             $('#today-tasks-container').addClass('loading');
 
-            // Pobierz zadania i stałe zadania dla dziś równolegle
+            // Pobierz zadania i stałe zadania dla wybranej daty równolegle
             var tasksRequest = $.post(ajaxurl, {
                 action: 'zadaniomat_get_tasks',
                 nonce: nonce,
@@ -2506,7 +2506,7 @@ function zadaniomat_page_main() {
             var staleRequest = $.post(ajaxurl, {
                 action: 'zadaniomat_get_stale_for_day',
                 nonce: nonce,
-                dzien: today
+                dzien: selectedDate
             });
 
             $.when(tasksRequest, staleRequest).done(function(tasksResp, staleResp) {
@@ -2516,9 +2516,9 @@ function zadaniomat_page_main() {
                 var tasks = tasksResp[0].success ? tasksResp[0].data.tasks : [];
 
                 // Pobierz stałe zadania z opcją "dodaj do listy"
-                staleZadaniaForToday = [];
+                staleZadaniaForSelectedDate = [];
                 if (staleResp[0].success) {
-                    staleZadaniaForToday = staleResp[0].data.stale_zadania.filter(function(s) {
+                    staleZadaniaForSelectedDate = staleResp[0].data.stale_zadania.filter(function(s) {
                         return s.dodaj_do_listy == 1;
                     });
                 }
@@ -2583,8 +2583,8 @@ function zadaniomat_page_main() {
                 html += '</div></div>';
 
                 html += '<table class="day-table"><thead><tr>';
-                // Zawsze dodaj kolumnę checkbox dla dzisiaj (lub gdy są zadania)
-                if (isToday || dayTasks.length > 0) {
+                // Zawsze dodaj kolumnę checkbox dla wybranej daty (lub gdy są zadania)
+                if (isSelected || dayTasks.length > 0) {
                     html += '<th style="width:30px;">';
                     if (dayTasks.length > 0) {
                         html += '<input type="checkbox" class="select-all-checkbox" data-day="' + current + '" title="Zaznacz wszystkie">';
@@ -2595,8 +2595,8 @@ function zadaniomat_page_main() {
                 html += '<th style="width:50px;">Plan</th><th style="width:70px;">Fakt</th><th style="width:50px;">✓</th><th style="width:90px;">Akcje</th>';
                 html += '</tr></thead><tbody>';
                 
-                // Dla dzisiaj - pokaż sloty dla każdej kategorii
-                if (isToday) {
+                // Dla wybranej daty - pokaż sloty dla każdej kategorii
+                if (isSelected) {
                     var usedKategorie = {};
                     dayTasks.forEach(function(t) { usedKategorie[t.kategoria] = true; });
                     var hiddenCategories = getHiddenCategories(current);
@@ -2607,7 +2607,7 @@ function zadaniomat_page_main() {
                     });
 
                     // Potem stałe zadania z opcją "dodaj do listy"
-                    staleZadaniaForToday.forEach(function(stale) {
+                    staleZadaniaForSelectedDate.forEach(function(stale) {
                         // Sprawdź czy nie ma już zadania w tej kategorii (nie duplikuj)
                         if (!usedKategorie[stale.kategoria]) {
                             html += renderStaleTaskRow(stale, current);
@@ -2653,8 +2653,8 @@ function zadaniomat_page_main() {
                 
                 html += '</tbody></table></div>';
 
-                // Rozdziel dzisiejsze zadania od innych dni
-                if (isToday) {
+                // Rozdziel wybrane zadania od innych dni
+                if (isSelected) {
                     todayHtml += html;
                 } else {
                     otherDaysHtml += html;
@@ -2740,7 +2740,7 @@ function zadaniomat_page_main() {
 
         // Przekształć stałe zadanie w zwykłe zadanie
         window.convertStaleToTask = function(staleId, day) {
-            var stale = staleZadaniaForToday.find(function(s) { return s.id == staleId; });
+            var stale = staleZadaniaForSelectedDate.find(function(s) { return s.id == staleId; });
             if (!stale) return;
 
             $.post(ajaxurl, {
