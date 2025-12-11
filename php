@@ -240,7 +240,121 @@ add_action('admin_menu', function() {
 });
 
 // =============================================
-// FRONTEND WIDGET SHORTCODE
+// PUBLIC API ENDPOINTS (read-only, no nonce required)
+// =============================================
+
+// Public: Get all years (roki)
+add_action('wp_ajax_zadaniomat_public_get_roki', 'zadaniomat_public_get_roki');
+add_action('wp_ajax_nopriv_zadaniomat_public_get_roki', 'zadaniomat_public_get_roki');
+function zadaniomat_public_get_roki() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_roki';
+    $roki = $wpdb->get_results("SELECT * FROM $table ORDER BY data_start DESC");
+    wp_send_json_success(['roki' => $roki]);
+}
+
+// Public: Get periods for a year
+add_action('wp_ajax_zadaniomat_public_get_okresy', 'zadaniomat_public_get_okresy');
+add_action('wp_ajax_nopriv_zadaniomat_public_get_okresy', 'zadaniomat_public_get_okresy');
+function zadaniomat_public_get_okresy() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_okresy';
+    $rok_id = intval($_POST['rok_id']);
+    $okresy = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE rok_id = %d ORDER BY data_start ASC", $rok_id
+    ));
+    wp_send_json_success(['okresy' => $okresy]);
+}
+
+// Public: Get year goals
+add_action('wp_ajax_zadaniomat_public_get_cele_rok', 'zadaniomat_public_get_cele_rok');
+add_action('wp_ajax_nopriv_zadaniomat_public_get_cele_rok', 'zadaniomat_public_get_cele_rok');
+function zadaniomat_public_get_cele_rok() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_cele_rok';
+    $rok_id = intval($_POST['rok_id']);
+    $cele = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE rok_id = %d", $rok_id));
+
+    $cele_by_kat = [];
+    foreach ($cele as $c) {
+        $cele_by_kat[$c->kategoria] = $c;
+    }
+
+    wp_send_json_success([
+        'cele' => $cele_by_kat,
+        'kategorie' => ZADANIOMAT_KATEGORIE
+    ]);
+}
+
+// Public: Get period goals
+add_action('wp_ajax_zadaniomat_public_get_cele_okres', 'zadaniomat_public_get_cele_okres');
+add_action('wp_ajax_nopriv_zadaniomat_public_get_cele_okres', 'zadaniomat_public_get_cele_okres');
+function zadaniomat_public_get_cele_okres() {
+    global $wpdb;
+    $table_cele = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
+    $okres_id = intval($_POST['okres_id']);
+
+    $okres = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_okresy WHERE id = %d", $okres_id));
+    $cele = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_cele WHERE okres_id = %d", $okres_id));
+
+    $cele_by_kat = [];
+    foreach ($cele as $c) {
+        $cele_by_kat[$c->kategoria] = $c;
+    }
+
+    wp_send_json_success([
+        'okres' => $okres,
+        'cele' => $cele_by_kat,
+        'kategorie' => ZADANIOMAT_KATEGORIE
+    ]);
+}
+
+// Public: Get tasks for date range
+add_action('wp_ajax_zadaniomat_public_get_tasks', 'zadaniomat_public_get_tasks');
+add_action('wp_ajax_nopriv_zadaniomat_public_get_tasks', 'zadaniomat_public_get_tasks');
+function zadaniomat_public_get_tasks() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+    $start = sanitize_text_field($_POST['start']);
+    $end = sanitize_text_field($_POST['end']);
+
+    $tasks = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE dzien BETWEEN %s AND %s ORDER BY dzien ASC, pozycja_harmonogram ASC, id ASC",
+        $start, $end
+    ));
+
+    foreach ($tasks as &$task) {
+        $task->kategoria_label = zadaniomat_get_kategoria_label($task->kategoria);
+    }
+
+    wp_send_json_success(['tasks' => $tasks]);
+}
+
+// Public: Get task stats for period
+add_action('wp_ajax_zadaniomat_public_get_stats', 'zadaniomat_public_get_stats');
+add_action('wp_ajax_nopriv_zadaniomat_public_get_stats', 'zadaniomat_public_get_stats');
+function zadaniomat_public_get_stats() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+    $start = sanitize_text_field($_POST['start']);
+    $end = sanitize_text_field($_POST['end']);
+
+    $stats = $wpdb->get_row($wpdb->prepare(
+        "SELECT
+            COUNT(*) as total,
+            SUM(CASE WHEN status >= 1 THEN 1 ELSE 0 END) as completed,
+            SUM(COALESCE(planowany_czas, 0)) as planned_time,
+            SUM(COALESCE(faktyczny_czas, 0)) as actual_time
+        FROM $table WHERE dzien BETWEEN %s AND %s",
+        $start, $end
+    ));
+
+    wp_send_json_success(['stats' => $stats]);
+}
+
+// =============================================
+// FRONTEND WIDGET SHORTCODE (simple - today's tasks)
 // =============================================
 add_shortcode('zadaniomat_widget', function($atts) {
     // Tylko dla zalogowanych użytkowników
@@ -513,6 +627,872 @@ add_shortcode('zadaniomat_widget', function($atts) {
         console.error('Zadaniomat widget error:', error);
         document.getElementById('zadaniomat-content').innerHTML = '<div class="error">Wystąpił błąd podczas ładowania zadań.</div>';
       });
+    })();
+    </script>
+    <?php
+    return ob_get_clean();
+});
+
+// =============================================
+// FRONTEND DASHBOARD SHORTCODE (full public dashboard)
+// =============================================
+add_shortcode('zadaniomat_dashboard', function($atts) {
+    $ajaxurl = admin_url('admin-ajax.php');
+
+    ob_start();
+    ?>
+    <div id="zadaniomat-dashboard">
+      <style>
+        :root {
+          --zd-bg: #0f172a;
+          --zd-card: #1e293b;
+          --zd-card-hover: #334155;
+          --zd-border: #334155;
+          --zd-text: #f1f5f9;
+          --zd-text-muted: #94a3b8;
+          --zd-primary: #3b82f6;
+          --zd-primary-hover: #2563eb;
+          --zd-success: #22c55e;
+          --zd-warning: #f59e0b;
+          --zd-danger: #ef4444;
+          --zd-purple: #a855f7;
+        }
+
+        #zadaniomat-dashboard {
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          background: var(--zd-bg);
+          color: var(--zd-text);
+          padding: 30px;
+          border-radius: 16px;
+          min-height: 600px;
+        }
+
+        #zadaniomat-dashboard * {
+          box-sizing: border-box;
+        }
+
+        .zd-header {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 30px;
+          gap: 20px;
+        }
+
+        .zd-title {
+          font-size: 1.8em;
+          font-weight: 700;
+          margin: 0;
+          background: linear-gradient(135deg, var(--zd-primary), var(--zd-purple));
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
+
+        .zd-filters {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          align-items: center;
+        }
+
+        .zd-select, .zd-input {
+          background: var(--zd-card);
+          border: 1px solid var(--zd-border);
+          color: var(--zd-text);
+          padding: 10px 16px;
+          border-radius: 8px;
+          font-size: 0.95em;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .zd-select:hover, .zd-input:hover {
+          border-color: var(--zd-primary);
+        }
+
+        .zd-select:focus, .zd-input:focus {
+          outline: none;
+          border-color: var(--zd-primary);
+          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+
+        .zd-btn {
+          background: var(--zd-primary);
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 8px;
+          font-size: 0.95em;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .zd-btn:hover {
+          background: var(--zd-primary-hover);
+          transform: translateY(-1px);
+        }
+
+        .zd-btn-outline {
+          background: transparent;
+          border: 1px solid var(--zd-border);
+          color: var(--zd-text);
+        }
+
+        .zd-btn-outline:hover {
+          background: var(--zd-card);
+          border-color: var(--zd-primary);
+        }
+
+        .zd-stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 20px;
+          margin-bottom: 30px;
+        }
+
+        .zd-stat-card {
+          background: var(--zd-card);
+          border-radius: 12px;
+          padding: 20px;
+          border: 1px solid var(--zd-border);
+        }
+
+        .zd-stat-label {
+          font-size: 0.85em;
+          color: var(--zd-text-muted);
+          margin-bottom: 8px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .zd-stat-value {
+          font-size: 2em;
+          font-weight: 700;
+        }
+
+        .zd-stat-value.success { color: var(--zd-success); }
+        .zd-stat-value.warning { color: var(--zd-warning); }
+        .zd-stat-value.primary { color: var(--zd-primary); }
+        .zd-stat-value.purple { color: var(--zd-purple); }
+
+        .zd-progress-bar {
+          height: 8px;
+          background: var(--zd-border);
+          border-radius: 4px;
+          margin-top: 12px;
+          overflow: hidden;
+        }
+
+        .zd-progress-fill {
+          height: 100%;
+          background: linear-gradient(90deg, var(--zd-primary), var(--zd-success));
+          border-radius: 4px;
+          transition: width 0.5s ease;
+        }
+
+        .zd-section {
+          background: var(--zd-card);
+          border-radius: 12px;
+          padding: 24px;
+          margin-bottom: 24px;
+          border: 1px solid var(--zd-border);
+        }
+
+        .zd-section-title {
+          font-size: 1.2em;
+          font-weight: 600;
+          margin: 0 0 20px 0;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .zd-section-title span {
+          font-size: 1.2em;
+        }
+
+        .zd-goals-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          gap: 16px;
+        }
+
+        .zd-goal-card {
+          background: var(--zd-bg);
+          border-radius: 8px;
+          padding: 16px;
+          border-left: 4px solid var(--zd-primary);
+        }
+
+        .zd-goal-category {
+          font-size: 0.8em;
+          color: var(--zd-primary);
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin-bottom: 8px;
+        }
+
+        .zd-goal-text {
+          color: var(--zd-text);
+          line-height: 1.5;
+          white-space: pre-wrap;
+        }
+
+        .zd-goal-status {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 12px;
+          font-size: 0.85em;
+        }
+
+        .zd-goal-status.achieved {
+          color: var(--zd-success);
+        }
+
+        .zd-goal-status.not-achieved {
+          color: var(--zd-danger);
+        }
+
+        .zd-tasks-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+
+        .zd-task-day {
+          margin-bottom: 24px;
+        }
+
+        .zd-task-day-header {
+          font-size: 0.9em;
+          font-weight: 600;
+          color: var(--zd-text-muted);
+          padding-bottom: 8px;
+          margin-bottom: 12px;
+          border-bottom: 1px solid var(--zd-border);
+        }
+
+        .zd-task-item {
+          display: flex;
+          align-items: flex-start;
+          padding: 14px 16px;
+          margin-bottom: 8px;
+          background: var(--zd-bg);
+          border-radius: 8px;
+          transition: all 0.2s;
+          gap: 14px;
+        }
+
+        .zd-task-item:hover {
+          background: var(--zd-card-hover);
+        }
+
+        .zd-task-item.completed {
+          opacity: 0.7;
+        }
+
+        .zd-task-item.completed .zd-task-name {
+          text-decoration: line-through;
+          color: var(--zd-text-muted);
+        }
+
+        .zd-task-checkbox {
+          width: 22px;
+          height: 22px;
+          border-radius: 6px;
+          border: 2px solid var(--zd-border);
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin-top: 2px;
+        }
+
+        .zd-task-item.completed .zd-task-checkbox {
+          background: var(--zd-success);
+          border-color: var(--zd-success);
+        }
+
+        .zd-task-checkbox::after {
+          content: '';
+        }
+
+        .zd-task-item.completed .zd-task-checkbox::after {
+          content: '✓';
+          color: white;
+          font-size: 14px;
+          font-weight: bold;
+        }
+
+        .zd-task-content {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .zd-task-name {
+          font-size: 1em;
+          color: var(--zd-text);
+          margin-bottom: 6px;
+          word-break: break-word;
+        }
+
+        .zd-task-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          font-size: 0.8em;
+          color: var(--zd-text-muted);
+        }
+
+        .zd-task-category {
+          background: rgba(59, 130, 246, 0.2);
+          color: var(--zd-primary);
+          padding: 3px 10px;
+          border-radius: 4px;
+          font-weight: 500;
+        }
+
+        .zd-task-time {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .zd-task-time.actual {
+          color: var(--zd-success);
+        }
+
+        .zd-task-time-range {
+          color: var(--zd-purple);
+          font-weight: 500;
+        }
+
+        .zd-empty {
+          text-align: center;
+          padding: 60px 20px;
+          color: var(--zd-text-muted);
+        }
+
+        .zd-empty-icon {
+          font-size: 4em;
+          margin-bottom: 16px;
+          opacity: 0.5;
+        }
+
+        .zd-loading {
+          text-align: center;
+          padding: 60px 20px;
+          color: var(--zd-text-muted);
+        }
+
+        .zd-loading-spinner {
+          width: 40px;
+          height: 40px;
+          border: 3px solid var(--zd-border);
+          border-top-color: var(--zd-primary);
+          border-radius: 50%;
+          animation: zd-spin 1s linear infinite;
+          margin: 0 auto 16px;
+        }
+
+        @keyframes zd-spin {
+          to { transform: rotate(360deg); }
+        }
+
+        .zd-tabs {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+        }
+
+        .zd-tab {
+          padding: 10px 20px;
+          background: transparent;
+          border: 1px solid var(--zd-border);
+          color: var(--zd-text-muted);
+          border-radius: 8px;
+          cursor: pointer;
+          transition: all 0.2s;
+          font-size: 0.9em;
+        }
+
+        .zd-tab:hover {
+          border-color: var(--zd-primary);
+          color: var(--zd-text);
+        }
+
+        .zd-tab.active {
+          background: var(--zd-primary);
+          border-color: var(--zd-primary);
+          color: white;
+        }
+
+        .zd-date-range {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+
+        .zd-date-range label {
+          color: var(--zd-text-muted);
+          font-size: 0.9em;
+        }
+
+        @media (max-width: 768px) {
+          #zadaniomat-dashboard {
+            padding: 16px;
+          }
+
+          .zd-header {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+
+          .zd-filters {
+            width: 100%;
+          }
+
+          .zd-select, .zd-input {
+            flex: 1;
+            min-width: 120px;
+          }
+        }
+      </style>
+
+      <div class="zd-header">
+        <h1 class="zd-title">Zadaniomat Dashboard</h1>
+        <div class="zd-filters">
+          <select id="zd-rok-select" class="zd-select">
+            <option value="">Wybierz rok...</option>
+          </select>
+          <select id="zd-okres-select" class="zd-select">
+            <option value="">Wszystkie okresy</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="zd-stats-grid" id="zd-stats">
+        <div class="zd-stat-card">
+          <div class="zd-stat-label">Zadania łącznie</div>
+          <div class="zd-stat-value primary" id="zd-stat-total">-</div>
+        </div>
+        <div class="zd-stat-card">
+          <div class="zd-stat-label">Ukończone</div>
+          <div class="zd-stat-value success" id="zd-stat-completed">-</div>
+          <div class="zd-progress-bar">
+            <div class="zd-progress-fill" id="zd-progress" style="width: 0%"></div>
+          </div>
+        </div>
+        <div class="zd-stat-card">
+          <div class="zd-stat-label">Czas planowany</div>
+          <div class="zd-stat-value warning" id="zd-stat-planned">-</div>
+        </div>
+        <div class="zd-stat-card">
+          <div class="zd-stat-label">Czas faktyczny</div>
+          <div class="zd-stat-value purple" id="zd-stat-actual">-</div>
+        </div>
+      </div>
+
+      <div class="zd-section" id="zd-cele-rok-section" style="display:none;">
+        <h2 class="zd-section-title"><span>🎯</span> Cele roczne (90 dni)</h2>
+        <div class="zd-goals-grid" id="zd-cele-rok"></div>
+      </div>
+
+      <div class="zd-section" id="zd-cele-okres-section" style="display:none;">
+        <h2 class="zd-section-title"><span>📌</span> Cele okresu</h2>
+        <div class="zd-goals-grid" id="zd-cele-okres"></div>
+      </div>
+
+      <div class="zd-section">
+        <h2 class="zd-section-title"><span>📋</span> Zadania</h2>
+
+        <div class="zd-tabs" id="zd-date-tabs">
+          <button class="zd-tab active" data-range="today">Dziś</button>
+          <button class="zd-tab" data-range="week">Ten tydzień</button>
+          <button class="zd-tab" data-range="period">Cały okres</button>
+          <button class="zd-tab" data-range="custom">Własny zakres</button>
+        </div>
+
+        <div class="zd-date-range" id="zd-custom-dates" style="display:none; margin-bottom: 20px;">
+          <label>Od:</label>
+          <input type="date" id="zd-date-start" class="zd-input">
+          <label>Do:</label>
+          <input type="date" id="zd-date-end" class="zd-input">
+          <button class="zd-btn" id="zd-apply-dates">Zastosuj</button>
+        </div>
+
+        <div id="zd-tasks-container">
+          <div class="zd-loading">
+            <div class="zd-loading-spinner"></div>
+            <p>Ładowanie zadań...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    (function() {
+      var ajaxurl = '<?php echo esc_js($ajaxurl); ?>';
+
+      var state = {
+        roki: [],
+        okresy: [],
+        selectedRok: null,
+        selectedOkres: null,
+        currentDateRange: 'today',
+        customStart: null,
+        customEnd: null
+      };
+
+      // Helpers
+      function formatTime(minutes) {
+        if (!minutes || minutes == 0) return '0';
+        var h = Math.floor(minutes / 60);
+        var m = minutes % 60;
+        if (h > 0 && m > 0) return h + 'h ' + m + 'min';
+        if (h > 0) return h + 'h';
+        return m + 'min';
+      }
+
+      function formatDatePL(dateStr) {
+        var days = ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'];
+        var months = ['stycznia', 'lutego', 'marca', 'kwietnia', 'maja', 'czerwca',
+                      'lipca', 'sierpnia', 'września', 'października', 'listopada', 'grudnia'];
+        var d = new Date(dateStr);
+        return days[d.getDay()] + ', ' + d.getDate() + ' ' + months[d.getMonth()];
+      }
+
+      function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      function post(action, data) {
+        var formData = new FormData();
+        formData.append('action', action);
+        for (var key in data) {
+          formData.append(key, data[key]);
+        }
+        return fetch(ajaxurl, {
+          method: 'POST',
+          body: formData,
+          credentials: 'same-origin'
+        }).then(function(r) { return r.json(); });
+      }
+
+      function getDateRange() {
+        var today = new Date();
+        var todayStr = today.toISOString().split('T')[0];
+        var start, end;
+
+        switch (state.currentDateRange) {
+          case 'today':
+            start = end = todayStr;
+            break;
+          case 'week':
+            var dayOfWeek = today.getDay();
+            var mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+            var monday = new Date(today);
+            monday.setDate(today.getDate() + mondayOffset);
+            var sunday = new Date(monday);
+            sunday.setDate(monday.getDate() + 6);
+            start = monday.toISOString().split('T')[0];
+            end = sunday.toISOString().split('T')[0];
+            break;
+          case 'period':
+            if (state.selectedOkres) {
+              var okres = state.okresy.find(function(o) { return o.id == state.selectedOkres; });
+              if (okres) {
+                start = okres.data_start;
+                end = okres.data_koniec;
+              }
+            } else if (state.selectedRok) {
+              var rok = state.roki.find(function(r) { return r.id == state.selectedRok; });
+              if (rok) {
+                start = rok.data_start;
+                end = rok.data_koniec;
+              }
+            }
+            if (!start) {
+              start = end = todayStr;
+            }
+            break;
+          case 'custom':
+            start = state.customStart || todayStr;
+            end = state.customEnd || todayStr;
+            break;
+          default:
+            start = end = todayStr;
+        }
+
+        return { start: start, end: end };
+      }
+
+      // Loaders
+      function loadRoki() {
+        post('zadaniomat_public_get_roki', {}).then(function(res) {
+          if (res.success) {
+            state.roki = res.data.roki || [];
+            var select = document.getElementById('zd-rok-select');
+            select.innerHTML = '<option value="">Wybierz rok...</option>';
+            state.roki.forEach(function(rok) {
+              var opt = document.createElement('option');
+              opt.value = rok.id;
+              opt.textContent = rok.nazwa + ' (' + rok.data_start + ' - ' + rok.data_koniec + ')';
+              select.appendChild(opt);
+            });
+
+            // Auto-select current rok
+            var today = new Date().toISOString().split('T')[0];
+            var currentRok = state.roki.find(function(r) {
+              return r.data_start <= today && r.data_koniec >= today;
+            });
+            if (currentRok) {
+              select.value = currentRok.id;
+              state.selectedRok = currentRok.id;
+              loadOkresy(currentRok.id);
+              loadCeleRok(currentRok.id);
+            }
+          }
+        });
+      }
+
+      function loadOkresy(rokId) {
+        post('zadaniomat_public_get_okresy', { rok_id: rokId }).then(function(res) {
+          if (res.success) {
+            state.okresy = res.data.okresy || [];
+            var select = document.getElementById('zd-okres-select');
+            select.innerHTML = '<option value="">Wszystkie okresy</option>';
+            state.okresy.forEach(function(okres) {
+              var opt = document.createElement('option');
+              opt.value = okres.id;
+              opt.textContent = okres.nazwa + ' (' + okres.data_start + ' - ' + okres.data_koniec + ')';
+              select.appendChild(opt);
+            });
+
+            // Auto-select current okres
+            var today = new Date().toISOString().split('T')[0];
+            var currentOkres = state.okresy.find(function(o) {
+              return o.data_start <= today && o.data_koniec >= today;
+            });
+            if (currentOkres) {
+              select.value = currentOkres.id;
+              state.selectedOkres = currentOkres.id;
+              loadCeleOkres(currentOkres.id);
+            }
+
+            loadTasks();
+            loadStats();
+          }
+        });
+      }
+
+      function loadCeleRok(rokId) {
+        post('zadaniomat_public_get_cele_rok', { rok_id: rokId }).then(function(res) {
+          if (res.success) {
+            var cele = res.data.cele || {};
+            var kategorie = res.data.kategorie || {};
+            var container = document.getElementById('zd-cele-rok');
+            var section = document.getElementById('zd-cele-rok-section');
+
+            var html = '';
+            var hasGoals = false;
+            for (var kat in kategorie) {
+              if (cele[kat] && cele[kat].cel) {
+                hasGoals = true;
+                html += '<div class="zd-goal-card">';
+                html += '<div class="zd-goal-category">' + escapeHtml(kategorie[kat]) + '</div>';
+                html += '<div class="zd-goal-text">' + escapeHtml(cele[kat].cel) + '</div>';
+                html += '</div>';
+              }
+            }
+
+            container.innerHTML = html;
+            section.style.display = hasGoals ? 'block' : 'none';
+          }
+        });
+      }
+
+      function loadCeleOkres(okresId) {
+        post('zadaniomat_public_get_cele_okres', { okres_id: okresId }).then(function(res) {
+          if (res.success) {
+            var cele = res.data.cele || {};
+            var kategorie = res.data.kategorie || {};
+            var container = document.getElementById('zd-cele-okres');
+            var section = document.getElementById('zd-cele-okres-section');
+
+            var html = '';
+            var hasGoals = false;
+            for (var kat in kategorie) {
+              if (cele[kat] && cele[kat].cel) {
+                hasGoals = true;
+                var status = '';
+                if (cele[kat].osiagniety === '1' || cele[kat].osiagniety === 1) {
+                  status = '<div class="zd-goal-status achieved">✓ Osiągnięty</div>';
+                } else if (cele[kat].osiagniety === '0' || cele[kat].osiagniety === 0) {
+                  status = '<div class="zd-goal-status not-achieved">✗ Nie osiągnięty</div>';
+                }
+
+                html += '<div class="zd-goal-card">';
+                html += '<div class="zd-goal-category">' + escapeHtml(kategorie[kat]) + '</div>';
+                html += '<div class="zd-goal-text">' + escapeHtml(cele[kat].cel) + '</div>';
+                if (cele[kat].status !== null && cele[kat].status !== '') {
+                  html += '<div class="zd-progress-bar" style="margin-top:10px"><div class="zd-progress-fill" style="width:' + (parseFloat(cele[kat].status) * 100) + '%"></div></div>';
+                }
+                html += status;
+                if (cele[kat].uwagi) {
+                  html += '<div style="margin-top:8px;font-size:0.85em;color:var(--zd-text-muted);">' + escapeHtml(cele[kat].uwagi) + '</div>';
+                }
+                html += '</div>';
+              }
+            }
+
+            container.innerHTML = html;
+            section.style.display = hasGoals ? 'block' : 'none';
+          }
+        });
+      }
+
+      function loadStats() {
+        var range = getDateRange();
+        post('zadaniomat_public_get_stats', { start: range.start, end: range.end }).then(function(res) {
+          if (res.success) {
+            var stats = res.data.stats || {};
+            document.getElementById('zd-stat-total').textContent = stats.total || 0;
+            document.getElementById('zd-stat-completed').textContent = stats.completed || 0;
+            document.getElementById('zd-stat-planned').textContent = formatTime(stats.planned_time);
+            document.getElementById('zd-stat-actual').textContent = formatTime(stats.actual_time);
+
+            var pct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+            document.getElementById('zd-progress').style.width = pct + '%';
+          }
+        });
+      }
+
+      function loadTasks() {
+        var range = getDateRange();
+        var container = document.getElementById('zd-tasks-container');
+        container.innerHTML = '<div class="zd-loading"><div class="zd-loading-spinner"></div><p>Ładowanie zadań...</p></div>';
+
+        post('zadaniomat_public_get_tasks', { start: range.start, end: range.end }).then(function(res) {
+          if (res.success) {
+            var tasks = res.data.tasks || [];
+
+            if (tasks.length === 0) {
+              container.innerHTML = '<div class="zd-empty"><div class="zd-empty-icon">📭</div><p>Brak zadań w wybranym zakresie</p></div>';
+              return;
+            }
+
+            // Group by day
+            var byDay = {};
+            tasks.forEach(function(task) {
+              if (!byDay[task.dzien]) byDay[task.dzien] = [];
+              byDay[task.dzien].push(task);
+            });
+
+            var html = '';
+            var days = Object.keys(byDay).sort();
+            days.forEach(function(day) {
+              html += '<div class="zd-task-day">';
+              html += '<div class="zd-task-day-header">' + formatDatePL(day) + '</div>';
+              html += '<ul class="zd-tasks-list">';
+
+              byDay[day].forEach(function(task) {
+                var isCompleted = parseFloat(task.status) >= 1;
+                var timeRange = task.godzina_start && task.godzina_koniec
+                  ? task.godzina_start.slice(0,5) + ' - ' + task.godzina_koniec.slice(0,5)
+                  : (task.godzina_start ? 'od ' + task.godzina_start.slice(0,5) : '');
+
+                html += '<li class="zd-task-item ' + (isCompleted ? 'completed' : '') + '">';
+                html += '<div class="zd-task-checkbox"></div>';
+                html += '<div class="zd-task-content">';
+                html += '<div class="zd-task-name">' + escapeHtml(task.zadanie) + '</div>';
+                html += '<div class="zd-task-meta">';
+                if (task.kategoria_label) {
+                  html += '<span class="zd-task-category">' + escapeHtml(task.kategoria_label) + '</span>';
+                }
+                if (task.planowany_czas) {
+                  html += '<span class="zd-task-time">⏱ ' + formatTime(task.planowany_czas) + '</span>';
+                }
+                if (task.faktyczny_czas) {
+                  html += '<span class="zd-task-time actual">✓ ' + formatTime(task.faktyczny_czas) + '</span>';
+                }
+                if (timeRange) {
+                  html += '<span class="zd-task-time-range">🕐 ' + timeRange + '</span>';
+                }
+                html += '</div></div></li>';
+              });
+
+              html += '</ul></div>';
+            });
+
+            container.innerHTML = html;
+          }
+        });
+      }
+
+      // Event handlers
+      document.getElementById('zd-rok-select').addEventListener('change', function() {
+        state.selectedRok = this.value;
+        state.selectedOkres = null;
+        document.getElementById('zd-okres-select').value = '';
+        document.getElementById('zd-cele-okres-section').style.display = 'none';
+
+        if (state.selectedRok) {
+          loadOkresy(state.selectedRok);
+          loadCeleRok(state.selectedRok);
+        } else {
+          document.getElementById('zd-cele-rok-section').style.display = 'none';
+          loadTasks();
+          loadStats();
+        }
+      });
+
+      document.getElementById('zd-okres-select').addEventListener('change', function() {
+        state.selectedOkres = this.value;
+        if (state.selectedOkres) {
+          loadCeleOkres(state.selectedOkres);
+        } else {
+          document.getElementById('zd-cele-okres-section').style.display = 'none';
+        }
+        loadTasks();
+        loadStats();
+      });
+
+      document.querySelectorAll('.zd-tab').forEach(function(tab) {
+        tab.addEventListener('click', function() {
+          document.querySelectorAll('.zd-tab').forEach(function(t) { t.classList.remove('active'); });
+          this.classList.add('active');
+          state.currentDateRange = this.dataset.range;
+
+          var customDates = document.getElementById('zd-custom-dates');
+          customDates.style.display = state.currentDateRange === 'custom' ? 'flex' : 'none';
+
+          if (state.currentDateRange !== 'custom') {
+            loadTasks();
+            loadStats();
+          }
+        });
+      });
+
+      document.getElementById('zd-apply-dates').addEventListener('click', function() {
+        state.customStart = document.getElementById('zd-date-start').value;
+        state.customEnd = document.getElementById('zd-date-end').value;
+        loadTasks();
+        loadStats();
+      });
+
+      // Init
+      loadRoki();
     })();
     </script>
     <?php
