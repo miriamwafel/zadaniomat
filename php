@@ -240,6 +240,286 @@ add_action('admin_menu', function() {
 });
 
 // =============================================
+// FRONTEND WIDGET SHORTCODE
+// =============================================
+add_shortcode('zadaniomat_widget', function($atts) {
+    // Tylko dla zalogowanych użytkowników
+    if (!is_user_logged_in() || !current_user_can('manage_options')) {
+        return '<div style="padding:20px;background:#fdf2f2;border-radius:8px;color:#c0392b;text-align:center;">Musisz być zalogowany jako administrator.</div>';
+    }
+
+    $nonce = wp_create_nonce('zadaniomat_ajax');
+    $ajaxurl = admin_url('admin-ajax.php');
+
+    ob_start();
+    ?>
+    <div id="zadaniomat-widget">
+      <style>
+        #zadaniomat-widget {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 20px;
+          background: #ffffff;
+          border-radius: 12px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        #zadaniomat-widget .widget-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 20px;
+          padding-bottom: 15px;
+          border-bottom: 2px solid #e0e0e0;
+        }
+        #zadaniomat-widget .widget-title {
+          font-size: 1.4em;
+          font-weight: 600;
+          color: #333;
+          margin: 0;
+        }
+        #zadaniomat-widget .widget-date {
+          font-size: 0.9em;
+          color: #666;
+          background: #f0f0f0;
+          padding: 5px 12px;
+          border-radius: 20px;
+        }
+        #zadaniomat-widget .tasks-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+        #zadaniomat-widget .task-item {
+          display: flex;
+          align-items: flex-start;
+          padding: 12px 15px;
+          margin-bottom: 8px;
+          background: #f8f9fa;
+          border-radius: 8px;
+          border-left: 4px solid #3498db;
+          transition: background 0.2s;
+        }
+        #zadaniomat-widget .task-item:hover {
+          background: #eef2f5;
+        }
+        #zadaniomat-widget .task-item.completed {
+          border-left-color: #27ae60;
+          background: #f0fff4;
+        }
+        #zadaniomat-widget .task-item.completed .task-name {
+          text-decoration: line-through;
+          color: #888;
+        }
+        #zadaniomat-widget .task-checkbox {
+          width: 20px;
+          height: 20px;
+          margin-right: 12px;
+          flex-shrink: 0;
+          margin-top: 2px;
+        }
+        #zadaniomat-widget .task-content {
+          flex: 1;
+        }
+        #zadaniomat-widget .task-name {
+          font-size: 1em;
+          color: #333;
+          margin: 0 0 5px 0;
+        }
+        #zadaniomat-widget .task-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          font-size: 0.8em;
+          color: #666;
+        }
+        #zadaniomat-widget .task-category {
+          background: #e3f2fd;
+          color: #1976d2;
+          padding: 2px 8px;
+          border-radius: 4px;
+        }
+        #zadaniomat-widget .task-time {
+          color: #888;
+        }
+        #zadaniomat-widget .task-time-range {
+          color: #9c27b0;
+          font-weight: 500;
+        }
+        #zadaniomat-widget .no-tasks {
+          text-align: center;
+          padding: 40px 20px;
+          color: #888;
+        }
+        #zadaniomat-widget .no-tasks-icon {
+          font-size: 3em;
+          margin-bottom: 10px;
+        }
+        #zadaniomat-widget .loading {
+          text-align: center;
+          padding: 40px 20px;
+          color: #666;
+        }
+        #zadaniomat-widget .error {
+          text-align: center;
+          padding: 20px;
+          color: #c0392b;
+          background: #fdf2f2;
+          border-radius: 8px;
+        }
+        #zadaniomat-widget .summary {
+          margin-top: 15px;
+          padding-top: 15px;
+          border-top: 1px solid #e0e0e0;
+          display: flex;
+          justify-content: space-around;
+          text-align: center;
+        }
+        #zadaniomat-widget .summary-item {
+          padding: 10px;
+        }
+        #zadaniomat-widget .summary-number {
+          font-size: 1.5em;
+          font-weight: 600;
+          color: #333;
+        }
+        #zadaniomat-widget .summary-label {
+          font-size: 0.8em;
+          color: #888;
+        }
+        #zadaniomat-widget .summary-item.completed .summary-number {
+          color: #27ae60;
+        }
+        #zadaniomat-widget .summary-item.pending .summary-number {
+          color: #e67e22;
+        }
+      </style>
+
+      <div class="widget-header">
+        <h3 class="widget-title">Zadania na dziś</h3>
+        <span class="widget-date" id="zadaniomat-current-date"></span>
+      </div>
+
+      <div id="zadaniomat-content">
+        <div class="loading">Ładowanie zadań...</div>
+      </div>
+    </div>
+
+    <script>
+    (function() {
+      var ajaxurl = '<?php echo esc_js($ajaxurl); ?>';
+      var zadaniomatNonce = '<?php echo esc_js($nonce); ?>';
+
+      function formatDate(date) {
+        var days = ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'];
+        var months = ['stycznia', 'lutego', 'marca', 'kwietnia', 'maja', 'czerwca',
+                      'lipca', 'sierpnia', 'września', 'października', 'listopada', 'grudnia'];
+        return days[date.getDay()] + ', ' + date.getDate() + ' ' + months[date.getMonth()];
+      }
+
+      function formatTime(minutes) {
+        if (!minutes) return '';
+        var h = Math.floor(minutes / 60);
+        var m = minutes % 60;
+        if (h > 0 && m > 0) return h + 'h ' + m + 'min';
+        if (h > 0) return h + 'h';
+        return m + 'min';
+      }
+
+      function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      var today = new Date();
+      var todayStr = today.toISOString().split('T')[0];
+
+      document.getElementById('zadaniomat-current-date').textContent = formatDate(today);
+
+      var formData = new FormData();
+      formData.append('action', 'zadaniomat_get_tasks');
+      formData.append('nonce', zadaniomatNonce);
+      formData.append('start', todayStr);
+      formData.append('end', todayStr);
+
+      fetch(ajaxurl, {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin'
+      })
+      .then(function(response) { return response.json(); })
+      .then(function(data) {
+        var container = document.getElementById('zadaniomat-content');
+
+        if (!data.success) {
+          container.innerHTML = '<div class="error">Nie udało się pobrać zadań.</div>';
+          return;
+        }
+
+        var tasks = data.data.tasks || [];
+
+        if (tasks.length === 0) {
+          container.innerHTML = '<div class="no-tasks"><div class="no-tasks-icon">✓</div><p>Brak zadań na dziś</p></div>';
+          return;
+        }
+
+        tasks.sort(function(a, b) {
+          if (a.pozycja_harmonogram && b.pozycja_harmonogram) {
+            return a.pozycja_harmonogram - b.pozycja_harmonogram;
+          }
+          if (a.pozycja_harmonogram) return -1;
+          if (b.pozycja_harmonogram) return 1;
+          if (a.godzina_start && b.godzina_start) {
+            return a.godzina_start.localeCompare(b.godzina_start);
+          }
+          return 0;
+        });
+
+        var completed = tasks.filter(function(t) { return parseFloat(t.status) >= 1; }).length;
+        var pending = tasks.length - completed;
+        var totalPlannedTime = tasks.reduce(function(sum, t) { return sum + (parseInt(t.planowany_czas) || 0); }, 0);
+
+        var html = '<ul class="tasks-list">';
+
+        tasks.forEach(function(task) {
+          var isCompleted = parseFloat(task.status) >= 1;
+          var timeRange = task.godzina_start && task.godzina_koniec
+            ? task.godzina_start.slice(0,5) + ' - ' + task.godzina_koniec.slice(0,5)
+            : (task.godzina_start ? 'od ' + task.godzina_start.slice(0,5) : '');
+
+          html += '<li class="task-item ' + (isCompleted ? 'completed' : '') + '">';
+          html += '<input type="checkbox" class="task-checkbox" ' + (isCompleted ? 'checked' : '') + ' disabled>';
+          html += '<div class="task-content">';
+          html += '<p class="task-name">' + escapeHtml(task.zadanie) + '</p>';
+          html += '<div class="task-meta">';
+          if (task.kategoria_label) html += '<span class="task-category">' + escapeHtml(task.kategoria_label) + '</span>';
+          if (task.planowany_czas) html += '<span class="task-time">' + formatTime(task.planowany_czas) + '</span>';
+          if (timeRange) html += '<span class="task-time-range">' + timeRange + '</span>';
+          html += '</div></div></li>';
+        });
+
+        html += '</ul>';
+
+        html += '<div class="summary">';
+        html += '<div class="summary-item completed"><div class="summary-number">' + completed + '</div><div class="summary-label">ukończone</div></div>';
+        html += '<div class="summary-item pending"><div class="summary-number">' + pending + '</div><div class="summary-label">do zrobienia</div></div>';
+        html += '<div class="summary-item"><div class="summary-number">' + (formatTime(totalPlannedTime) || '0') + '</div><div class="summary-label">planowany czas</div></div>';
+        html += '</div>';
+
+        container.innerHTML = html;
+      })
+      .catch(function(error) {
+        console.error('Zadaniomat widget error:', error);
+        document.getElementById('zadaniomat-content').innerHTML = '<div class="error">Wystąpił błąd podczas ładowania zadań.</div>';
+      });
+    })();
+    </script>
+    <?php
+    return ob_get_clean();
+});
+
+// =============================================
 // ALL AJAX HANDLERS
 // =============================================
 
