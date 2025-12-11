@@ -1176,6 +1176,28 @@ add_shortcode('zadaniomat_dashboard', function($atts) {
         return div.innerHTML;
       }
 
+      // Mapowanie kategorii na skróty (dla prywatności)
+      var categoryShortcodes = {
+        'zapianowany': 'ZP',
+        'klejpan': 'KP',
+        'marka_langer': 'ML',
+        'marketing_construction': 'MC',
+        'fjo': 'FJO',
+        'obsluga_telefoniczna': 'OB'
+      };
+
+      function getCategoryCode(kategoria, label) {
+        // Najpierw sprawdź klucz kategorii
+        if (kategoria && categoryShortcodes[kategoria]) {
+          return categoryShortcodes[kategoria];
+        }
+        // Jeśli nie ma w mapowaniu, użyj pierwszych liter labela
+        if (label) {
+          return label.split(' ').map(function(w) { return w[0]; }).join('').toUpperCase().slice(0, 3);
+        }
+        return '?';
+      }
+
       function post(action, data) {
         var formData = new FormData();
         formData.append('action', action);
@@ -1310,7 +1332,7 @@ add_shortcode('zadaniomat_dashboard', function($atts) {
               if (cele[kat] && cele[kat].cel) {
                 hasGoals = true;
                 html += '<div class="zd-goal-card">';
-                html += '<div class="zd-goal-category">' + escapeHtml(kategorie[kat]) + '</div>';
+                html += '<div class="zd-goal-category">' + getCategoryCode(kat, kategorie[kat]) + '</div>';
                 html += '<div class="zd-goal-text">' + escapeHtml(cele[kat].cel) + '</div>';
                 html += '</div>';
               }
@@ -1343,7 +1365,7 @@ add_shortcode('zadaniomat_dashboard', function($atts) {
                 }
 
                 html += '<div class="zd-goal-card">';
-                html += '<div class="zd-goal-category">' + escapeHtml(kategorie[kat]) + '</div>';
+                html += '<div class="zd-goal-category">' + getCategoryCode(kat, kategorie[kat]) + '</div>';
                 html += '<div class="zd-goal-text">' + escapeHtml(cele[kat].cel) + '</div>';
                 if (cele[kat].status !== null && cele[kat].status !== '') {
                   html += '<div class="zd-progress-bar" style="margin-top:10px"><div class="zd-progress-fill" style="width:' + (parseFloat(cele[kat].status) * 100) + '%"></div></div>';
@@ -1417,8 +1439,8 @@ add_shortcode('zadaniomat_dashboard', function($atts) {
                 html += '<div class="zd-task-content">';
                 html += '<div class="zd-task-name">' + escapeHtml(task.zadanie) + '</div>';
                 html += '<div class="zd-task-meta">';
-                if (task.kategoria_label) {
-                  html += '<span class="zd-task-category">' + escapeHtml(task.kategoria_label) + '</span>';
+                if (task.kategoria) {
+                  html += '<span class="zd-task-category">' + getCategoryCode(task.kategoria, task.kategoria_label) + '</span>';
                 }
                 if (task.planowany_czas) {
                   html += '<span class="zd-task-time">⏱ ' + formatTime(task.planowany_czas) + '</span>';
