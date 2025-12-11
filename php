@@ -973,10 +973,52 @@ add_action('admin_head', function() {
             .cel-card.marketing_construction { border-left-color: #dc3545; }
             .cel-card.fjo { border-left-color: #6f42c1; }
             .cel-card.obsluga_telefoniczna { border-left-color: #e91e63; }
+            .cel-card.sprawy_organizacyjne { border-left-color: #6c757d; }
             .cel-card h4 { margin: 0 0 8px 0; font-size: 12px; color: #666; }
             .cel-card textarea { width: 100%; min-height: 50px; padding: 8px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; resize: vertical; }
+            .cel-card textarea.hidden { display: none; }
             .cel-card .status-row { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
             .cel-card .status-row select { padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid #ddd; }
+
+            .cel-rok-display {
+                font-size: 11px;
+                color: #666;
+                background: #e9ecef;
+                padding: 6px 8px;
+                border-radius: 4px;
+                margin-bottom: 8px;
+                line-height: 1.4;
+            }
+
+            .cel-okres-display {
+                font-size: 13px;
+                color: #333;
+                padding: 8px;
+                border: 1px dashed #ccc;
+                border-radius: 6px;
+                min-height: 40px;
+                cursor: pointer;
+                line-height: 1.5;
+                transition: background 0.2s;
+            }
+
+            .cel-okres-display:hover {
+                background: #fff;
+                border-color: #007bff;
+            }
+
+            .cel-okres-display.empty {
+                color: #999;
+                font-style: italic;
+            }
+
+            .cel-okres-display .placeholder {
+                color: #aaa;
+            }
+
+            .cel-okres-display.editing {
+                display: none;
+            }
             
             /* Formularz */
             .task-form { background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
@@ -1005,8 +1047,16 @@ add_action('admin_head', function() {
             .day-table tr:hover { background: #fafafa; }
             
             .status-done { background-color: #d4edda !important; }
-            .status-partial { background-color: #fff3cd !important; }
-            .status-none { background-color: #f8d7da !important; }
+            .status-done td strong { text-decoration: line-through; color: #666; }
+            .task-done-checkbox {
+                width: 20px;
+                height: 20px;
+                cursor: pointer;
+                accent-color: #28a745;
+            }
+            .status-cell {
+                text-align: center;
+            }
             
             .inline-input { width: 60px; padding: 6px; border: 1px solid #ddd; border-radius: 6px; text-align: center; font-size: 13px; }
             .inline-select { padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; }
@@ -1048,6 +1098,16 @@ add_action('admin_head', function() {
             /* Empty slots for today */
             .empty-slot { background: #f8f9fa; }
             .empty-slot:hover { background: #f0f0f0; }
+            .quick-add-row { background: #e8f4f8; border-top: 2px solid #007bff; }
+            .quick-add-row:hover { background: #dbeef5; }
+            .quick-add-kategoria {
+                width: 100%;
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 12px;
+                background: #fff;
+            }
             .slot-input { 
                 width: 100%; 
                 padding: 8px 10px; 
@@ -1317,6 +1377,141 @@ add_action('admin_head', function() {
                 font-size: 13px;
                 font-weight: 500;
             }
+            /* Nawigacja daty - wspólne style */
+            .date-nav {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                padding: 8px 15px;
+                border-radius: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            }
+            .date-nav .nav-btn {
+                background: #fff;
+                border: none;
+                width: 36px;
+                height: 36px;
+                border-radius: 50%;
+                cursor: pointer;
+                font-size: 16px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .date-nav .nav-btn:hover {
+                background: #667eea;
+                color: white;
+                transform: scale(1.1);
+            }
+            .date-nav .date-display {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                padding: 0 10px;
+                min-width: 120px;
+            }
+            .date-nav .date-day {
+                font-size: 11px;
+                color: #888;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            .date-nav .date-value {
+                font-size: 15px;
+                font-weight: 600;
+                color: #333;
+                cursor: pointer;
+            }
+            .date-nav .date-value:hover {
+                color: #667eea;
+            }
+            .date-nav input[type="date"] {
+                position: absolute;
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .date-nav .btn-today {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 20px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 600;
+                transition: all 0.2s;
+                box-shadow: 0 2px 8px rgba(102,126,234,0.3);
+            }
+            .date-nav .btn-today:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+            }
+            .harmonogram-date-nav, .tasks-date-nav {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                padding: 8px 15px;
+                border-radius: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            }
+            .harmonogram-date-nav button, .tasks-date-nav button {
+                background: #fff;
+                border: none;
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                cursor: pointer;
+                font-size: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            }
+            .harmonogram-date-nav button:hover, .tasks-date-nav button:hover {
+                background: #667eea;
+                color: white;
+                transform: scale(1.1);
+            }
+            .harmonogram-date-nav button.btn-today, .tasks-date-nav button.btn-today {
+                width: auto;
+                padding: 0 14px;
+                border-radius: 16px;
+                background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+                color: white;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            .harmonogram-date-nav button.btn-today:hover, .tasks-date-nav button.btn-today:hover {
+                background: linear-gradient(135deg, #218838 0%, #1aa179 100%);
+            }
+            .harmonogram-date-nav input[type="date"], .tasks-date-nav input[type="date"] {
+                padding: 6px 12px;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
+                background: #fff;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                cursor: pointer;
+            }
+            .harmonogram-date-nav input[type="date"]:hover, .tasks-date-nav input[type="date"]:hover {
+                box-shadow: 0 2px 8px rgba(102,126,234,0.3);
+            }
+            .tasks-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 15px;
+            }
+            .tasks-header h2 {
+                margin: 0;
+            }
             .harmonogram-actions {
                 display: flex;
                 gap: 10px;
@@ -1430,6 +1625,26 @@ add_action('admin_head', function() {
             .harmonogram-task.obsluga_telefoniczna { border-left-color: #e91e63; }
             .harmonogram-task.sprawy_organizacyjne { border-left-color: #607d8b; }
 
+            .harmonogram-task-done {
+                background: #d4edda !important;
+                border-color: #28a745 !important;
+            }
+            .harmonogram-task-done .harmonogram-task-name {
+                text-decoration: line-through;
+                color: #666;
+            }
+            .harmonogram-task-checkbox {
+                width: 18px;
+                height: 18px;
+                margin-right: 10px;
+                cursor: pointer;
+                accent-color: #28a745;
+            }
+            .done-badge {
+                color: #28a745;
+                font-weight: bold;
+            }
+
             .harmonogram-task-info {
                 flex: 1;
             }
@@ -1478,24 +1693,34 @@ add_action('admin_head', function() {
                 margin-right: 10px;
             }
             .time-input-small {
-                width: 85px;
-                padding: 4px 6px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 12px;
+                width: 80px;
+                padding: 6px 10px;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
                 cursor: pointer;
+                background: linear-gradient(135deg, #f0f4ff 0%, #e8ecf8 100%);
+                color: #4a5568;
+                transition: all 0.2s;
             }
             .time-input-small:hover {
-                border-color: #667eea;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                transform: scale(1.05);
             }
             .time-input-small:focus {
-                border-color: #667eea;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
                 outline: none;
-                box-shadow: 0 0 0 2px rgba(102,126,234,0.2);
+                box-shadow: 0 2px 10px rgba(102,126,234,0.4);
             }
             .end-time {
                 font-size: 12px;
                 color: #888;
+                background: #f0f0f0;
+                padding: 4px 8px;
+                border-radius: 6px;
             }
 
             /* Nieprzypisane zadania */
@@ -2008,11 +2233,22 @@ function zadaniomat_page_main() {
                                 <div class="cel-card <?php echo $key; ?>">
                                     <h4><?php echo $label; ?></h4>
                                     <?php if ($cel_rok): ?>
-                                        <div style="font-size: 11px; color: #888; margin-bottom: 6px; font-style: italic;">
-                                            Cel roczny: <?php echo esc_html(mb_substr($cel_rok, 0, 50)); ?><?php echo mb_strlen($cel_rok) > 50 ? '...' : ''; ?>
+                                        <div class="cel-rok-display">
+                                            <strong>Cel roczny:</strong> <?php echo esc_html($cel_rok); ?>
                                         </div>
                                     <?php endif; ?>
-                                    <textarea class="cel-okres-input"
+                                    <div class="cel-okres-display <?php echo empty($cel_data['cel']) ? 'empty' : ''; ?>"
+                                         data-okres="<?php echo $current_okres->id; ?>"
+                                         data-kategoria="<?php echo $key; ?>"
+                                         data-cel-id="<?php echo $cel_data['id'] ?: ''; ?>"
+                                         onclick="editCelOkres(this)">
+                                        <?php if ($cel_data['cel']): ?>
+                                            <?php echo nl2br(esc_html($cel_data['cel'])); ?>
+                                        <?php else: ?>
+                                            <span class="placeholder">Kliknij aby dodać cel na 2 tygodnie...</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <textarea class="cel-okres-input hidden"
                                               data-okres="<?php echo $current_okres->id; ?>"
                                               data-kategoria="<?php echo $key; ?>"
                                               data-cel-id="<?php echo $cel_data['id'] ?: ''; ?>"
@@ -2028,46 +2264,6 @@ function zadaniomat_page_main() {
                     </div>
                 <?php endif; ?>
 
-                <!-- Zadania na dziś -->
-                <div class="zadaniomat-card" id="today-tasks-section">
-                    <h2>📋 Zadania na dziś</h2>
-                    <div id="today-tasks-container"></div>
-                </div>
-
-                <!-- Harmonogram dnia - pokazuje się tylko dla dzisiaj -->
-                <div id="harmonogram-section" style="display: none;">
-                    <div class="harmonogram-container">
-                        <div class="harmonogram-header">
-                            <h2>
-                                📅 Harmonogram dnia
-                                <span class="start-time-badge" id="start-time-badge">Start: --:--</span>
-                            </h2>
-                            <div class="harmonogram-actions">
-                                <button class="btn-change-start" onclick="showStartDayModal()">⏰ Zmień start</button>
-                                <div class="view-toggle">
-                                    <button class="active" data-view="timeline" onclick="toggleHarmonogramView('timeline')">📊 Timeline</button>
-                                    <button data-view="list" onclick="toggleHarmonogramView('list')">📋 Lista</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Nieprzypisane zadania (do przeciągnięcia) -->
-                        <div class="unscheduled-tasks" id="unscheduled-tasks">
-                            <h3>📦 Zadania do przypisania <span id="unscheduled-count"></span></h3>
-                            <div class="unscheduled-tasks-list" id="unscheduled-list"></div>
-                        </div>
-
-                        <!-- Timeline godzinowy -->
-                        <div class="harmonogram-timeline" id="harmonogram-timeline"></div>
-                    </div>
-                </div>
-
-                <!-- Inne dni -->
-                <div class="zadaniomat-card">
-                    <h2>📋 Zadania - inne dni</h2>
-                    <div id="tasks-container"></div>
-                </div>
-
                 <!-- Formularz zadania -->
                 <div class="task-form">
                     <h3 id="form-title">➕ Dodaj zadanie</h3>
@@ -2076,7 +2272,7 @@ function zadaniomat_page_main() {
                         <div class="form-row">
                             <div class="form-group">
                                 <label>📅 Dzień</label>
-                                <input type="date" id="task-date" required value="<?php echo $today; ?>">
+                                <input type="date" id="task-date" required value="<?php echo $today; ?>" onchange="syncDates(this.value)">
                             </div>
                             <div class="form-group">
                                 <label>📁 Kategoria</label>
@@ -2106,6 +2302,60 @@ function zadaniomat_page_main() {
                         <button type="submit" class="button button-primary button-large" id="submit-btn">➕ Dodaj zadanie</button>
                         <button type="button" class="button button-large" id="cancel-edit-btn" style="display:none;" onclick="cancelEdit()">Anuluj</button>
                     </form>
+                </div>
+
+                <!-- Zadania na dziś -->
+                <div class="zadaniomat-card" id="today-tasks-section">
+                    <div class="tasks-header">
+                        <h2>📋 Zadania na dziś</h2>
+                        <div class="tasks-date-nav">
+                            <button onclick="changeTasksDate(-1)" title="Poprzedni dzień">←</button>
+                            <input type="date" id="tasks-list-date" value="<?php echo $today; ?>" onchange="loadTasksForDate(this.value)">
+                            <button onclick="changeTasksDate(1)" title="Następny dzień">→</button>
+                            <button onclick="goToTodayTasks()" class="btn-today">Dziś</button>
+                        </div>
+                    </div>
+                    <div id="today-tasks-container"></div>
+                </div>
+
+                <!-- Harmonogram dnia - z wyborem daty -->
+                <div id="harmonogram-section">
+                    <div class="harmonogram-container">
+                        <div class="harmonogram-header">
+                            <h2>
+                                📅 Harmonogram dnia
+                                <span class="start-time-badge" id="start-time-badge">Start: --:--</span>
+                            </h2>
+                            <div class="harmonogram-date-nav">
+                                <button onclick="changeHarmonogramDate(-1)" title="Poprzedni dzień">←</button>
+                                <input type="date" id="harmonogram-date" value="<?php echo $today; ?>" onchange="loadHarmonogramForDate(this.value)">
+                                <button onclick="changeHarmonogramDate(1)" title="Następny dzień">→</button>
+                                <button onclick="goToTodayHarmonogram()" class="btn-today">Dziś</button>
+                            </div>
+                            <div class="harmonogram-actions">
+                                <button class="btn-change-start" onclick="showStartDayModal()">⏰ Zmień start</button>
+                                <div class="view-toggle">
+                                    <button class="active" data-view="timeline" onclick="toggleHarmonogramView('timeline')">📊 Timeline</button>
+                                    <button data-view="list" onclick="toggleHarmonogramView('list')">📋 Lista</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Nieprzypisane zadania (do przeciągnięcia) -->
+                        <div class="unscheduled-tasks" id="unscheduled-tasks">
+                            <h3>📦 Zadania do przypisania <span id="unscheduled-count"></span></h3>
+                            <div class="unscheduled-tasks-list" id="unscheduled-list"></div>
+                        </div>
+
+                        <!-- Timeline godzinowy -->
+                        <div class="harmonogram-timeline" id="harmonogram-timeline"></div>
+                    </div>
+                </div>
+
+                <!-- Inne dni -->
+                <div class="zadaniomat-card">
+                    <h2>📋 Zadania - inne dni</h2>
+                    <div id="tasks-container"></div>
                 </div>
             </div>
         </div>
@@ -2222,14 +2472,12 @@ function zadaniomat_page_main() {
         };
         
         window.selectDate = function(date) {
-            selectedDate = date;
+            syncDates(date);
             $('.calendar-day').removeClass('selected');
             $('.calendar-day[data-date="' + date + '"]').addClass('selected');
-            loadTasks();
             updateDateInfo();
-            $('#task-date').val(date);
         };
-        
+
         window.updateDateInfo = function() {
             var d = new Date(selectedDate);
             $('#selected-date-display').text(d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear());
@@ -2238,7 +2486,7 @@ function zadaniomat_page_main() {
         };
         
         // ==================== TASKS ====================
-        var staleZadaniaForToday = [];
+        var staleZadaniaForSelectedDate = [];
 
         window.loadTasks = function() {
             var start = addDays(selectedDate, -1);
@@ -2247,7 +2495,7 @@ function zadaniomat_page_main() {
             $('#tasks-container').addClass('loading');
             $('#today-tasks-container').addClass('loading');
 
-            // Pobierz zadania i stałe zadania dla dziś równolegle
+            // Pobierz zadania i stałe zadania dla wybranej daty równolegle
             var tasksRequest = $.post(ajaxurl, {
                 action: 'zadaniomat_get_tasks',
                 nonce: nonce,
@@ -2258,7 +2506,7 @@ function zadaniomat_page_main() {
             var staleRequest = $.post(ajaxurl, {
                 action: 'zadaniomat_get_stale_for_day',
                 nonce: nonce,
-                dzien: today
+                dzien: selectedDate
             });
 
             $.when(tasksRequest, staleRequest).done(function(tasksResp, staleResp) {
@@ -2268,9 +2516,9 @@ function zadaniomat_page_main() {
                 var tasks = tasksResp[0].success ? tasksResp[0].data.tasks : [];
 
                 // Pobierz stałe zadania z opcją "dodaj do listy"
-                staleZadaniaForToday = [];
+                staleZadaniaForSelectedDate = [];
                 if (staleResp[0].success) {
-                    staleZadaniaForToday = staleResp[0].data.stale_zadania.filter(function(s) {
+                    staleZadaniaForSelectedDate = staleResp[0].data.stale_zadania.filter(function(s) {
                         return s.dodaj_do_listy == 1;
                     });
                 }
@@ -2335,8 +2583,8 @@ function zadaniomat_page_main() {
                 html += '</div></div>';
 
                 html += '<table class="day-table"><thead><tr>';
-                // Zawsze dodaj kolumnę checkbox dla dzisiaj (lub gdy są zadania)
-                if (isToday || dayTasks.length > 0) {
+                // Zawsze dodaj kolumnę checkbox dla wybranej daty (lub gdy są zadania)
+                if (isSelected || dayTasks.length > 0) {
                     html += '<th style="width:30px;">';
                     if (dayTasks.length > 0) {
                         html += '<input type="checkbox" class="select-all-checkbox" data-day="' + current + '" title="Zaznacz wszystkie">';
@@ -2344,11 +2592,11 @@ function zadaniomat_page_main() {
                     html += '</th>';
                 }
                 html += '<th style="width:130px;">Kategoria</th><th>Zadanie</th><th style="width:180px;">Cel TO DO</th>';
-                html += '<th style="width:50px;">Plan</th><th style="width:70px;">Fakt</th><th style="width:70px;">Status</th><th style="width:90px;">Akcje</th>';
+                html += '<th style="width:50px;">Plan</th><th style="width:70px;">Fakt</th><th style="width:50px;">✓</th><th style="width:90px;">Akcje</th>';
                 html += '</tr></thead><tbody>';
                 
-                // Dla dzisiaj - pokaż sloty dla każdej kategorii
-                if (isToday) {
+                // Dla wybranej daty - pokaż sloty dla każdej kategorii
+                if (isSelected) {
                     var usedKategorie = {};
                     dayTasks.forEach(function(t) { usedKategorie[t.kategoria] = true; });
                     var hiddenCategories = getHiddenCategories(current);
@@ -2359,7 +2607,7 @@ function zadaniomat_page_main() {
                     });
 
                     // Potem stałe zadania z opcją "dodaj do listy"
-                    staleZadaniaForToday.forEach(function(stale) {
+                    staleZadaniaForSelectedDate.forEach(function(stale) {
                         // Sprawdź czy nie ma już zadania w tej kategorii (nie duplikuj)
                         if (!usedKategorie[stale.kategoria]) {
                             html += renderStaleTaskRow(stale, current);
@@ -2385,6 +2633,9 @@ function zadaniomat_page_main() {
                         html += '<a href="#" onclick="showAllCategories(\'' + current + '\'); return false;">👁️ Pokaż ' + hiddenCount + ' ukryte kategorie</a>';
                         html += '</td></tr>';
                     }
+
+                    // Dodaj wiersz szybkiego dodawania zadań
+                    html += renderQuickAddRow(current);
                 } else {
                     // Dla innych dni - normalne wyświetlanie
                     if (dayTasks.length === 0) {
@@ -2402,8 +2653,8 @@ function zadaniomat_page_main() {
                 
                 html += '</tbody></table></div>';
 
-                // Rozdziel dzisiejsze zadania od innych dni
-                if (isToday) {
+                // Rozdziel wybrane zadania od innych dni
+                if (isSelected) {
                     todayHtml += html;
                 } else {
                     otherDaysHtml += html;
@@ -2418,12 +2669,8 @@ function zadaniomat_page_main() {
         };
         
         window.renderTaskRow = function(t, day) {
-            var statusClass = '';
-            if (t.status !== null) {
-                if (parseFloat(t.status) >= 1) statusClass = 'status-done';
-                else if (parseFloat(t.status) > 0) statusClass = 'status-partial';
-                else statusClass = 'status-none';
-            }
+            var isDone = t.status !== null && parseFloat(t.status) >= 1;
+            var statusClass = isDone ? 'status-done' : '';
 
             var planowany = parseInt(t.planowany_czas) || 0;
             var faktyczny = parseInt(t.faktyczny_czas) || 0;
@@ -2462,12 +2709,9 @@ function zadaniomat_page_main() {
             }
             html += '</div></td>';
 
-            html += '<td><select class="inline-select quick-update" data-field="status" data-id="' + t.id + '">';
-            html += '<option value=""' + (t.status === null ? ' selected' : '') + '>-</option>';
-            ['0', '0.5', '0.9', '1'].forEach(function(s) {
-                html += '<option value="' + s + '"' + (t.status == s ? ' selected' : '') + '>' + s + '</option>';
-            });
-            html += '</select></td>';
+            html += '<td class="status-cell">';
+            html += '<input type="checkbox" class="task-done-checkbox" data-id="' + t.id + '" ' + (isDone ? 'checked' : '') + ' onchange="toggleTaskDone(' + t.id + ', this.checked)" title="' + (isDone ? 'Oznacz jako niezrobione' : 'Oznacz jako zrobione') + '">';
+            html += '</td>';
             html += '<td class="action-buttons">';
             html += '<button class="btn-copy" onclick="copyTask(' + t.id + ', this)" title="Kopiuj">📄</button>';
             html += '<button class="btn-edit" onclick="editTask(' + t.id + ', this)" title="Edytuj">✏️</button>';
@@ -2496,7 +2740,7 @@ function zadaniomat_page_main() {
 
         // Przekształć stałe zadanie w zwykłe zadanie
         window.convertStaleToTask = function(staleId, day) {
-            var stale = staleZadaniaForToday.find(function(s) { return s.id == staleId; });
+            var stale = staleZadaniaForSelectedDate.find(function(s) { return s.id == staleId; });
             if (!stale) return;
 
             $.post(ajaxurl, {
@@ -2591,6 +2835,67 @@ function zadaniomat_page_main() {
             html += '</tr>';
             return html;
         };
+
+        // Renderuj wiersz szybkiego dodawania z wyborem kategorii
+        window.renderQuickAddRow = function(day) {
+            var html = '<tr class="quick-add-row" data-day="' + day + '">';
+            html += '<td></td>';
+            html += '<td>';
+            html += '<select class="quick-add-kategoria">';
+            for (var kat in kategorie) {
+                html += '<option value="' + kat + '">' + kategorie[kat] + '</option>';
+            }
+            html += '</select>';
+            html += '</td>';
+            html += '<td><input type="text" class="slot-input quick-add-zadanie" placeholder="Wpisz zadanie..." data-field="zadanie"></td>';
+            html += '<td><input type="text" class="slot-input quick-add-cel" placeholder="Cel TO DO..." data-field="cel_todo"></td>';
+            html += '<td><input type="number" class="slot-input quick-add-czas" placeholder="-" min="0" style="width:45px;" data-field="planowany_czas"></td>';
+            html += '<td>-</td>';
+            html += '<td>-</td>';
+            html += '<td class="action-buttons">';
+            html += '<button class="btn-add-slot" onclick="saveQuickAdd(this)" title="Dodaj">➕</button>';
+            html += '</td>';
+            html += '</tr>';
+            return html;
+        };
+
+        // Zapisz zadanie z quick add wiersza
+        window.saveQuickAdd = function(btn) {
+            var $row = $(btn).closest('tr');
+            var day = $row.data('day');
+            var kategoria = $row.find('.quick-add-kategoria').val();
+            var zadanie = $row.find('.quick-add-zadanie').val().trim();
+            var cel = $row.find('.quick-add-cel').val().trim();
+            var czas = $row.find('.quick-add-czas').val();
+
+            if (!zadanie) {
+                showToast('Wpisz nazwę zadania', 'error');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_add_task',
+                nonce: nonce,
+                dzien: day,
+                kategoria: kategoria,
+                zadanie: zadanie,
+                cel_todo: cel,
+                planowany_czas: czas || 0
+            }, function(response) {
+                if (response.success) {
+                    showToast('Zadanie dodane!', 'success');
+                    // Wyczyść pola
+                    $row.find('.quick-add-zadanie').val('');
+                    $row.find('.quick-add-cel').val('');
+                    $row.find('.quick-add-czas').val('');
+                    // Odśwież listę i harmonogram
+                    loadTasks();
+                    loadHarmonogram();
+                } else {
+                    showToast('Błąd: ' + response.data, 'error');
+                }
+            });
+        };
         
         // Zapisz zadanie z empty slotu
         window.saveSlot = function(btn) {
@@ -2619,6 +2924,7 @@ function zadaniomat_page_main() {
                 if (response.success) {
                     showToast('Zadanie dodane!', 'success');
                     loadTasks();
+                    loadHarmonogram(); // Odśwież harmonogram
                     loadCalendarDots();
                 }
             });
@@ -2813,14 +3119,6 @@ function zadaniomat_page_main() {
                     if (response.success) {
                         $this.addClass('saved-flash');
                         setTimeout(function() { $this.removeClass('saved-flash'); }, 500);
-                        
-                        if ($this.data('field') === 'status') {
-                            $row.removeClass('status-done status-partial status-none');
-                            var val = parseFloat($this.val());
-                            if (val >= 1) $row.addClass('status-done');
-                            else if (val > 0) $row.addClass('status-partial');
-                            else if (!isNaN(val)) $row.addClass('status-none');
-                        }
                     }
                 });
             });
@@ -2849,32 +3147,72 @@ function zadaniomat_page_main() {
                         showToast(editId ? 'Zadanie zaktualizowane!' : 'Zadanie dodane!', 'success');
                         resetForm();
                         loadTasks();
+                        loadHarmonogram(); // Odśwież harmonogram
                         loadCalendarDots();
                         loadOverdueTasks();
                     }
                 });
             });
             
-            // Cele okresu
-            $(document).on('change', '.cel-okres-input', function() {
-                var $this = $(this);
+            // Edytuj cel okresu - kliknięcie na tekst
+            window.editCelOkres = function(element) {
+                var $display = $(element);
+                var $card = $display.closest('.cel-card');
+                var $textarea = $card.find('.cel-okres-input');
+
+                // Ukryj display, pokaż textarea
+                $display.addClass('editing');
+                $textarea.removeClass('hidden').focus();
+
+                // Zaznacz tekst
+                $textarea[0].select();
+            };
+
+            // Zapisz cel okresu i wróć do widoku
+            $(document).on('blur', '.cel-okres-input', function() {
+                var $textarea = $(this);
+                var $card = $textarea.closest('.cel-card');
+                var $display = $card.find('.cel-okres-display');
+                var cel = $textarea.val().trim();
+
+                // Ukryj textarea, pokaż display
+                $textarea.addClass('hidden');
+                $display.removeClass('editing');
+
+                // Aktualizuj tekst display
+                if (cel) {
+                    $display.html(cel.replace(/\n/g, '<br>')).removeClass('empty');
+                } else {
+                    $display.html('<span class="placeholder">Kliknij aby dodać cel na 2 tygodnie...</span>').addClass('empty');
+                }
+
+                // Zapisz do bazy
                 $.post(ajaxurl, {
                     action: 'zadaniomat_save_cel_okres',
                     nonce: nonce,
-                    okres_id: $this.data('okres'),
-                    kategoria: $this.data('kategoria'),
-                    cel: $this.val()
+                    okres_id: $textarea.data('okres'),
+                    kategoria: $textarea.data('kategoria'),
+                    cel: cel
                 }, function(response) {
                     if (response.success) {
-                        $this.addClass('saved-flash');
-                        setTimeout(function() { $this.removeClass('saved-flash'); }, 500);
+                        showToast('Cel zapisany!', 'success');
                         if (response.data.cel_id) {
-                            $this.data('cel-id', response.data.cel_id);
-                            var $statusRow = $this.siblings('.status-row');
-                            $statusRow.show().find('select').data('id', response.data.cel_id);
+                            $textarea.data('cel-id', response.data.cel_id);
+                            $display.data('cel-id', response.data.cel_id);
                         }
                     }
                 });
+            });
+
+            // Zapisz też na Enter (z Shift+Enter dla nowej linii)
+            $(document).on('keydown', '.cel-okres-input', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    $(this).blur();
+                }
+                if (e.key === 'Escape') {
+                    $(this).blur();
+                }
             });
             
             // Status celu okresu
@@ -2937,9 +3275,6 @@ function zadaniomat_page_main() {
         window.deleteTask = function(id) {
             if (!confirm('Na pewno usunąć to zadanie?')) return;
 
-            var $row = $('tr[data-task-id="' + id + '"]');
-            var $daySection = $row.closest('.day-section');
-
             $.post(ajaxurl, {
                 action: 'zadaniomat_delete_task',
                 nonce: nonce,
@@ -2947,11 +3282,9 @@ function zadaniomat_page_main() {
             }, function(response) {
                 if (response.success) {
                     showToast('Zadanie usunięte!', 'success');
-                    $row.fadeOut(300, function() {
-                        $(this).remove();
-                        // Przelicz statystyki dnia po usunięciu wiersza
-                        recalculateDayStats($daySection);
-                    });
+                    // Odśwież wszystko
+                    loadTasks();
+                    loadHarmonogram();
                     loadCalendarDots();
                 }
             });
@@ -3089,21 +3422,90 @@ function zadaniomat_page_main() {
         var harmonogramTasks = [];
         var harmonogramStale = [];
         var draggedTask = null;
+        var harmonogramDate = today; // Data aktualnie wyświetlana w harmonogramie
 
-        // Sprawdź czy pokazać harmonogram (tylko dla dzisiaj)
+        // Sprawdź czy pokazać harmonogram
         window.checkShowHarmonogram = function() {
-            if (selectedDate === today) {
-                $('#harmonogram-section').show();
-                checkStartDnia();
-            } else {
-                $('#harmonogram-section').hide();
-            }
+            $('#harmonogram-section').show();
+            checkStartDnia();
+        };
+
+        // Zmiana daty harmonogramu - synchronizuje też z listą zadań
+        window.changeHarmonogramDate = function(delta) {
+            var currentDate = new Date(harmonogramDate);
+            currentDate.setDate(currentDate.getDate() + delta);
+            var newDate = currentDate.toISOString().split('T')[0];
+            syncDates(newDate);
+        };
+
+        window.loadHarmonogramForDate = function(dateStr) {
+            syncDates(dateStr);
+        };
+
+        window.goToTodayHarmonogram = function() {
+            syncDates(today);
+        };
+
+        // Synchronizacja dat między harmonogramem a listą zadań
+        window.syncDates = function(dateStr) {
+            selectedDate = dateStr;
+            harmonogramDate = dateStr;
+
+            // Aktualizuj wszystkie kontrolki daty
+            $('#harmonogram-date').val(dateStr);
+            $('#tasks-list-date').val(dateStr);
+            $('#task-date').val(dateStr);
+
+            // Aktualizuj kalendarz
+            $('.calendar-day').removeClass('selected');
+            $('.calendar-day[data-date="' + dateStr + '"]').addClass('selected');
+
+            // Aktualizuj nagłówki
+            updateHarmonogramHeader();
+            updateTasksHeader();
+
+            // Przeładuj dane
+            loadTasks();
+            checkStartDnia();
+        };
+
+        window.updateTasksHeader = function() {
+            var isToday = selectedDate === today;
+            var headerText = isToday ? '📋 Zadania na dziś' : '📋 Zadania: ' + selectedDate;
+            $('#today-tasks-section .tasks-header h2').text(headerText);
+        };
+
+        window.updateHarmonogramHeader = function() {
+            var isToday = harmonogramDate === today;
+            var dateObj = new Date(harmonogramDate);
+            var days = ['niedziela', 'poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota'];
+            var dayName = days[dateObj.getDay()];
+            var headerText = isToday ? '📅 Harmonogram dnia' : '📅 Harmonogram: ' + dayName + ' ' + harmonogramDate;
+            $('#harmonogram-section h2').contents().first().replaceWith(headerText + ' ');
+        };
+
+        // ==================== NAWIGACJA DATY LISTY ZADAŃ ====================
+        window.changeTasksDate = function(delta) {
+            var currentDate = new Date(selectedDate);
+            currentDate.setDate(currentDate.getDate() + delta);
+            var newDate = currentDate.toISOString().split('T')[0];
+            syncDates(newDate);
+        };
+
+        window.loadTasksForDate = function(dateStr) {
+            syncDates(dateStr);
+        };
+
+        window.goToTodayTasks = function() {
+            syncDates(today);
         };
 
         // Sprawdź czy użytkownik ustawił godzinę startu
         window.checkStartDnia = function() {
+            var isToday = harmonogramDate === today;
+
             // Sprawdź localStorage najpierw
-            var savedStart = localStorage.getItem('zadaniomat_start_' + today);
+            var savedStart = localStorage.getItem('zadaniomat_start_' + harmonogramDate);
             if (savedStart) {
                 startDnia = savedStart;
                 updateStartBadge();
@@ -3115,16 +3517,21 @@ function zadaniomat_page_main() {
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_start_dnia',
                 nonce: nonce,
-                dzien: today
+                dzien: harmonogramDate
             }, function(response) {
                 if (response.success && response.data.godzina) {
                     startDnia = response.data.godzina;
-                    localStorage.setItem('zadaniomat_start_' + today, startDnia);
+                    localStorage.setItem('zadaniomat_start_' + harmonogramDate, startDnia);
                     updateStartBadge();
                     loadHarmonogram();
-                } else {
-                    // Pokaż modal startu dnia
+                } else if (isToday) {
+                    // Pokaż modal startu dnia tylko dla dzisiaj
                     showStartDayModal();
+                } else {
+                    // Dla innych dni użyj domyślnej godziny jeśli nie ma zapisanej
+                    startDnia = '09:00';
+                    updateStartBadge();
+                    loadHarmonogram();
                 }
             });
         };
@@ -3158,13 +3565,13 @@ function zadaniomat_page_main() {
             startDnia = $('#start-time-input').val();
 
             // Zapisz w localStorage
-            localStorage.setItem('zadaniomat_start_' + today, startDnia);
+            localStorage.setItem('zadaniomat_start_' + harmonogramDate, startDnia);
 
             // Zapisz w bazie
             $.post(ajaxurl, {
                 action: 'zadaniomat_save_start_dnia',
                 nonce: nonce,
-                dzien: today,
+                dzien: harmonogramDate,
                 godzina: startDnia
             });
 
@@ -3176,7 +3583,7 @@ function zadaniomat_page_main() {
 
         window.skipStartDnia = function() {
             startDnia = null;
-            localStorage.setItem('zadaniomat_start_' + today, 'skipped');
+            localStorage.setItem('zadaniomat_start_' + harmonogramDate, 'skipped');
             closeStartDayModal();
             $('#harmonogram-section').hide();
         };
@@ -3194,12 +3601,16 @@ function zadaniomat_page_main() {
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_harmonogram',
                 nonce: nonce,
-                dzien: today
+                dzien: harmonogramDate
             }, function(response) {
                 if (response.success) {
                     harmonogramTasks = response.data.zadania;
-                    harmonogramStale = response.data.stale_zadania;
-                    loadStaleModifications(); // Zastosuj dzisiejsze modyfikacje
+                    // Filtruj stałe zadania - te z "dodaj do listy" nie pokazuj w harmonogramie
+                    // bo są już widoczne w liście zadań
+                    harmonogramStale = response.data.stale_zadania.filter(function(s) {
+                        return s.dodaj_do_listy != 1;
+                    });
+                    loadStaleModifications(); // Zastosuj modyfikacje dla wybranego dnia
                     renderHarmonogram();
                 }
             });
@@ -3270,7 +3681,17 @@ function zadaniomat_page_main() {
             var taskId = isStale ? 'stale-' + task.id : task.id;
             var draggable = 'draggable="true" ondragstart="handleDragStart(event, \'' + taskId + '\')"';
 
-            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
+            // Sprawdź czy zadanie jest wykonane
+            var isDone = !isStale && task.status !== null && parseFloat(task.status) >= 1;
+            var doneClass = isDone ? ' harmonogram-task-done' : '';
+
+            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + doneClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
+
+            // Checkbox dla oznaczenia wykonania (tylko dla zwykłych zadań)
+            if (!isStale) {
+                html += '<input type="checkbox" class="harmonogram-task-checkbox" ' + (isDone ? 'checked' : '') + ' onchange="toggleHarmonogramTaskDone(' + task.id + ', this.checked)" title="Oznacz jako ' + (isDone ? 'niewykonane' : 'wykonane') + '">';
+            }
+
             html += '<div class="harmonogram-task-info">';
             html += '<div class="harmonogram-task-name">' + escapeHtml(task.zadanie || task.nazwa) + '</div>';
             html += '<div class="harmonogram-task-meta">';
@@ -3280,6 +3701,9 @@ function zadaniomat_page_main() {
             }
             if (isStale) {
                 html += '<span class="stale-badge">🔄 Stałe</span>';
+            }
+            if (isDone) {
+                html += '<span class="done-badge">✅</span>';
             }
             html += '</div></div>';
 
@@ -3309,6 +3733,36 @@ function zadaniomat_page_main() {
             html += '</div>';
             return html;
         };
+
+        // Przełącz status wykonania zadania (wspólna funkcja)
+        window.toggleTaskDone = function(taskId, isDone) {
+            var newStatus = isDone ? '1' : '0';
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_quick_update',
+                nonce: nonce,
+                id: taskId,
+                field: 'status',
+                value: newStatus
+            }, function(response) {
+                if (response.success) {
+                    // Aktualizuj zadanie w tablicy harmonogramTasks
+                    var task = harmonogramTasks.find(function(t) { return t.id == taskId; });
+                    if (task) {
+                        task.status = newStatus;
+                    }
+
+                    // Odśwież oba widoki
+                    renderHarmonogram();
+                    loadTasks();
+
+                    showToast(isDone ? 'Zadanie wykonane!' : 'Zadanie oznaczone jako niewykonane', 'success');
+                }
+            });
+        };
+
+        // Alias dla harmonogramu
+        window.toggleHarmonogramTaskDone = window.toggleTaskDone;
 
         // Aktualizuj godzinę zadania
         window.updateTaskTime = function(taskId, newTime, isStale) {
@@ -3361,19 +3815,19 @@ function zadaniomat_page_main() {
             }
         };
 
-        // Ukryj stałe zadanie na dzisiaj
+        // Ukryj stałe zadanie na wybrany dzień
         window.hideStaleForToday = function(staleId) {
-            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + today) || '[]');
+            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + harmonogramDate) || '[]');
             if (hidden.indexOf(staleId) === -1) {
                 hidden.push(staleId);
-                localStorage.setItem('zadaniomat_hidden_stale_' + today, JSON.stringify(hidden));
+                localStorage.setItem('zadaniomat_hidden_stale_' + harmonogramDate, JSON.stringify(hidden));
             }
             harmonogramStale = harmonogramStale.filter(function(s) { return s.id != staleId; });
             renderHarmonogram();
-            showToast('Stałe zadanie ukryte na dzisiaj', 'success');
+            showToast('Stałe zadanie ukryte na ten dzień', 'success');
         };
 
-        // Zapisz modyfikacje stałych na dzisiaj
+        // Zapisz modyfikacje stałych na wybrany dzień
         window.saveStaleModifications = function() {
             var mods = {};
             harmonogramStale.forEach(function(s) {
@@ -3382,13 +3836,13 @@ function zadaniomat_page_main() {
                     godzina_koniec: s.godzina_koniec
                 };
             });
-            localStorage.setItem('zadaniomat_stale_mods_' + today, JSON.stringify(mods));
+            localStorage.setItem('zadaniomat_stale_mods_' + harmonogramDate, JSON.stringify(mods));
         };
 
         // Załaduj modyfikacje stałych na dzisiaj
         window.loadStaleModifications = function() {
-            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + today) || '[]');
-            var mods = JSON.parse(localStorage.getItem('zadaniomat_stale_mods_' + today) || '{}');
+            var hidden = JSON.parse(localStorage.getItem('zadaniomat_hidden_stale_' + harmonogramDate) || '[]');
+            var mods = JSON.parse(localStorage.getItem('zadaniomat_stale_mods_' + harmonogramDate) || '{}');
 
             // Filtruj ukryte
             harmonogramStale = harmonogramStale.filter(function(s) {
@@ -3578,14 +4032,15 @@ function zadaniomat_page_main() {
 
         // Aktualizuj linię aktualnego czasu
         window.updateCurrentTimeLine = function() {
-            if (harmonogramView !== 'timeline') return;
+            // Usuń poprzednią linię
+            $('.timeline-current-time').remove();
+
+            // Tylko dla dzisiaj pokazuj linię aktualnego czasu
+            if (harmonogramView !== 'timeline' || harmonogramDate !== today) return;
 
             var now = new Date();
             var currentHour = now.getHours();
             var currentMinute = now.getMinutes();
-
-            // Usuń poprzednią linię
-            $('.timeline-current-time').remove();
 
             // Znajdź godzinę
             var $hourDiv = $('.timeline-hour[data-hour="' + currentHour + '"]');
