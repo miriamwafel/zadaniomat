@@ -2272,7 +2272,7 @@ function zadaniomat_page_main() {
                         <div class="form-row">
                             <div class="form-group">
                                 <label>📅 Dzień</label>
-                                <input type="date" id="task-date" required value="<?php echo $today; ?>">
+                                <input type="date" id="task-date" required value="<?php echo $today; ?>" onchange="syncDates(this.value)">
                             </div>
                             <div class="form-group">
                                 <label>📁 Kategoria</label>
@@ -3275,9 +3275,6 @@ function zadaniomat_page_main() {
         window.deleteTask = function(id) {
             if (!confirm('Na pewno usunąć to zadanie?')) return;
 
-            var $row = $('tr[data-task-id="' + id + '"]');
-            var $daySection = $row.closest('.day-section');
-
             $.post(ajaxurl, {
                 action: 'zadaniomat_delete_task',
                 nonce: nonce,
@@ -3285,11 +3282,9 @@ function zadaniomat_page_main() {
             }, function(response) {
                 if (response.success) {
                     showToast('Zadanie usunięte!', 'success');
-                    $row.fadeOut(300, function() {
-                        $(this).remove();
-                        // Przelicz statystyki dnia po usunięciu wiersza
-                        recalculateDayStats($daySection);
-                    });
+                    // Odśwież wszystko
+                    loadTasks();
+                    loadHarmonogram();
                     loadCalendarDots();
                 }
             });
