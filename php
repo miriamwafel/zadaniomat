@@ -109,6 +109,7 @@ function zadaniomat_create_tables() {
         godzina_start TIME DEFAULT NULL,
         godzina_koniec TIME DEFAULT NULL,
         pozycja_harmonogram INT DEFAULT NULL,
+        stale_zadanie_id INT DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
@@ -172,6 +173,9 @@ add_action('admin_init', function() {
     if (!in_array('pozycja_harmonogram', $zadania_columns)) {
         $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN pozycja_harmonogram INT DEFAULT NULL");
     }
+    if (!in_array('stale_zadanie_id', $zadania_columns)) {
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN stale_zadanie_id INT DEFAULT NULL");
+    }
 
     // Utwórz tabelę stałych zadań jeśli nie istnieje
     $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
@@ -228,6 +232,113 @@ function zadaniomat_get_current_rok($date = null) {
 
 function zadaniomat_get_kategoria_label($key) {
     return ZADANIOMAT_KATEGORIE_ZADANIA[$key] ?? $key;
+}
+
+/**
+ * Automatycznie tworzy zadania ze stałych zadań dla podanego dnia
+ * Sprawdza czy zadanie już istnieje (po stale_zadanie_id i dzien)
+ * Jeśli nie - tworzy nowe zadanie
+ */
+function zadaniomat_create_tasks_from_stale($dzien) {
+    global $wpdb;
+
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+
+    $date = new DateTime($dzien);
+    $dayOfWeek = strtolower($date->format('D')); // mon, tue, wed...
+    $dayOfWeekPl = ['mon' => 'pn', 'tue' => 'wt', 'wed' => 'sr', 'thu' => 'cz', 'fri' => 'pt', 'sat' => 'so', 'sun' => 'nd'];
+    $dayPl = $dayOfWeekPl[$dayOfWeek];
+    $dayOfMonth = intval($date->format('j'));
+
+    // Pobierz aktywne stałe zadania
+    $stale = $wpdb->get_results("SELECT * FROM $table_stale WHERE aktywne = 1");
+
+    // Pobierz aktualny rok i okres dla tego dnia
+    $current_rok = zadaniomat_get_current_rok($dzien);
+    $current_okres = zadaniomat_get_current_okres($dzien);
+
+    // Pobierz godzinę startu dnia (dla minuty_po_starcie)
+    $start_dnia = get_option('zadaniomat_start_dnia_' . $dzien, '');
+
+    // Pobierz już istniejące zadania ze stałych na ten dzień
+    $existing = $wpdb->get_col($wpdb->prepare(
+        "SELECT stale_zadanie_id FROM $table_zadania WHERE dzien = %s AND stale_zadanie_id IS NOT NULL",
+        $dzien
+    ));
+
+    $created = [];
+
+    foreach ($stale as $s) {
+        // Sprawdź czy już istnieje
+        if (in_array($s->id, $existing)) {
+            continue;
+        }
+
+        // Sprawdź czy pasuje do tego dnia
+        $match = false;
+
+        if ($s->typ_powtarzania === 'codziennie') {
+            $match = true;
+        } elseif ($s->typ_powtarzania === 'dni_tygodnia' && !empty($s->dni_tygodnia)) {
+            $dni = explode(',', $s->dni_tygodnia);
+            $match = in_array($dayPl, $dni);
+        } elseif ($s->typ_powtarzania === 'dzien_miesiaca' && $s->dzien_miesiaca) {
+            $match = ($dayOfMonth === intval($s->dzien_miesiaca));
+        } elseif ($s->typ_powtarzania === 'dni_przed_koncem_roku' && $s->dni_przed_koncem_roku && $current_rok) {
+            $rok_koniec = new DateTime($current_rok->data_koniec);
+            $diff = $rok_koniec->diff($date);
+            if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_roku)) {
+                $match = true;
+            }
+        } elseif ($s->typ_powtarzania === 'dni_przed_koncem_okresu' && $s->dni_przed_koncem_okresu && $current_okres) {
+            $okres_koniec = new DateTime($current_okres->data_koniec);
+            $diff = $okres_koniec->diff($date);
+            if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_okresu)) {
+                $match = true;
+            }
+        }
+
+        if (!$match) {
+            continue;
+        }
+
+        // Oblicz godzinę startu jeśli ustawiono minuty_po_starcie
+        $godzina_start = $s->godzina_start;
+        $godzina_koniec = $s->godzina_koniec;
+
+        if ($s->minuty_po_starcie && $start_dnia) {
+            $start_time = DateTime::createFromFormat('H:i', $start_dnia);
+            if ($start_time) {
+                $start_time->modify('+' . intval($s->minuty_po_starcie) . ' minutes');
+                $godzina_start = $start_time->format('H:i:s');
+
+                // Oblicz godzinę końca jeśli mamy planowany czas
+                if ($s->planowany_czas) {
+                    $end_time = clone $start_time;
+                    $end_time->modify('+' . intval($s->planowany_czas) . ' minutes');
+                    $godzina_koniec = $end_time->format('H:i:s');
+                }
+            }
+        }
+
+        // Utwórz zadanie
+        $wpdb->insert($table_zadania, [
+            'okres_id' => $current_okres ? $current_okres->id : null,
+            'kategoria' => $s->kategoria,
+            'dzien' => $dzien,
+            'zadanie' => $s->nazwa,
+            'cel_todo' => '',
+            'planowany_czas' => $s->planowany_czas,
+            'godzina_start' => $godzina_start,
+            'godzina_koniec' => $godzina_koniec,
+            'stale_zadanie_id' => $s->id
+        ]);
+
+        $created[] = $wpdb->insert_id;
+    }
+
+    return $created;
 }
 
 // =============================================
@@ -318,6 +429,14 @@ function zadaniomat_public_get_tasks() {
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $start = sanitize_text_field($_POST['start']);
     $end = sanitize_text_field($_POST['end']);
+
+    // Automatycznie utwórz zadania ze stałych zadań dla każdego dnia w zakresie
+    $current = new DateTime($start);
+    $end_date = new DateTime($end);
+    while ($current <= $end_date) {
+        zadaniomat_create_tasks_from_stale($current->format('Y-m-d'));
+        $current->modify('+1 day');
+    }
 
     $tasks = $wpdb->get_results($wpdb->prepare(
         "SELECT * FROM $table WHERE dzien BETWEEN %s AND %s ORDER BY dzien ASC, pozycja_harmonogram ASC, id ASC",
@@ -1681,21 +1800,29 @@ add_action('wp_ajax_zadaniomat_move_task', function() {
 add_action('wp_ajax_zadaniomat_get_tasks', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $start = sanitize_text_field($_POST['start']);
     $end = sanitize_text_field($_POST['end']);
-    
+
+    // Automatycznie utwórz zadania ze stałych zadań dla każdego dnia w zakresie
+    $current = new DateTime($start);
+    $end_date = new DateTime($end);
+    while ($current <= $end_date) {
+        zadaniomat_create_tasks_from_stale($current->format('Y-m-d'));
+        $current->modify('+1 day');
+    }
+
     $tasks = $wpdb->get_results($wpdb->prepare(
         "SELECT * FROM $table WHERE dzien BETWEEN %s AND %s ORDER BY dzien ASC, id ASC",
         $start, $end
     ));
-    
+
     // Dodaj labele kategorii
     foreach ($tasks as &$task) {
         $task->kategoria_label = zadaniomat_get_kategoria_label($task->kategoria);
     }
-    
+
     wp_send_json_success(['tasks' => $tasks]);
 });
 
@@ -2104,6 +2231,9 @@ add_action('wp_ajax_zadaniomat_get_harmonogram', function() {
     $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
     $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
     $dzien = sanitize_text_field($_POST['dzien']);
+
+    // Automatycznie utwórz zadania ze stałych zadań dla tego dnia
+    zadaniomat_create_tasks_from_stale($dzien);
 
     // Pobierz zadania na ten dzień
     $zadania = $wpdb->get_results($wpdb->prepare(
