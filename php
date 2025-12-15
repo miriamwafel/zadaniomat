@@ -105,7 +105,7 @@ function zadaniomat_create_tables() {
         cel_todo TEXT,
         planowany_czas INT DEFAULT 0,
         faktyczny_czas INT DEFAULT NULL,
-        status DECIMAL(3,1) DEFAULT NULL,
+        status VARCHAR(20) DEFAULT 'nowe',
         godzina_start TIME DEFAULT NULL,
         godzina_koniec TIME DEFAULT NULL,
         pozycja_harmonogram INT DEFAULT NULL,
@@ -200,11 +200,22 @@ add_action('admin_init', function() {
         $wpdb->query("ALTER TABLE $table_stale MODIFY COLUMN typ_powtarzania VARCHAR(50) NOT NULL DEFAULT 'codziennie'");
     }
 
-    // Migracja - dodaj kolumnę planowane_godziny_dziennie do cele_rok
-    $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
-    $cele_rok_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_cele_rok");
-    if (!in_array('planowane_godziny_dziennie', $cele_rok_columns)) {
-        $wpdb->query("ALTER TABLE $table_cele_rok ADD COLUMN planowane_godziny_dziennie DECIMAL(4,2) DEFAULT 1.00");
+    // Migracja - zmień status z DECIMAL na VARCHAR(20) z wartościami tekstowymi
+    $status_info = $wpdb->get_row("SHOW COLUMNS FROM $table_zadania WHERE Field = 'status'");
+    if ($status_info && strpos($status_info->Type, 'decimal') !== false) {
+        // Najpierw dodaj nową kolumnę tymczasową
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN status_new VARCHAR(20) DEFAULT 'nowe'");
+
+        // Przekonwertuj wartości: null/0 -> 'nowe', 1 -> 'zakonczone'
+        $wpdb->query("UPDATE $table_zadania SET status_new = CASE
+            WHEN status IS NULL OR status < 0.5 THEN 'nowe'
+            WHEN status >= 1 THEN 'zakonczone'
+            ELSE 'rozpoczete'
+        END");
+
+        // Usuń starą kolumnę i zmień nazwę nowej
+        $wpdb->query("ALTER TABLE $table_zadania DROP COLUMN status");
+        $wpdb->query("ALTER TABLE $table_zadania CHANGE COLUMN status_new status VARCHAR(20) DEFAULT 'nowe'");
     }
 });
 
@@ -388,18 +399,54 @@ add_action('wp_ajax_zadaniomat_quick_update', function() {
 add_action('wp_ajax_zadaniomat_move_task', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $id = intval($_POST['id']);
     $new_date = sanitize_text_field($_POST['new_date']);
     $new_okres = zadaniomat_get_current_okres($new_date);
-    
+
     $wpdb->update($table, [
         'dzien' => $new_date,
         'okres_id' => $new_okres ? $new_okres->id : null
     ], ['id' => $id]);
-    
+
     wp_send_json_success();
+});
+
+// Kopiuj pojedyncze zadanie na inny dzień
+add_action('wp_ajax_zadaniomat_copy_task_to_date', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+    $id = intval($_POST['id']);
+    $target_date = sanitize_text_field($_POST['target_date']);
+    $new_okres = zadaniomat_get_current_okres($target_date);
+
+    // Pobierz oryginalne zadanie
+    $task = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
+
+    if (!$task) {
+        wp_send_json_error('Zadanie nie istnieje');
+        return;
+    }
+
+    // Skopiuj zadanie na nowy dzień (ze statusem "nowe", bez czasu faktycznego)
+    $wpdb->insert($table, [
+        'okres_id' => $new_okres ? $new_okres->id : null,
+        'kategoria' => $task->kategoria,
+        'dzien' => $target_date,
+        'zadanie' => $task->zadanie,
+        'cel_todo' => $task->cel_todo,
+        'planowany_czas' => $task->planowany_czas,
+        'faktyczny_czas' => null,
+        'status' => 'nowe',
+        'godzina_start' => $task->godzina_start,
+        'godzina_koniec' => $task->godzina_koniec,
+        'pozycja_harmonogram' => null
+    ]);
+
+    wp_send_json_success(['new_id' => $wpdb->insert_id]);
 });
 
 // Pobierz zadania dla zakresu dat
@@ -424,22 +471,22 @@ add_action('wp_ajax_zadaniomat_get_tasks', function() {
     wp_send_json_success(['tasks' => $tasks]);
 });
 
-// Pobierz nieukończone zadania
+// Pobierz nieukończone zadania (zaległe - status nowe lub rozpoczete)
 add_action('wp_ajax_zadaniomat_get_overdue', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
-    
+
     $tasks = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM $table WHERE dzien < %s AND (status IS NULL OR status < 0.8) ORDER BY dzien ASC",
+        "SELECT * FROM $table WHERE dzien < %s AND (status IS NULL OR status = 'nowe' OR status = 'rozpoczete') ORDER BY dzien ASC",
         date('Y-m-d')
     ));
-    
+
     foreach ($tasks as &$task) {
         $task->kategoria_label = zadaniomat_get_kategoria_label($task->kategoria);
     }
-    
+
     wp_send_json_success(['tasks' => $tasks]);
 });
 
@@ -568,148 +615,6 @@ add_action('wp_ajax_zadaniomat_save_cel_rok', function() {
     }
     
     wp_send_json_success();
-});
-
-// Zapisz planowane godziny dziennie dla kategorii
-add_action('wp_ajax_zadaniomat_save_planowane_godziny', function() {
-    global $wpdb;
-    check_ajax_referer('zadaniomat_ajax', 'nonce');
-
-    $table = $wpdb->prefix . 'zadaniomat_cele_rok';
-    $rok_id = intval($_POST['rok_id']);
-    $kategoria = sanitize_text_field($_POST['kategoria']);
-    $godziny = floatval($_POST['planowane_godziny_dziennie']);
-
-    $existing = $wpdb->get_row($wpdb->prepare(
-        "SELECT id FROM $table WHERE rok_id = %d AND kategoria = %s", $rok_id, $kategoria
-    ));
-
-    if ($existing) {
-        $wpdb->update($table, ['planowane_godziny_dziennie' => $godziny], ['id' => $existing->id]);
-    } else {
-        $wpdb->insert($table, ['rok_id' => $rok_id, 'kategoria' => $kategoria, 'planowane_godziny_dziennie' => $godziny]);
-    }
-
-    wp_send_json_success();
-});
-
-// Pobierz wszystkie lata i okresy
-add_action('wp_ajax_zadaniomat_get_all_roki_okresy', function() {
-    global $wpdb;
-    check_ajax_referer('zadaniomat_ajax', 'nonce');
-
-    $table_roki = $wpdb->prefix . 'zadaniomat_roki';
-    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
-
-    $roki = $wpdb->get_results("SELECT * FROM $table_roki ORDER BY data_start DESC");
-    $okresy = $wpdb->get_results("SELECT * FROM $table_okresy ORDER BY data_start DESC");
-
-    wp_send_json_success([
-        'roki' => $roki,
-        'okresy' => $okresy
-    ]);
-});
-
-// Pobierz statystyki godzin dla okresu/roku
-add_action('wp_ajax_zadaniomat_get_stats', function() {
-    global $wpdb;
-    check_ajax_referer('zadaniomat_ajax', 'nonce');
-
-    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
-    $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
-    $table_roki = $wpdb->prefix . 'zadaniomat_roki';
-    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
-
-    $filter_type = sanitize_text_field($_POST['filter_type']); // 'rok' lub 'okres'
-    $filter_id = intval($_POST['filter_id']);
-
-    // Pobierz daty
-    if ($filter_type === 'rok') {
-        $filter_data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_roki WHERE id = %d", $filter_id));
-        $rok_id = $filter_id;
-    } else {
-        $filter_data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_okresy WHERE id = %d", $filter_id));
-        $rok_id = $filter_data ? $filter_data->rok_id : null;
-    }
-
-    if (!$filter_data) {
-        wp_send_json_error(['message' => 'Nie znaleziono okresu/roku']);
-        return;
-    }
-
-    $start_date = $filter_data->data_start;
-    $end_date = $filter_data->data_koniec;
-
-    // Policz dni w okresie
-    $date1 = new DateTime($start_date);
-    $date2 = new DateTime($end_date);
-    $dni_w_okresie = $date2->diff($date1)->days + 1;
-
-    // Pobierz statystyki per kategoria
-    $stats = $wpdb->get_results($wpdb->prepare(
-        "SELECT
-            kategoria,
-            COUNT(*) as liczba_zadan,
-            SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_czas_suma,
-            SUM(COALESCE(planowany_czas, 0)) as planowany_czas_suma,
-            SUM(CASE WHEN status >= 1 THEN 1 ELSE 0 END) as ukonczone
-        FROM $table_zadania
-        WHERE dzien BETWEEN %s AND %s
-        GROUP BY kategoria",
-        $start_date, $end_date
-    ));
-
-    // Pobierz planowane godziny dziennie per kategoria
-    $planowane = [];
-    if ($rok_id) {
-        $planowane_raw = $wpdb->get_results($wpdb->prepare(
-            "SELECT kategoria, planowane_godziny_dziennie FROM $table_cele_rok WHERE rok_id = %d",
-            $rok_id
-        ));
-        foreach ($planowane_raw as $p) {
-            $planowane[$p->kategoria] = floatval($p->planowane_godziny_dziennie);
-        }
-    }
-
-    // Przygotuj dane wynikowe
-    $stats_by_kategoria = [];
-    foreach ($stats as $s) {
-        $planowane_dziennie = isset($planowane[$s->kategoria]) ? $planowane[$s->kategoria] : 1.0;
-        $planowane_w_okresie = $planowane_dziennie * $dni_w_okresie * 60; // w minutach
-        $faktyczny = intval($s->faktyczny_czas_suma);
-        $procent = $planowane_w_okresie > 0 ? round(($faktyczny / $planowane_w_okresie) * 100, 1) : 0;
-
-        $stats_by_kategoria[$s->kategoria] = [
-            'liczba_zadan' => intval($s->liczba_zadan),
-            'ukonczone' => intval($s->ukonczone),
-            'faktyczny_czas' => $faktyczny,
-            'planowany_czas' => intval($s->planowany_czas_suma),
-            'planowane_godziny_dziennie' => $planowane_dziennie,
-            'planowane_w_okresie' => $planowane_w_okresie,
-            'procent_realizacji' => $procent
-        ];
-    }
-
-    // Podsumowanie ogólne
-    $total_faktyczny = array_sum(array_column($stats_by_kategoria, 'faktyczny_czas'));
-    $total_planowany = array_sum(array_column($stats_by_kategoria, 'planowany_czas'));
-    $total_zadan = array_sum(array_column($stats_by_kategoria, 'liczba_zadan'));
-    $total_ukonczone = array_sum(array_column($stats_by_kategoria, 'ukonczone'));
-
-    wp_send_json_success([
-        'filter_type' => $filter_type,
-        'filter_data' => $filter_data,
-        'dni_w_okresie' => $dni_w_okresie,
-        'rok_id' => $rok_id,
-        'stats_by_kategoria' => $stats_by_kategoria,
-        'total' => [
-            'faktyczny_czas' => $total_faktyczny,
-            'planowany_czas' => $total_planowany,
-            'liczba_zadan' => $total_zadan,
-            'ukonczone' => $total_ukonczone
-        ],
-        'planowane_godziny' => $planowane
-    ]);
 });
 
 // Pobierz kategorie
@@ -1195,8 +1100,28 @@ add_action('admin_head', function() {
             .day-table tr:last-child td { border-bottom: none; }
             .day-table tr:hover { background: #fafafa; }
             
-            .status-done { background-color: #d4edda !important; }
-            .status-done td strong { text-decoration: line-through; color: #666; }
+            /* Status wierszy zadań */
+            .status-nowe { background-color: #fff !important; }
+            .status-rozpoczete { background-color: #fff3cd !important; }
+            .status-zakonczone { background-color: #d4edda !important; }
+            .status-zakonczone td strong { text-decoration: line-through; color: #666; }
+            .status-anulowane { background-color: #f8d7da !important; }
+            .status-anulowane td strong { text-decoration: line-through; color: #999; }
+
+            /* Dropdown statusu */
+            .status-select {
+                padding: 4px 8px;
+                border-radius: 6px;
+                border: 1px solid #ddd;
+                font-size: 12px;
+                cursor: pointer;
+                min-width: 100px;
+            }
+            .status-select.status-nowe { background: #f8f9fa; border-color: #dee2e6; }
+            .status-select.status-rozpoczete { background: #fff3cd; border-color: #ffc107; color: #856404; }
+            .status-select.status-zakonczone { background: #d4edda; border-color: #28a745; color: #155724; }
+            .status-select.status-anulowane { background: #f8d7da; border-color: #dc3545; color: #721c24; }
+
             .task-done-checkbox {
                 width: 20px;
                 height: 20px;
@@ -1774,13 +1699,27 @@ add_action('admin_head', function() {
             .harmonogram-task.obsluga_telefoniczna { border-left-color: #e91e63; }
             .harmonogram-task.sprawy_organizacyjne { border-left-color: #607d8b; }
 
-            .harmonogram-task-done {
+            /* Statusy w harmonogramie */
+            .harmonogram-status-nowe { }
+            .harmonogram-status-rozpoczete {
+                background: #fff3cd !important;
+                border-color: #ffc107 !important;
+            }
+            .harmonogram-status-zakonczone {
                 background: #d4edda !important;
                 border-color: #28a745 !important;
             }
-            .harmonogram-task-done .harmonogram-task-name {
+            .harmonogram-status-zakonczone .harmonogram-task-name {
                 text-decoration: line-through;
                 color: #666;
+            }
+            .harmonogram-status-anulowane {
+                background: #f8d7da !important;
+                border-color: #dc3545 !important;
+            }
+            .harmonogram-status-anulowane .harmonogram-task-name {
+                text-decoration: line-through;
+                color: #999;
             }
             .harmonogram-task-checkbox {
                 width: 18px;
@@ -1791,6 +1730,10 @@ add_action('admin_head', function() {
             }
             .done-badge {
                 color: #28a745;
+                font-weight: bold;
+            }
+            .anulowane-badge {
+                color: #dc3545;
                 font-weight: bold;
             }
 
@@ -2293,241 +2236,6 @@ add_action('admin_head', function() {
             .floating-timer.overtime {
                 background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             }
-
-            /* ========== STATYSTYKI I FILTRY ========== */
-            .stats-filters-section {
-                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-                border-radius: 12px;
-                padding: 20px;
-                margin-bottom: 20px;
-            }
-            .stats-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 15px;
-                flex-wrap: wrap;
-                gap: 15px;
-            }
-            .stats-header h2 {
-                margin: 0;
-                font-size: 18px;
-                color: #333;
-            }
-            .stats-filters {
-                display: flex;
-                gap: 10px;
-                align-items: center;
-                flex-wrap: wrap;
-            }
-            .stats-filters select {
-                padding: 8px 12px;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                font-size: 14px;
-                background: #fff;
-                min-width: 200px;
-            }
-            .stats-filters select:focus {
-                border-color: #667eea;
-                outline: none;
-            }
-            .filter-info {
-                font-size: 13px;
-                color: #666;
-                background: #fff;
-                padding: 6px 12px;
-                border-radius: 6px;
-            }
-
-            /* Podsumowanie ogólne */
-            .stats-summary {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-                gap: 15px;
-                margin-bottom: 20px;
-            }
-            .stat-box {
-                background: #fff;
-                padding: 15px;
-                border-radius: 10px;
-                text-align: center;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            }
-            .stat-box .stat-value {
-                font-size: 28px;
-                font-weight: 700;
-                color: #667eea;
-            }
-            .stat-box .stat-label {
-                font-size: 12px;
-                color: #888;
-                margin-top: 5px;
-            }
-            .stat-box.hours .stat-value { color: #28a745; }
-            .stat-box.tasks .stat-value { color: #17a2b8; }
-            .stat-box.completed .stat-value { color: #ffc107; }
-
-            /* Statystyki per kategoria */
-            .stats-categories {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                gap: 15px;
-            }
-            .stat-category-card {
-                background: #fff;
-                border-radius: 10px;
-                padding: 15px;
-                border-left: 4px solid #667eea;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            }
-            .stat-category-card.zapianowany { border-left-color: #28a745; }
-            .stat-category-card.klejpan { border-left-color: #17a2b8; }
-            .stat-category-card.marka_langer { border-left-color: #ffc107; }
-            .stat-category-card.marketing_construction { border-left-color: #dc3545; }
-            .stat-category-card.fjo { border-left-color: #6f42c1; }
-            .stat-category-card.obsluga_telefoniczna { border-left-color: #e91e63; }
-            .stat-category-card.sprawy_organizacyjne { border-left-color: #6c757d; }
-
-            .stat-category-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 10px;
-            }
-            .stat-category-header h4 {
-                margin: 0;
-                font-size: 14px;
-                color: #333;
-            }
-            .stat-category-header .edit-hours-btn {
-                background: none;
-                border: none;
-                color: #667eea;
-                cursor: pointer;
-                font-size: 12px;
-                padding: 4px 8px;
-                border-radius: 4px;
-            }
-            .stat-category-header .edit-hours-btn:hover {
-                background: #f0f0f0;
-            }
-
-            .stat-category-info {
-                display: flex;
-                gap: 15px;
-                margin-bottom: 12px;
-                font-size: 13px;
-                color: #666;
-            }
-            .stat-category-info span {
-                display: flex;
-                align-items: center;
-                gap: 4px;
-            }
-
-            /* Suwak postępu */
-            .progress-container {
-                margin-top: 10px;
-            }
-            .progress-bar-bg {
-                height: 20px;
-                background: #e9ecef;
-                border-radius: 10px;
-                overflow: hidden;
-                position: relative;
-            }
-            .progress-bar-fill {
-                height: 100%;
-                border-radius: 10px;
-                transition: width 0.5s ease;
-                position: relative;
-            }
-            .progress-bar-fill.low { background: linear-gradient(90deg, #dc3545 0%, #f5576c 100%); }
-            .progress-bar-fill.medium { background: linear-gradient(90deg, #ffc107 0%, #fd7e14 100%); }
-            .progress-bar-fill.high { background: linear-gradient(90deg, #28a745 0%, #20c997 100%); }
-            .progress-bar-fill.over { background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); }
-
-            .progress-label {
-                position: absolute;
-                right: 10px;
-                top: 50%;
-                transform: translateY(-50%);
-                font-size: 12px;
-                font-weight: 600;
-                color: #333;
-            }
-            .progress-bar-fill .progress-label {
-                color: #fff;
-                right: auto;
-                left: 10px;
-            }
-
-            .progress-details {
-                display: flex;
-                justify-content: space-between;
-                font-size: 11px;
-                color: #888;
-                margin-top: 5px;
-            }
-
-            /* Edycja planowanych godzin */
-            .hours-edit-row {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                margin-top: 8px;
-                padding-top: 8px;
-                border-top: 1px dashed #e0e0e0;
-            }
-            .hours-edit-row label {
-                font-size: 12px;
-                color: #666;
-            }
-            .hours-edit-row input {
-                width: 70px;
-                padding: 5px 8px;
-                border: 1px solid #ddd;
-                border-radius: 6px;
-                font-size: 13px;
-                text-align: center;
-            }
-            .hours-edit-row .btn-save-hours {
-                background: #28a745;
-                color: #fff;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 6px;
-                font-size: 12px;
-                cursor: pointer;
-            }
-            .hours-edit-row .btn-save-hours:hover {
-                background: #218838;
-            }
-
-            /* Toggle sekcji statystyk */
-            .stats-toggle-btn {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: #fff;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 8px;
-                cursor: pointer;
-                font-size: 14px;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                margin-bottom: 15px;
-            }
-            .stats-toggle-btn:hover {
-                opacity: 0.9;
-            }
-            .stats-content {
-                display: none;
-            }
-            .stats-content.visible {
-                display: block;
-            }
         </style>
         <?php
     }
@@ -2572,55 +2280,7 @@ function zadaniomat_page_main() {
         
         <!-- Overdue alerts container -->
         <div id="overdue-container"></div>
-
-        <!-- Sekcja statystyk i filtrów -->
-        <div class="stats-filters-section">
-            <button class="stats-toggle-btn" onclick="toggleStatsSection()">
-                📊 <span id="stats-toggle-text">Pokaż statystyki i postęp celów</span>
-            </button>
-
-            <div class="stats-content" id="stats-content">
-                <div class="stats-header">
-                    <h2>📊 Podsumowanie godzin i postęp celów</h2>
-                    <div class="stats-filters">
-                        <select id="stats-rok-filter" onchange="onRokFilterChange()">
-                            <option value="">-- Wybierz rok (90 dni) --</option>
-                        </select>
-                        <select id="stats-okres-filter" onchange="loadStats()">
-                            <option value="">-- Wybierz okres (2 tyg.) --</option>
-                        </select>
-                        <span class="filter-info" id="filter-info"></span>
-                    </div>
-                </div>
-
-                <!-- Podsumowanie ogólne -->
-                <div class="stats-summary" id="stats-summary">
-                    <div class="stat-box hours">
-                        <div class="stat-value" id="total-hours">0h</div>
-                        <div class="stat-label">Przepracowane godziny</div>
-                    </div>
-                    <div class="stat-box tasks">
-                        <div class="stat-value" id="total-tasks">0</div>
-                        <div class="stat-label">Liczba zadań</div>
-                    </div>
-                    <div class="stat-box completed">
-                        <div class="stat-value" id="total-completed">0</div>
-                        <div class="stat-label">Ukończonych</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="total-days">0</div>
-                        <div class="stat-label">Dni w okresie</div>
-                    </div>
-                </div>
-
-                <!-- Statystyki per kategoria -->
-                <h3 style="margin: 20px 0 15px; font-size: 16px; color: #333;">📈 Postęp celów wg kategorii</h3>
-                <div class="stats-categories" id="stats-categories">
-                    <p style="color: #888; text-align: center;">Wybierz rok lub okres aby zobaczyć statystyki...</p>
-                </div>
-            </div>
-        </div>
-
+        
         <div class="main-layout">
             <!-- SIDEBAR -->
             <div class="sidebar">
@@ -2819,14 +2479,7 @@ function zadaniomat_page_main() {
         var daysWithTasks = [];
         var tasksCache = {};
         var copiedTask = null; // Skopiowane zadanie
-
-        // State dla statystyk
-        var allRoki = [];
-        var allOkresy = [];
-        var currentRokId = <?php echo $current_rok ? $current_rok->id : 'null'; ?>;
-        var currentOkresId = <?php echo $current_okres ? $current_okres->id : 'null'; ?>;
-        var statsVisible = false;
-
+        
         // ==================== INIT ====================
         $(document).ready(function() {
             renderCalendar();
@@ -2835,196 +2488,7 @@ function zadaniomat_page_main() {
             updateDateInfo();
             bindEvents();
             checkShowHarmonogram();
-            loadRokiOkresy(); // Załaduj lata i okresy dla filtrów
         });
-
-        // ==================== STATYSTYKI ====================
-        window.toggleStatsSection = function() {
-            statsVisible = !statsVisible;
-            var $content = $('#stats-content');
-            var $text = $('#stats-toggle-text');
-
-            if (statsVisible) {
-                $content.addClass('visible');
-                $text.text('Ukryj statystyki');
-                // Jeśli jeszcze nie załadowano, załaduj z aktualnym rokiem
-                if (currentRokId && !$('#stats-rok-filter').val()) {
-                    $('#stats-rok-filter').val(currentRokId);
-                    onRokFilterChange();
-                }
-            } else {
-                $content.removeClass('visible');
-                $text.text('Pokaż statystyki i postęp celów');
-            }
-        };
-
-        window.loadRokiOkresy = function() {
-            $.post(ajaxurl, {
-                action: 'zadaniomat_get_all_roki_okresy',
-                nonce: nonce
-            }, function(response) {
-                if (response.success) {
-                    allRoki = response.data.roki;
-                    allOkresy = response.data.okresy;
-                    renderRokiSelect();
-                }
-            });
-        };
-
-        function renderRokiSelect() {
-            var html = '<option value="">-- Wybierz rok (90 dni) --</option>';
-            allRoki.forEach(function(rok) {
-                var selected = rok.id == currentRokId ? 'selected' : '';
-                html += '<option value="' + rok.id + '" ' + selected + '>' + rok.nazwa + ' (' + formatDate(rok.data_start) + ' - ' + formatDate(rok.data_koniec) + ')</option>';
-            });
-            $('#stats-rok-filter').html(html);
-        }
-
-        window.onRokFilterChange = function() {
-            var rokId = $('#stats-rok-filter').val();
-            var html = '<option value="">-- Wszystkie okresy --</option>';
-
-            if (rokId) {
-                var okresy = allOkresy.filter(function(o) { return o.rok_id == rokId; });
-                okresy.forEach(function(okres) {
-                    var selected = okres.id == currentOkresId ? 'selected' : '';
-                    html += '<option value="' + okres.id + '" ' + selected + '>' + okres.nazwa + ' (' + formatDate(okres.data_start) + ' - ' + formatDate(okres.data_koniec) + ')</option>';
-                });
-            }
-            $('#stats-okres-filter').html(html);
-            loadStats();
-        };
-
-        window.loadStats = function() {
-            var rokId = $('#stats-rok-filter').val();
-            var okresId = $('#stats-okres-filter').val();
-
-            if (!rokId && !okresId) {
-                $('#stats-categories').html('<p style="color: #888; text-align: center;">Wybierz rok lub okres aby zobaczyć statystyki...</p>');
-                return;
-            }
-
-            var filterType = okresId ? 'okres' : 'rok';
-            var filterId = okresId || rokId;
-
-            $.post(ajaxurl, {
-                action: 'zadaniomat_get_stats',
-                nonce: nonce,
-                filter_type: filterType,
-                filter_id: filterId
-            }, function(response) {
-                if (response.success) {
-                    renderStats(response.data);
-                }
-            });
-        };
-
-        function renderStats(data) {
-            // Aktualizuj info o filtrze
-            var filterText = data.filter_data.nazwa + ' (' + formatDate(data.filter_data.data_start) + ' - ' + formatDate(data.filter_data.data_koniec) + ')';
-            $('#filter-info').text(filterText);
-
-            // Podsumowanie ogólne
-            var totalHours = (data.total.faktyczny_czas / 60).toFixed(1);
-            $('#total-hours').text(totalHours + 'h');
-            $('#total-tasks').text(data.total.liczba_zadan);
-            $('#total-completed').text(data.total.ukonczone);
-            $('#total-days').text(data.dni_w_okresie);
-
-            // Statystyki per kategoria
-            var html = '';
-            Object.keys(kategorie).forEach(function(kat) {
-                var stats = data.stats_by_kategoria[kat] || {
-                    liczba_zadan: 0,
-                    ukonczone: 0,
-                    faktyczny_czas: 0,
-                    planowane_godziny_dziennie: 1.0,
-                    planowane_w_okresie: data.dni_w_okresie * 60,
-                    procent_realizacji: 0
-                };
-
-                var planowaneGodziny = stats.planowane_godziny_dziennie || 1.0;
-                var planowaneWOkresieMin = planowaneGodziny * data.dni_w_okresie * 60;
-                var faktycznyMin = stats.faktyczny_czas || 0;
-                var procent = planowaneWOkresieMin > 0 ? Math.round((faktycznyMin / planowaneWOkresieMin) * 100) : 0;
-
-                var progressClass = 'low';
-                if (procent >= 100) progressClass = 'over';
-                else if (procent >= 70) progressClass = 'high';
-                else if (procent >= 40) progressClass = 'medium';
-
-                var progressWidth = Math.min(procent, 100);
-
-                html += '<div class="stat-category-card ' + kat + '">';
-                html += '  <div class="stat-category-header">';
-                html += '    <h4>' + kategorie[kat] + '</h4>';
-                html += '    <button class="edit-hours-btn" onclick="toggleHoursEdit(\'' + kat + '\')">⏱️ Ustaw h/dzień</button>';
-                html += '  </div>';
-                html += '  <div class="stat-category-info">';
-                html += '    <span>📋 ' + stats.liczba_zadan + ' zadań</span>';
-                html += '    <span>✅ ' + stats.ukonczone + ' ukończ.</span>';
-                html += '    <span>⏱️ ' + (faktycznyMin / 60).toFixed(1) + 'h przeprac.</span>';
-                html += '  </div>';
-                html += '  <div class="progress-container">';
-                html += '    <div class="progress-bar-bg">';
-                html += '      <div class="progress-bar-fill ' + progressClass + '" style="width: ' + progressWidth + '%">';
-                if (procent >= 20) {
-                    html += '        <span class="progress-label">' + procent + '%</span>';
-                }
-                html += '      </div>';
-                if (procent < 20) {
-                    html += '      <span class="progress-label">' + procent + '%</span>';
-                }
-                html += '    </div>';
-                html += '    <div class="progress-details">';
-                html += '      <span>Cel: ' + planowaneGodziny + 'h/dzień × ' + data.dni_w_okresie + ' dni = ' + (planowaneWOkresieMin / 60).toFixed(0) + 'h</span>';
-                html += '      <span>Zrobione: ' + (faktycznyMin / 60).toFixed(1) + 'h</span>';
-                html += '    </div>';
-                html += '  </div>';
-                html += '  <div class="hours-edit-row" id="hours-edit-' + kat + '" style="display: none;">';
-                html += '    <label>Planowane h/dzień:</label>';
-                html += '    <input type="number" step="0.5" min="0" max="24" value="' + planowaneGodziny + '" id="hours-input-' + kat + '">';
-                html += '    <button class="btn-save-hours" onclick="savePlanowaneGodziny(\'' + kat + '\')">Zapisz</button>';
-                html += '  </div>';
-                html += '</div>';
-            });
-
-            $('#stats-categories').html(html);
-        }
-
-        window.toggleHoursEdit = function(kategoria) {
-            var $row = $('#hours-edit-' + kategoria);
-            $row.toggle();
-        };
-
-        window.savePlanowaneGodziny = function(kategoria) {
-            var rokId = $('#stats-rok-filter').val();
-            if (!rokId) {
-                showToast('Najpierw wybierz rok', 'error');
-                return;
-            }
-
-            var godziny = parseFloat($('#hours-input-' + kategoria).val()) || 1.0;
-
-            $.post(ajaxurl, {
-                action: 'zadaniomat_save_planowane_godziny',
-                nonce: nonce,
-                rok_id: rokId,
-                kategoria: kategoria,
-                planowane_godziny_dziennie: godziny
-            }, function(response) {
-                if (response.success) {
-                    showToast('Zapisano planowane godziny!', 'success');
-                    $('#hours-edit-' + kategoria).hide();
-                    loadStats(); // Odśwież statystyki
-                }
-            });
-        };
-
-        function formatDate(dateStr) {
-            var d = new Date(dateStr);
-            return d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear();
-        }
         
         // ==================== CALENDAR ====================
         window.renderCalendar = function() {
@@ -3297,8 +2761,8 @@ function zadaniomat_page_main() {
         };
         
         window.renderTaskRow = function(t, day) {
-            var isDone = t.status !== null && parseFloat(t.status) >= 1;
-            var statusClass = isDone ? 'status-done' : '';
+            var taskStatus = t.status || 'nowe';
+            var statusClass = 'status-' + taskStatus;
 
             var planowany = parseInt(t.planowany_czas) || 0;
             var faktyczny = parseInt(t.faktyczny_czas) || 0;
@@ -3315,7 +2779,7 @@ function zadaniomat_page_main() {
             html += '<div class="timer-cell-content">';
             html += '<span>' + planowany + '</span>';
             if (planowany > 0) {
-                html += '<button class="timer-btn' + (isActiveTimer ? ' running' : '') + '" onclick="startTimer(' + t.id + ', \'' + escapeHtml(t.zadanie).replace(/'/g, "\\'") + '\', ' + planowany + ')" title="' + (isActiveTimer ? 'Timer działa' : 'Uruchom timer') + '">';
+                html += '<button class="timer-btn' + (isActiveTimer ? ' running' : '') + '" onclick="startTimer(' + t.id + ', \'' + escapeHtml(t.zadanie).replace(/'/g, "\\'") + '\', ' + planowany + ', ' + faktyczny + ')" title="' + (isActiveTimer ? 'Timer działa' : 'Uruchom timer') + '">';
                 html += isActiveTimer ? '⏸️' : '▶️';
                 html += '</button>';
             }
@@ -3337,11 +2801,17 @@ function zadaniomat_page_main() {
             }
             html += '</div></td>';
 
+            // Status - dropdown ze statusami
             html += '<td class="status-cell">';
-            html += '<input type="checkbox" class="task-done-checkbox" data-id="' + t.id + '" ' + (isDone ? 'checked' : '') + ' onchange="toggleTaskDone(' + t.id + ', this.checked)" title="' + (isDone ? 'Oznacz jako niezrobione' : 'Oznacz jako zrobione') + '">';
+            html += '<select class="status-select status-' + taskStatus + '" onchange="changeTaskStatus(' + t.id + ', this.value)">';
+            html += '<option value="nowe"' + (taskStatus === 'nowe' ? ' selected' : '') + '>Nowe</option>';
+            html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
+            html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
+            html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
+            html += '</select>';
             html += '</td>';
             html += '<td class="action-buttons">';
-            html += '<button class="btn-copy" onclick="copyTask(' + t.id + ', this)" title="Kopiuj">📄</button>';
+            html += '<button class="btn-copy" onclick="copyTaskToDate(' + t.id + ')" title="Kopiuj na inny dzień">📄</button>';
             html += '<button class="btn-edit" onclick="editTask(' + t.id + ', this)" title="Edytuj">✏️</button>';
             html += '<button class="btn-delete" onclick="deleteTask(' + t.id + ')" title="Usuń">🗑️</button>';
             html += '</td></tr>';
@@ -3617,31 +3087,63 @@ function zadaniomat_page_main() {
         window.renderOverdueTasks = function(tasks) {
             var html = '<div class="overdue-alert">';
             html += '<h3>⚠️ Masz ' + tasks.length + ' nieukończonych zadań z przeszłości!</h3>';
-            
+
             tasks.forEach(function(t) {
                 var d = new Date(t.dzien);
+                var taskStatus = t.status || 'nowe';
                 html += '<div class="overdue-task" data-task-id="' + t.id + '">';
                 html += '<div class="overdue-task-info">';
                 html += '<div class="task-name">' + escapeHtml(t.zadanie) + '</div>';
                 html += '<div class="task-meta">📅 ' + d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear() + ' • ';
                 html += '<span class="kategoria-badge ' + t.kategoria + '">' + t.kategoria_label + '</span>';
-                if (t.status !== null) html += ' • Status: ' + t.status;
                 html += '</div></div>';
                 html += '<div class="overdue-task-actions">';
-                html += '<span style="font-size:12px;color:#666;">Przenieś na:</span>';
-                html += '<input type="date" class="move-date" value="' + today + '" min="' + today + '">';
-                html += '<button class="btn-move" onclick="moveOverdueTask(' + t.id + ', this)">📅 Przenieś</button>';
-                html += '<span style="font-size:12px;color:#666;margin-left:10px;">lub status:</span>';
-                html += '<select class="overdue-status-select" onchange="updateOverdueStatus(' + t.id + ', this.value)">';
-                html += '<option value="">-</option>';
-                ['0', '0.5', '0.8', '0.9', '1'].forEach(function(s) {
-                    html += '<option value="' + s + '"' + (t.status == s ? ' selected' : '') + '>' + s + (s == '1' ? ' ✓' : '') + '</option>';
-                });
-                html += '</select></div></div>';
+
+                // Status - dropdown ze statusami
+                html += '<span style="font-size:12px;color:#666;">Status:</span>';
+                html += '<select class="status-select status-' + taskStatus + '" onchange="updateOverdueStatus(' + t.id + ', this.value)">';
+                html += '<option value="nowe"' + (taskStatus === 'nowe' ? ' selected' : '') + '>Nowe</option>';
+                html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
+                html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
+                html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
+                html += '</select>';
+
+                // Kopiuj na inny dzień
+                html += '<span style="font-size:12px;color:#666;margin-left:15px;">Kopiuj na:</span>';
+                html += '<input type="date" class="copy-date" value="' + today + '" min="' + today + '">';
+                html += '<button class="btn-copy" onclick="copyOverdueTask(' + t.id + ', this)" title="Skopiuj na wybrany dzień">📄 Kopiuj</button>';
+
+                html += '</div></div>';
             });
-            
+
             html += '</div>';
             $('#overdue-container').html(html);
+        };
+
+        // Kopiuj zaległe zadanie na nowy dzień
+        window.copyOverdueTask = function(taskId, btn) {
+            var $container = $(btn).closest('.overdue-task');
+            var targetDate = $container.find('.copy-date').val();
+
+            if (!targetDate) {
+                showToast('Wybierz datę!', 'error');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_copy_task_to_date',
+                nonce: nonce,
+                id: taskId,
+                target_date: targetDate
+            }, function(response) {
+                if (response.success) {
+                    showToast('Zadanie skopiowane na ' + targetDate, 'success');
+                    loadTasks();
+                    loadCalendarDots();
+                } else {
+                    alert('Błąd podczas kopiowania: ' + (response.data || 'Nieznany błąd'));
+                }
+            });
         };
         
         window.moveOverdueTask = function(id, btn) {
@@ -3670,7 +3172,7 @@ function zadaniomat_page_main() {
         
         window.updateOverdueStatus = function(id, status) {
             if (status === '') return;
-            
+
             $.post(ajaxurl, {
                 action: 'zadaniomat_quick_update',
                 nonce: nonce,
@@ -3679,14 +3181,21 @@ function zadaniomat_page_main() {
                 value: status
             }, function(response) {
                 if (response.success) {
-                    if (parseFloat(status) >= 0.8) {
+                    // Ukryj zadanie jeśli status to zakonczone lub anulowane
+                    if (status === 'zakonczone' || status === 'anulowane') {
                         var $container = $('[data-task-id="' + id + '"].overdue-task');
                         $container.slideUp(300, function() {
                             $(this).remove();
                             if ($('.overdue-task').length === 0) $('.overdue-alert').slideUp();
                         });
                     }
-                    showToast('Status zaktualizowany!', 'success');
+                    var statusLabels = {
+                        'nowe': 'Nowe',
+                        'rozpoczete': 'Rozpoczęte',
+                        'zakonczone': 'Zakończone',
+                        'anulowane': 'Anulowane'
+                    };
+                    showToast('Status: ' + statusLabels[status], 'success');
                     loadTasks();
                 }
             });
@@ -4309,15 +3818,17 @@ function zadaniomat_page_main() {
             var taskId = isStale ? 'stale-' + task.id : task.id;
             var draggable = 'draggable="true" ondragstart="handleDragStart(event, \'' + taskId + '\')"';
 
-            // Sprawdź czy zadanie jest wykonane
-            var isDone = !isStale && task.status !== null && parseFloat(task.status) >= 1;
-            var doneClass = isDone ? ' harmonogram-task-done' : '';
+            // Sprawdź status zadania
+            var taskStatus = !isStale ? (task.status || 'nowe') : 'nowe';
+            var isDone = taskStatus === 'zakonczone';
+            var isAnulowane = taskStatus === 'anulowane';
+            var statusClass = !isStale ? ' harmonogram-status-' + taskStatus : '';
 
-            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + doneClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
+            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + statusClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
 
-            // Checkbox dla oznaczenia wykonania (tylko dla zwykłych zadań)
+            // Checkbox dla szybkiego oznaczenia jako zakończone (tylko dla zwykłych zadań)
             if (!isStale) {
-                html += '<input type="checkbox" class="harmonogram-task-checkbox" ' + (isDone ? 'checked' : '') + ' onchange="toggleHarmonogramTaskDone(' + task.id + ', this.checked)" title="Oznacz jako ' + (isDone ? 'niewykonane' : 'wykonane') + '">';
+                html += '<input type="checkbox" class="harmonogram-task-checkbox" ' + (isDone ? 'checked' : '') + ' onchange="toggleHarmonogramTaskDone(' + task.id + ', this.checked)" title="Oznacz jako ' + (isDone ? 'niewykonane' : 'zakończone') + '">';
             }
 
             html += '<div class="harmonogram-task-info">';
@@ -4332,6 +3843,9 @@ function zadaniomat_page_main() {
             }
             if (isDone) {
                 html += '<span class="done-badge">✅</span>';
+            }
+            if (isAnulowane) {
+                html += '<span class="anulowane-badge">❌</span>';
             }
             html += '</div></div>';
 
@@ -4362,10 +3876,8 @@ function zadaniomat_page_main() {
             return html;
         };
 
-        // Przełącz status wykonania zadania (wspólna funkcja)
-        window.toggleTaskDone = function(taskId, isDone) {
-            var newStatus = isDone ? '1' : '0';
-
+        // Zmień status zadania (nowe, rozpoczete, zakonczone, anulowane)
+        window.changeTaskStatus = function(taskId, newStatus) {
             $.post(ajaxurl, {
                 action: 'zadaniomat_quick_update',
                 nonce: nonce,
@@ -4384,13 +3896,58 @@ function zadaniomat_page_main() {
                     renderHarmonogram();
                     loadTasks();
 
-                    showToast(isDone ? 'Zadanie wykonane!' : 'Zadanie oznaczone jako niewykonane', 'success');
+                    var statusLabels = {
+                        'nowe': 'Nowe',
+                        'rozpoczete': 'Rozpoczęte',
+                        'zakonczone': 'Zakończone',
+                        'anulowane': 'Anulowane'
+                    };
+                    showToast('Status: ' + statusLabels[newStatus], 'success');
                 }
             });
         };
 
+        // Przełącz status wykonania zadania (dla harmonogramu - checkbox)
+        window.toggleTaskDone = function(taskId, isDone) {
+            var newStatus = isDone ? 'zakonczone' : 'nowe';
+            changeTaskStatus(taskId, newStatus);
+        };
+
         // Alias dla harmonogramu
         window.toggleHarmonogramTaskDone = window.toggleTaskDone;
+
+        // Kopiuj zadanie na inny dzień (z wyborem daty)
+        window.copyTaskToDate = function(taskId) {
+            var task = harmonogramTasks.find(function(t) { return t.id == taskId; });
+            if (!task) {
+                // Spróbuj znaleźć w głównej liście zadań (nie tylko harmonogramTasks)
+                // Pobierz dane przez AJAX
+            }
+
+            var targetDate = prompt('Na jaki dzień skopiować zadanie?\n(format: RRRR-MM-DD)', addDays(today, 1));
+            if (!targetDate) return;
+
+            // Walidacja formatu daty
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+                alert('Nieprawidłowy format daty. Użyj formatu RRRR-MM-DD');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_copy_task_to_date',
+                nonce: nonce,
+                id: taskId,
+                target_date: targetDate
+            }, function(response) {
+                if (response.success) {
+                    showToast('Zadanie skopiowane na ' + targetDate, 'success');
+                    loadTasks();
+                    loadCalendarDots();
+                } else {
+                    alert('Błąd podczas kopiowania: ' + (response.data || 'Nieznany błąd'));
+                }
+            });
+        };
 
         // Aktualizuj godzinę zadania
         window.updateTaskTime = function(taskId, newTime, isStale) {
@@ -4738,7 +4295,10 @@ function zadaniomat_page_main() {
         };
 
         // Uruchom timer dla zadania
-        window.startTimer = function(taskId, taskName, plannedMinutes) {
+        // currentMinutes - już zapisany faktyczny_czas z bazy (kumulatywny stoper)
+        window.startTimer = function(taskId, taskName, plannedMinutes, currentMinutes) {
+            currentMinutes = currentMinutes || 0;
+
             // Jeśli już jest aktywny timer dla innego zadania
             if (activeTimer && activeTimer.taskId !== taskId) {
                 if (!confirm('Masz już uruchomiony timer dla innego zadania. Czy chcesz go zatrzymać i uruchomić nowy?')) {
@@ -4747,8 +4307,8 @@ function zadaniomat_page_main() {
                 stopTimer(false);
             }
 
-            // Jeśli to kontynuacja tego samego zadania
-            var elapsedBefore = 0;
+            // Jeśli to kontynuacja tego samego zadania (timer już działa)
+            var elapsedBefore = currentMinutes * 60; // Kumuluj z zapisanego czasu
             if (activeTimer && activeTimer.taskId === taskId) {
                 elapsedBefore = activeTimer.elapsedBefore + getElapsedSeconds();
                 clearInterval(activeTimer.interval);
@@ -4762,7 +4322,7 @@ function zadaniomat_page_main() {
                 taskName: taskName,
                 plannedTime: plannedMinutes * 60, // w sekundach
                 startTime: Date.now(),
-                elapsedBefore: elapsedBefore,
+                elapsedBefore: elapsedBefore, // Teraz zawiera już zapisany czas
                 interval: null,
                 notified: false
             };
@@ -4771,7 +4331,10 @@ function zadaniomat_page_main() {
             updateTimerDisplay();
             renderFloatingTimer();
 
-            showToast('⏱️ Timer uruchomiony: ' + taskName, 'success');
+            var msg = currentMinutes > 0
+                ? '⏱️ Timer uruchomiony: ' + taskName + ' (kontynuacja od ' + currentMinutes + ' min)'
+                : '⏱️ Timer uruchomiony: ' + taskName;
+            showToast(msg, 'success');
         };
 
         // Pobierz upływający czas w sekundach
@@ -4974,7 +4537,7 @@ function zadaniomat_page_main() {
                     nonce: nonce,
                     id: taskId,
                     field: 'status',
-                    value: '1'
+                    value: 'zakonczone'
                 });
             }
 
