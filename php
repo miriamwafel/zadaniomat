@@ -3515,6 +3515,7 @@ function zadaniomat_page_main() {
             loadRokiOkresy(); // Załaduj lata i okresy dla filtrów
             loadAllGoalsSummaries(); // Załaduj podsumowania celów
             checkUnmarkedGoals(); // Sprawdź nieoznaczone cele
+            restoreTimerFromStorage(); // Przywróć timer jeśli był aktywny
         });
 
         // ==================== STATYSTYKI ====================
@@ -5679,6 +5680,153 @@ function zadaniomat_page_main() {
         // ==================== TIMER / CZASOMIERZ ====================
         var activeTimer = null; // { taskId, taskName, plannedTime, startTime, elapsedBefore, interval, notified }
         var timerAudio = null;
+        var timerPopupWindow = null;
+        var TIMER_STORAGE_KEY = 'zadaniomat_active_timer';
+        var TIMER_AUTOSAVE_INTERVAL = 30; // Autosave do bazy co 30 sekund
+
+        // Zapisz timer do localStorage
+        window.saveTimerToStorage = function() {
+            if (!activeTimer) {
+                localStorage.removeItem(TIMER_STORAGE_KEY);
+                return;
+            }
+            var timerData = {
+                taskId: activeTimer.taskId,
+                taskName: activeTimer.taskName,
+                plannedTime: activeTimer.plannedTime,
+                startTime: activeTimer.startTime,
+                elapsedBefore: activeTimer.elapsedBefore,
+                notified: activeTimer.notified,
+                savedAt: Date.now()
+            };
+            localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(timerData));
+            // Synchronizuj z innymi oknami/zakładkami
+            window.dispatchEvent(new StorageEvent('storage', {
+                key: TIMER_STORAGE_KEY,
+                newValue: JSON.stringify(timerData)
+            }));
+        };
+
+        // Odzyskaj timer z localStorage
+        window.restoreTimerFromStorage = function() {
+            var saved = localStorage.getItem(TIMER_STORAGE_KEY);
+            if (!saved) return false;
+
+            try {
+                var timerData = JSON.parse(saved);
+                // Sprawdź czy dane są świeże (max 24h)
+                if (Date.now() - timerData.savedAt > 24 * 60 * 60 * 1000) {
+                    localStorage.removeItem(TIMER_STORAGE_KEY);
+                    return false;
+                }
+
+                initTimerAudio();
+                requestNotificationPermission();
+
+                activeTimer = {
+                    taskId: timerData.taskId,
+                    taskName: timerData.taskName,
+                    plannedTime: timerData.plannedTime,
+                    startTime: timerData.startTime,
+                    elapsedBefore: timerData.elapsedBefore,
+                    interval: null,
+                    notified: timerData.notified || false
+                };
+
+                activeTimer.interval = setInterval(updateTimerDisplay, 1000);
+                updateTimerDisplay();
+                renderFloatingTimer();
+
+                var totalMinutes = formatMinutes(getTotalElapsed());
+                showToast('⏱️ Timer wznowiony: ' + timerData.taskName + ' (' + totalMinutes + ' min)', 'success');
+                return true;
+            } catch (e) {
+                localStorage.removeItem(TIMER_STORAGE_KEY);
+                return false;
+            }
+        };
+
+        // Usuń timer ze storage
+        window.clearTimerStorage = function() {
+            localStorage.removeItem(TIMER_STORAGE_KEY);
+        };
+
+        // Otwórz timer w osobnym oknie (popup)
+        window.openTimerPopup = function() {
+            if (!activeTimer) {
+                showToast('Najpierw uruchom timer dla jakiegoś zadania', 'warning');
+                return;
+            }
+
+            // Zamknij poprzednie okno jeśli istnieje
+            if (timerPopupWindow && !timerPopupWindow.closed) {
+                timerPopupWindow.focus();
+                return;
+            }
+
+            var popupWidth = 300;
+            var popupHeight = 200;
+            var left = screen.width - popupWidth - 20;
+            var top = screen.height - popupHeight - 100;
+
+            timerPopupWindow = window.open('', 'zadaniomat_timer_popup',
+                'width=' + popupWidth + ',height=' + popupHeight + ',left=' + left + ',top=' + top +
+                ',resizable=yes,scrollbars=no,menubar=no,toolbar=no,location=no,status=no');
+
+            if (!timerPopupWindow) {
+                showToast('Popup został zablokowany. Odblokuj popup w przeglądarce.', 'warning');
+                return;
+            }
+
+            updateTimerPopup();
+        };
+
+        // Aktualizuj zawartość popup'a
+        window.updateTimerPopup = function() {
+            if (!timerPopupWindow || timerPopupWindow.closed) {
+                timerPopupWindow = null;
+                return;
+            }
+            if (!activeTimer) {
+                timerPopupWindow.close();
+                timerPopupWindow = null;
+                return;
+            }
+
+            var totalElapsed = getTotalElapsed();
+            var remaining = activeTimer.plannedTime - totalElapsed;
+            var isOvertime = remaining < 0;
+            var timeStr = formatTime(Math.abs(remaining));
+            if (isOvertime) timeStr = '+' + timeStr;
+
+            var bgColor = isOvertime ? '#ffe6e6' : '#e6ffe6';
+            var textColor = isOvertime ? '#cc0000' : '#006600';
+
+            var html = '<!DOCTYPE html><html><head><title>Timer - ' + escapeHtml(activeTimer.taskName) + '</title>';
+            html += '<style>';
+            html += 'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; ';
+            html += 'margin: 0; padding: 15px; background: ' + bgColor + '; text-align: center; }';
+            html += '.task-name { font-size: 12px; color: #666; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }';
+            html += '.timer-display { font-size: 48px; font-weight: bold; color: ' + textColor + '; font-family: monospace; }';
+            html += '.timer-label { font-size: 11px; color: #999; margin-top: 5px; }';
+            html += '.buttons { margin-top: 15px; display: flex; gap: 10px; justify-content: center; }';
+            html += '.btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }';
+            html += '.btn-done { background: #28a745; color: white; }';
+            html += '.btn-stop { background: #dc3545; color: white; }';
+            html += '</style></head><body>';
+            html += '<div class="task-name">' + escapeHtml(activeTimer.taskName) + '</div>';
+            html += '<div class="timer-display">' + timeStr + '</div>';
+            html += '<div class="timer-label">' + (isOvertime ? 'PRZEKROCZONO CZAS' : 'pozostało') + '</div>';
+            html += '<div class="buttons">';
+            html += '<button class="btn btn-done" onclick="window.opener.stopTimer(true); window.close();">✓ Gotowe</button>';
+            html += '<button class="btn btn-stop" onclick="window.opener.stopTimer(false); window.close();">⏹ Stop</button>';
+            html += '</div>';
+            html += '</body></html>';
+
+            timerPopupWindow.document.open();
+            timerPopupWindow.document.write(html);
+            timerPopupWindow.document.close();
+        };
 
         // Inicjalizacja dźwięku (generowany programowo)
         window.initTimerAudio = function() {
@@ -5752,8 +5900,10 @@ function zadaniomat_page_main() {
             };
 
             activeTimer.interval = setInterval(updateTimerDisplay, 1000);
+            activeTimer.lastAutosave = 0; // Licznik sekund do autosave
             updateTimerDisplay();
             renderFloatingTimer();
+            saveTimerToStorage(); // Zapisz do localStorage
 
             var msg = currentMinutes > 0
                 ? '⏱️ Timer uruchomiony: ' + taskName + ' (kontynuacja od ' + currentMinutes + ' min)'
@@ -5796,6 +5946,32 @@ function zadaniomat_page_main() {
                 activeTimer.notified = true;
                 showTimerEndNotification();
             }
+
+            // Aktualizuj popup jeśli otwarty
+            updateTimerPopup();
+
+            // Zapisz do localStorage co 5 sekund
+            if (!activeTimer.lastStorageSave) activeTimer.lastStorageSave = 0;
+            activeTimer.lastStorageSave++;
+            if (activeTimer.lastStorageSave >= 5) {
+                activeTimer.lastStorageSave = 0;
+                saveTimerToStorage();
+            }
+
+            // Autosave do bazy co 30 sekund (backup na wypadek crashu)
+            if (!activeTimer.lastAutosave) activeTimer.lastAutosave = 0;
+            activeTimer.lastAutosave++;
+            if (activeTimer.lastAutosave >= TIMER_AUTOSAVE_INTERVAL) {
+                activeTimer.lastAutosave = 0;
+                var totalMinutes = formatMinutes(getTotalElapsed());
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_quick_update',
+                    nonce: nonce,
+                    id: activeTimer.taskId,
+                    field: 'faktyczny_czas',
+                    value: totalMinutes
+                });
+            }
         };
 
         // Formatuj czas (sekundy -> MM:SS)
@@ -5821,6 +5997,7 @@ function zadaniomat_page_main() {
             html += '<div class="ft-time">00:00</div>';
             html += '<div class="ft-task">' + escapeHtml(activeTimer.taskName) + '</div>';
             html += '<div class="ft-actions">';
+            html += '<button onclick="event.stopPropagation(); openTimerPopup()" title="Otwórz popup" class="ft-popup-btn">⧉</button>';
             html += '<button onclick="event.stopPropagation(); stopTimer(true)" title="Zakończ">✓</button>';
             html += '<button onclick="event.stopPropagation(); cancelTimer()" title="Anuluj">✕</button>';
             html += '</div>';
@@ -5925,6 +6102,7 @@ function zadaniomat_page_main() {
 
             activeTimer.plannedTime += minutes * 60;
             activeTimer.notified = false;
+            saveTimerToStorage(); // Zapisz nowy czas
 
             closeTimerModal();
             $('#floating-timer-container .floating-timer').removeClass('overtime');
@@ -5968,8 +6146,14 @@ function zadaniomat_page_main() {
             showToast('⏱️ Zapisano czas: ' + totalMinutes + ' min', 'success');
 
             activeTimer = null;
+            clearTimerStorage(); // Usuń ze storage
             $('#floating-timer-container').html('');
             closeTimerModal();
+            // Zamknij popup jeśli otwarty
+            if (timerPopupWindow && !timerPopupWindow.closed) {
+                timerPopupWindow.close();
+            }
+            timerPopupWindow = null;
         };
 
         // Anuluj timer bez zapisywania
@@ -5979,8 +6163,14 @@ function zadaniomat_page_main() {
 
             clearInterval(activeTimer.interval);
             activeTimer = null;
+            clearTimerStorage(); // Usuń ze storage
             $('#floating-timer-container').html('');
             closeTimerModal();
+            // Zamknij popup jeśli otwarty
+            if (timerPopupWindow && !timerPopupWindow.closed) {
+                timerPopupWindow.close();
+            }
+            timerPopupWindow = null;
             showToast('Timer anulowany', 'warning');
         };
 
