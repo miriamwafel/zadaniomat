@@ -105,7 +105,7 @@ function zadaniomat_create_tables() {
         cel_todo TEXT,
         planowany_czas INT DEFAULT 0,
         faktyczny_czas INT DEFAULT NULL,
-        status DECIMAL(3,1) DEFAULT NULL,
+        status VARCHAR(20) DEFAULT 'nowe',
         godzina_start TIME DEFAULT NULL,
         godzina_koniec TIME DEFAULT NULL,
         pozycja_harmonogram INT DEFAULT NULL,
@@ -205,6 +205,24 @@ add_action('admin_init', function() {
     $cele_rok_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_cele_rok");
     if (!in_array('planowane_godziny_dziennie', $cele_rok_columns)) {
         $wpdb->query("ALTER TABLE $table_cele_rok ADD COLUMN planowane_godziny_dziennie DECIMAL(4,2) DEFAULT 1.00");
+    }
+
+    // Migracja - zmień status z DECIMAL na VARCHAR(20) z wartościami tekstowymi
+    $status_info = $wpdb->get_row("SHOW COLUMNS FROM $table_zadania WHERE Field = 'status'");
+    if ($status_info && strpos($status_info->Type, 'decimal') !== false) {
+        // Najpierw dodaj nową kolumnę tymczasową
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN status_new VARCHAR(20) DEFAULT 'nowe'");
+
+        // Przekonwertuj wartości: null/0 -> 'nowe', 1 -> 'zakonczone'
+        $wpdb->query("UPDATE $table_zadania SET status_new = CASE
+            WHEN status IS NULL OR status < 0.5 THEN 'nowe'
+            WHEN status >= 1 THEN 'zakonczone'
+            ELSE 'rozpoczete'
+        END");
+
+        // Usuń starą kolumnę i zmień nazwę nowej
+        $wpdb->query("ALTER TABLE $table_zadania DROP COLUMN status");
+        $wpdb->query("ALTER TABLE $table_zadania CHANGE COLUMN status_new status VARCHAR(20) DEFAULT 'nowe'");
     }
 });
 
@@ -388,18 +406,54 @@ add_action('wp_ajax_zadaniomat_quick_update', function() {
 add_action('wp_ajax_zadaniomat_move_task', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $id = intval($_POST['id']);
     $new_date = sanitize_text_field($_POST['new_date']);
     $new_okres = zadaniomat_get_current_okres($new_date);
-    
+
     $wpdb->update($table, [
         'dzien' => $new_date,
         'okres_id' => $new_okres ? $new_okres->id : null
     ], ['id' => $id]);
-    
+
     wp_send_json_success();
+});
+
+// Kopiuj pojedyncze zadanie na inny dzień
+add_action('wp_ajax_zadaniomat_copy_task_to_date', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+    $id = intval($_POST['id']);
+    $target_date = sanitize_text_field($_POST['target_date']);
+    $new_okres = zadaniomat_get_current_okres($target_date);
+
+    // Pobierz oryginalne zadanie
+    $task = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
+
+    if (!$task) {
+        wp_send_json_error('Zadanie nie istnieje');
+        return;
+    }
+
+    // Skopiuj zadanie na nowy dzień (ze statusem "nowe", bez czasu faktycznego)
+    $wpdb->insert($table, [
+        'okres_id' => $new_okres ? $new_okres->id : null,
+        'kategoria' => $task->kategoria,
+        'dzien' => $target_date,
+        'zadanie' => $task->zadanie,
+        'cel_todo' => $task->cel_todo,
+        'planowany_czas' => $task->planowany_czas,
+        'faktyczny_czas' => null,
+        'status' => 'nowe',
+        'godzina_start' => $task->godzina_start,
+        'godzina_koniec' => $task->godzina_koniec,
+        'pozycja_harmonogram' => null
+    ]);
+
+    wp_send_json_success(['new_id' => $wpdb->insert_id]);
 });
 
 // Pobierz zadania dla zakresu dat
@@ -424,22 +478,22 @@ add_action('wp_ajax_zadaniomat_get_tasks', function() {
     wp_send_json_success(['tasks' => $tasks]);
 });
 
-// Pobierz nieukończone zadania
+// Pobierz nieukończone zadania (zaległe - status nowe lub rozpoczete)
 add_action('wp_ajax_zadaniomat_get_overdue', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
-    
+
     $tasks = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM $table WHERE dzien < %s AND (status IS NULL OR status < 0.8) ORDER BY dzien ASC",
+        "SELECT * FROM $table WHERE dzien < %s AND (status IS NULL OR status = 'nowe' OR status = 'rozpoczete') ORDER BY dzien ASC",
         date('Y-m-d')
     ));
-    
+
     foreach ($tasks as &$task) {
         $task->kategoria_label = zadaniomat_get_kategoria_label($task->kategoria);
     }
-    
+
     wp_send_json_success(['tasks' => $tasks]);
 });
 
@@ -652,7 +706,7 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
             COUNT(*) as liczba_zadan,
             SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_czas_suma,
             SUM(COALESCE(planowany_czas, 0)) as planowany_czas_suma,
-            SUM(CASE WHEN status >= 1 THEN 1 ELSE 0 END) as ukonczone
+            SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
         FROM $table_zadania
         WHERE dzien BETWEEN %s AND %s
         GROUP BY kategoria",
@@ -1195,8 +1249,28 @@ add_action('admin_head', function() {
             .day-table tr:last-child td { border-bottom: none; }
             .day-table tr:hover { background: #fafafa; }
             
-            .status-done { background-color: #d4edda !important; }
-            .status-done td strong { text-decoration: line-through; color: #666; }
+            /* Status wierszy zadań */
+            .status-nowe { background-color: #fff !important; }
+            .status-rozpoczete { background-color: #fff3cd !important; }
+            .status-zakonczone { background-color: #d4edda !important; }
+            .status-zakonczone td strong { text-decoration: line-through; color: #666; }
+            .status-anulowane { background-color: #f8d7da !important; }
+            .status-anulowane td strong { text-decoration: line-through; color: #999; }
+
+            /* Dropdown statusu */
+            .status-select {
+                padding: 4px 8px;
+                border-radius: 6px;
+                border: 1px solid #ddd;
+                font-size: 12px;
+                cursor: pointer;
+                min-width: 100px;
+            }
+            .status-select.status-nowe { background: #f8f9fa; border-color: #dee2e6; }
+            .status-select.status-rozpoczete { background: #fff3cd; border-color: #ffc107; color: #856404; }
+            .status-select.status-zakonczone { background: #d4edda; border-color: #28a745; color: #155724; }
+            .status-select.status-anulowane { background: #f8d7da; border-color: #dc3545; color: #721c24; }
+
             .task-done-checkbox {
                 width: 20px;
                 height: 20px;
@@ -1774,13 +1848,27 @@ add_action('admin_head', function() {
             .harmonogram-task.obsluga_telefoniczna { border-left-color: #e91e63; }
             .harmonogram-task.sprawy_organizacyjne { border-left-color: #607d8b; }
 
-            .harmonogram-task-done {
+            /* Statusy w harmonogramie */
+            .harmonogram-status-nowe { }
+            .harmonogram-status-rozpoczete {
+                background: #fff3cd !important;
+                border-color: #ffc107 !important;
+            }
+            .harmonogram-status-zakonczone {
                 background: #d4edda !important;
                 border-color: #28a745 !important;
             }
-            .harmonogram-task-done .harmonogram-task-name {
+            .harmonogram-status-zakonczone .harmonogram-task-name {
                 text-decoration: line-through;
                 color: #666;
+            }
+            .harmonogram-status-anulowane {
+                background: #f8d7da !important;
+                border-color: #dc3545 !important;
+            }
+            .harmonogram-status-anulowane .harmonogram-task-name {
+                text-decoration: line-through;
+                color: #999;
             }
             .harmonogram-task-checkbox {
                 width: 18px;
@@ -1791,6 +1879,10 @@ add_action('admin_head', function() {
             }
             .done-badge {
                 color: #28a745;
+                font-weight: bold;
+            }
+            .anulowane-badge {
+                color: #dc3545;
                 font-weight: bold;
             }
 
@@ -3297,8 +3389,8 @@ function zadaniomat_page_main() {
         };
         
         window.renderTaskRow = function(t, day) {
-            var isDone = t.status !== null && parseFloat(t.status) >= 1;
-            var statusClass = isDone ? 'status-done' : '';
+            var taskStatus = t.status || 'nowe';
+            var statusClass = 'status-' + taskStatus;
 
             var planowany = parseInt(t.planowany_czas) || 0;
             var faktyczny = parseInt(t.faktyczny_czas) || 0;
@@ -3315,7 +3407,7 @@ function zadaniomat_page_main() {
             html += '<div class="timer-cell-content">';
             html += '<span>' + planowany + '</span>';
             if (planowany > 0) {
-                html += '<button class="timer-btn' + (isActiveTimer ? ' running' : '') + '" onclick="startTimer(' + t.id + ', \'' + escapeHtml(t.zadanie).replace(/'/g, "\\'") + '\', ' + planowany + ')" title="' + (isActiveTimer ? 'Timer działa' : 'Uruchom timer') + '">';
+                html += '<button class="timer-btn' + (isActiveTimer ? ' running' : '') + '" onclick="startTimer(' + t.id + ', \'' + escapeHtml(t.zadanie).replace(/'/g, "\\'") + '\', ' + planowany + ', ' + faktyczny + ')" title="' + (isActiveTimer ? 'Timer działa' : 'Uruchom timer') + '">';
                 html += isActiveTimer ? '⏸️' : '▶️';
                 html += '</button>';
             }
@@ -3337,11 +3429,17 @@ function zadaniomat_page_main() {
             }
             html += '</div></td>';
 
+            // Status - dropdown ze statusami
             html += '<td class="status-cell">';
-            html += '<input type="checkbox" class="task-done-checkbox" data-id="' + t.id + '" ' + (isDone ? 'checked' : '') + ' onchange="toggleTaskDone(' + t.id + ', this.checked)" title="' + (isDone ? 'Oznacz jako niezrobione' : 'Oznacz jako zrobione') + '">';
+            html += '<select class="status-select status-' + taskStatus + '" onchange="changeTaskStatus(' + t.id + ', this.value)">';
+            html += '<option value="nowe"' + (taskStatus === 'nowe' ? ' selected' : '') + '>Nowe</option>';
+            html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
+            html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
+            html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
+            html += '</select>';
             html += '</td>';
             html += '<td class="action-buttons">';
-            html += '<button class="btn-copy" onclick="copyTask(' + t.id + ', this)" title="Kopiuj">📄</button>';
+            html += '<button class="btn-copy" onclick="copyTaskToDate(' + t.id + ')" title="Kopiuj na inny dzień">📄</button>';
             html += '<button class="btn-edit" onclick="editTask(' + t.id + ', this)" title="Edytuj">✏️</button>';
             html += '<button class="btn-delete" onclick="deleteTask(' + t.id + ')" title="Usuń">🗑️</button>';
             html += '</td></tr>';
@@ -3617,31 +3715,63 @@ function zadaniomat_page_main() {
         window.renderOverdueTasks = function(tasks) {
             var html = '<div class="overdue-alert">';
             html += '<h3>⚠️ Masz ' + tasks.length + ' nieukończonych zadań z przeszłości!</h3>';
-            
+
             tasks.forEach(function(t) {
                 var d = new Date(t.dzien);
+                var taskStatus = t.status || 'nowe';
                 html += '<div class="overdue-task" data-task-id="' + t.id + '">';
                 html += '<div class="overdue-task-info">';
                 html += '<div class="task-name">' + escapeHtml(t.zadanie) + '</div>';
                 html += '<div class="task-meta">📅 ' + d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear() + ' • ';
                 html += '<span class="kategoria-badge ' + t.kategoria + '">' + t.kategoria_label + '</span>';
-                if (t.status !== null) html += ' • Status: ' + t.status;
                 html += '</div></div>';
                 html += '<div class="overdue-task-actions">';
-                html += '<span style="font-size:12px;color:#666;">Przenieś na:</span>';
-                html += '<input type="date" class="move-date" value="' + today + '" min="' + today + '">';
-                html += '<button class="btn-move" onclick="moveOverdueTask(' + t.id + ', this)">📅 Przenieś</button>';
-                html += '<span style="font-size:12px;color:#666;margin-left:10px;">lub status:</span>';
-                html += '<select class="overdue-status-select" onchange="updateOverdueStatus(' + t.id + ', this.value)">';
-                html += '<option value="">-</option>';
-                ['0', '0.5', '0.8', '0.9', '1'].forEach(function(s) {
-                    html += '<option value="' + s + '"' + (t.status == s ? ' selected' : '') + '>' + s + (s == '1' ? ' ✓' : '') + '</option>';
-                });
-                html += '</select></div></div>';
+
+                // Status - dropdown ze statusami
+                html += '<span style="font-size:12px;color:#666;">Status:</span>';
+                html += '<select class="status-select status-' + taskStatus + '" onchange="updateOverdueStatus(' + t.id + ', this.value)">';
+                html += '<option value="nowe"' + (taskStatus === 'nowe' ? ' selected' : '') + '>Nowe</option>';
+                html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
+                html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
+                html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
+                html += '</select>';
+
+                // Kopiuj na inny dzień
+                html += '<span style="font-size:12px;color:#666;margin-left:15px;">Kopiuj na:</span>';
+                html += '<input type="date" class="copy-date" value="' + today + '" min="' + today + '">';
+                html += '<button class="btn-copy" onclick="copyOverdueTask(' + t.id + ', this)" title="Skopiuj na wybrany dzień">📄 Kopiuj</button>';
+
+                html += '</div></div>';
             });
-            
+
             html += '</div>';
             $('#overdue-container').html(html);
+        };
+
+        // Kopiuj zaległe zadanie na nowy dzień
+        window.copyOverdueTask = function(taskId, btn) {
+            var $container = $(btn).closest('.overdue-task');
+            var targetDate = $container.find('.copy-date').val();
+
+            if (!targetDate) {
+                showToast('Wybierz datę!', 'error');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_copy_task_to_date',
+                nonce: nonce,
+                id: taskId,
+                target_date: targetDate
+            }, function(response) {
+                if (response.success) {
+                    showToast('Zadanie skopiowane na ' + targetDate, 'success');
+                    loadTasks();
+                    loadCalendarDots();
+                } else {
+                    alert('Błąd podczas kopiowania: ' + (response.data || 'Nieznany błąd'));
+                }
+            });
         };
         
         window.moveOverdueTask = function(id, btn) {
@@ -3670,7 +3800,7 @@ function zadaniomat_page_main() {
         
         window.updateOverdueStatus = function(id, status) {
             if (status === '') return;
-            
+
             $.post(ajaxurl, {
                 action: 'zadaniomat_quick_update',
                 nonce: nonce,
@@ -3679,14 +3809,21 @@ function zadaniomat_page_main() {
                 value: status
             }, function(response) {
                 if (response.success) {
-                    if (parseFloat(status) >= 0.8) {
+                    // Ukryj zadanie jeśli status to zakonczone lub anulowane
+                    if (status === 'zakonczone' || status === 'anulowane') {
                         var $container = $('[data-task-id="' + id + '"].overdue-task');
                         $container.slideUp(300, function() {
                             $(this).remove();
                             if ($('.overdue-task').length === 0) $('.overdue-alert').slideUp();
                         });
                     }
-                    showToast('Status zaktualizowany!', 'success');
+                    var statusLabels = {
+                        'nowe': 'Nowe',
+                        'rozpoczete': 'Rozpoczęte',
+                        'zakonczone': 'Zakończone',
+                        'anulowane': 'Anulowane'
+                    };
+                    showToast('Status: ' + statusLabels[status], 'success');
                     loadTasks();
                 }
             });
@@ -4309,15 +4446,17 @@ function zadaniomat_page_main() {
             var taskId = isStale ? 'stale-' + task.id : task.id;
             var draggable = 'draggable="true" ondragstart="handleDragStart(event, \'' + taskId + '\')"';
 
-            // Sprawdź czy zadanie jest wykonane
-            var isDone = !isStale && task.status !== null && parseFloat(task.status) >= 1;
-            var doneClass = isDone ? ' harmonogram-task-done' : '';
+            // Sprawdź status zadania
+            var taskStatus = !isStale ? (task.status || 'nowe') : 'nowe';
+            var isDone = taskStatus === 'zakonczone';
+            var isAnulowane = taskStatus === 'anulowane';
+            var statusClass = !isStale ? ' harmonogram-status-' + taskStatus : '';
 
-            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + doneClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
+            var html = '<div class="harmonogram-task ' + task.kategoria + staleClass + statusClass + '" data-id="' + taskId + '" data-is-stale="' + (isStale ? '1' : '0') + '" ' + draggable + '>';
 
-            // Checkbox dla oznaczenia wykonania (tylko dla zwykłych zadań)
+            // Checkbox dla szybkiego oznaczenia jako zakończone (tylko dla zwykłych zadań)
             if (!isStale) {
-                html += '<input type="checkbox" class="harmonogram-task-checkbox" ' + (isDone ? 'checked' : '') + ' onchange="toggleHarmonogramTaskDone(' + task.id + ', this.checked)" title="Oznacz jako ' + (isDone ? 'niewykonane' : 'wykonane') + '">';
+                html += '<input type="checkbox" class="harmonogram-task-checkbox" ' + (isDone ? 'checked' : '') + ' onchange="toggleHarmonogramTaskDone(' + task.id + ', this.checked)" title="Oznacz jako ' + (isDone ? 'niewykonane' : 'zakończone') + '">';
             }
 
             html += '<div class="harmonogram-task-info">';
@@ -4332,6 +4471,9 @@ function zadaniomat_page_main() {
             }
             if (isDone) {
                 html += '<span class="done-badge">✅</span>';
+            }
+            if (isAnulowane) {
+                html += '<span class="anulowane-badge">❌</span>';
             }
             html += '</div></div>';
 
@@ -4362,10 +4504,8 @@ function zadaniomat_page_main() {
             return html;
         };
 
-        // Przełącz status wykonania zadania (wspólna funkcja)
-        window.toggleTaskDone = function(taskId, isDone) {
-            var newStatus = isDone ? '1' : '0';
-
+        // Zmień status zadania (nowe, rozpoczete, zakonczone, anulowane)
+        window.changeTaskStatus = function(taskId, newStatus) {
             $.post(ajaxurl, {
                 action: 'zadaniomat_quick_update',
                 nonce: nonce,
@@ -4384,13 +4524,58 @@ function zadaniomat_page_main() {
                     renderHarmonogram();
                     loadTasks();
 
-                    showToast(isDone ? 'Zadanie wykonane!' : 'Zadanie oznaczone jako niewykonane', 'success');
+                    var statusLabels = {
+                        'nowe': 'Nowe',
+                        'rozpoczete': 'Rozpoczęte',
+                        'zakonczone': 'Zakończone',
+                        'anulowane': 'Anulowane'
+                    };
+                    showToast('Status: ' + statusLabels[newStatus], 'success');
                 }
             });
         };
 
+        // Przełącz status wykonania zadania (dla harmonogramu - checkbox)
+        window.toggleTaskDone = function(taskId, isDone) {
+            var newStatus = isDone ? 'zakonczone' : 'nowe';
+            changeTaskStatus(taskId, newStatus);
+        };
+
         // Alias dla harmonogramu
         window.toggleHarmonogramTaskDone = window.toggleTaskDone;
+
+        // Kopiuj zadanie na inny dzień (z wyborem daty)
+        window.copyTaskToDate = function(taskId) {
+            var task = harmonogramTasks.find(function(t) { return t.id == taskId; });
+            if (!task) {
+                // Spróbuj znaleźć w głównej liście zadań (nie tylko harmonogramTasks)
+                // Pobierz dane przez AJAX
+            }
+
+            var targetDate = prompt('Na jaki dzień skopiować zadanie?\n(format: RRRR-MM-DD)', addDays(today, 1));
+            if (!targetDate) return;
+
+            // Walidacja formatu daty
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+                alert('Nieprawidłowy format daty. Użyj formatu RRRR-MM-DD');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_copy_task_to_date',
+                nonce: nonce,
+                id: taskId,
+                target_date: targetDate
+            }, function(response) {
+                if (response.success) {
+                    showToast('Zadanie skopiowane na ' + targetDate, 'success');
+                    loadTasks();
+                    loadCalendarDots();
+                } else {
+                    alert('Błąd podczas kopiowania: ' + (response.data || 'Nieznany błąd'));
+                }
+            });
+        };
 
         // Aktualizuj godzinę zadania
         window.updateTaskTime = function(taskId, newTime, isStale) {
@@ -4738,7 +4923,10 @@ function zadaniomat_page_main() {
         };
 
         // Uruchom timer dla zadania
-        window.startTimer = function(taskId, taskName, plannedMinutes) {
+        // currentMinutes - już zapisany faktyczny_czas z bazy (kumulatywny stoper)
+        window.startTimer = function(taskId, taskName, plannedMinutes, currentMinutes) {
+            currentMinutes = currentMinutes || 0;
+
             // Jeśli już jest aktywny timer dla innego zadania
             if (activeTimer && activeTimer.taskId !== taskId) {
                 if (!confirm('Masz już uruchomiony timer dla innego zadania. Czy chcesz go zatrzymać i uruchomić nowy?')) {
@@ -4747,8 +4935,8 @@ function zadaniomat_page_main() {
                 stopTimer(false);
             }
 
-            // Jeśli to kontynuacja tego samego zadania
-            var elapsedBefore = 0;
+            // Jeśli to kontynuacja tego samego zadania (timer już działa)
+            var elapsedBefore = currentMinutes * 60; // Kumuluj z zapisanego czasu
             if (activeTimer && activeTimer.taskId === taskId) {
                 elapsedBefore = activeTimer.elapsedBefore + getElapsedSeconds();
                 clearInterval(activeTimer.interval);
@@ -4762,7 +4950,7 @@ function zadaniomat_page_main() {
                 taskName: taskName,
                 plannedTime: plannedMinutes * 60, // w sekundach
                 startTime: Date.now(),
-                elapsedBefore: elapsedBefore,
+                elapsedBefore: elapsedBefore, // Teraz zawiera już zapisany czas
                 interval: null,
                 notified: false
             };
@@ -4771,7 +4959,10 @@ function zadaniomat_page_main() {
             updateTimerDisplay();
             renderFloatingTimer();
 
-            showToast('⏱️ Timer uruchomiony: ' + taskName, 'success');
+            var msg = currentMinutes > 0
+                ? '⏱️ Timer uruchomiony: ' + taskName + ' (kontynuacja od ' + currentMinutes + ' min)'
+                : '⏱️ Timer uruchomiony: ' + taskName;
+            showToast(msg, 'success');
         };
 
         // Pobierz upływający czas w sekundach
@@ -4974,7 +5165,7 @@ function zadaniomat_page_main() {
                     nonce: nonce,
                     id: taskId,
                     field: 'status',
-                    value: '1'
+                    value: 'zakonczone'
                 });
             }
 
