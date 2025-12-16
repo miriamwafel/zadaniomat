@@ -973,6 +973,70 @@ add_action('wp_ajax_zadaniomat_get_goals_summary', function() {
     wp_send_json_success(['summary' => $result]);
 });
 
+// Pobierz cel po ID
+add_action('wp_ajax_zadaniomat_get_cel_by_id', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $cel_id = intval($_POST['cel_id']);
+
+    $cel = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE id = %d", $cel_id
+    ));
+
+    if ($cel) {
+        wp_send_json_success($cel);
+    } else {
+        wp_send_json_error(['message' => 'Cel nie znaleziony']);
+    }
+});
+
+// Aktualizuj tekst celu
+add_action('wp_ajax_zadaniomat_update_cel_text', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $cel_id = intval($_POST['cel_id']);
+    $cel = sanitize_textarea_field($_POST['cel']);
+
+    $wpdb->update($table, ['cel' => $cel], ['id' => $cel_id]);
+
+    wp_send_json_success(['cel_id' => $cel_id, 'cel' => $cel]);
+});
+
+// Cofnij ukończenie celu (przywróć jako aktywny)
+add_action('wp_ajax_zadaniomat_uncomplete_goal', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $cel_id = intval($_POST['cel_id']);
+
+    // Pobierz cel
+    $cel = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE id = %d", $cel_id
+    ));
+
+    if (!$cel) {
+        wp_send_json_error(['message' => 'Cel nie znaleziony']);
+        return;
+    }
+
+    // Cofnij ukończenie
+    $wpdb->update($table, [
+        'completed_at' => null,
+        'osiagniety' => null
+    ], ['id' => $cel_id]);
+
+    wp_send_json_success([
+        'cel_id' => $cel_id,
+        'cel' => $cel->cel,
+        'kategoria' => $cel->kategoria
+    ]);
+});
+
 // =============================================
 // DNI WOLNE - AJAX HANDLERS
 // =============================================
@@ -2865,6 +2929,14 @@ add_action('admin_head', function() {
             .btn-timer-stop:hover {
                 background: #c82333;
             }
+            .btn-timer-mute {
+                background: #dc3545;
+                color: #fff;
+            }
+            @keyframes pulse-alarm {
+                0%, 100% { opacity: 1; transform: scale(1); }
+                50% { opacity: 0.7; transform: scale(1.05); }
+            }
             .btn-timer-cancel {
                 background: #f0f0f0;
                 color: #333;
@@ -4654,12 +4726,14 @@ function zadaniomat_page_main() {
                     if (data.completed_count > 0) {
                         $counter.text('x' + data.completed_count).show();
 
-                        // Pokaż listę ukończonych celów
+                        // Pokaż listę ukończonych celów z możliwością edycji
                         var html = '<div style="font-size:11px; color:#666; margin-bottom:5px;"><strong>Ukończone:</strong></div>';
                         data.cele.forEach(function(cel) {
                             if (cel.completed_at) {
-                                html += '<div style="font-size:11px; color:#28a745; padding:3px 6px; background:#f0fff4; border-radius:4px; margin-bottom:3px;">';
-                                html += '✓ ' + escapeHtml(cel.cel.substring(0, 50)) + (cel.cel.length > 50 ? '...' : '');
+                                html += '<div class="completed-goal-item" data-cel-id="' + cel.id + '" data-kategoria="' + kategoria + '" style="font-size:11px; color:#28a745; padding:3px 6px; background:#f0fff4; border-radius:4px; margin-bottom:3px; cursor:pointer; display:flex; align-items:center; gap:5px;" title="Kliknij aby edytować">';
+                                html += '<span style="flex:1;">✓ ' + escapeHtml(cel.cel.substring(0, 50)) + (cel.cel.length > 50 ? '...' : '') + '</span>';
+                                html += '<button onclick="event.stopPropagation(); editCompletedGoal(' + cel.id + ', \'' + kategoria + '\')" class="edit-completed-btn" style="background:none; border:none; cursor:pointer; font-size:10px; padding:2px 4px;" title="Edytuj">✏️</button>';
+                                html += '<button onclick="event.stopPropagation(); uncompleteGoal(' + cel.id + ', \'' + kategoria + '\')" class="uncomplete-btn" style="background:none; border:none; cursor:pointer; font-size:10px; padding:2px 4px; color:#dc3545;" title="Cofnij ukończenie">↩️</button>';
                                 html += '</div>';
                             }
                         });
@@ -4679,6 +4753,64 @@ function zadaniomat_page_main() {
 
             Object.keys(kategorie).forEach(function(kat) {
                 loadGoalsSummary(okresId, kat);
+            });
+        };
+
+        // Edytuj ukończony cel
+        window.editCompletedGoal = function(celId, kategoria) {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_cel_by_id',
+                nonce: nonce,
+                cel_id: celId
+            }, function(response) {
+                if (response.success) {
+                    var cel = response.data;
+                    var newText = prompt('Edytuj cel:', cel.cel);
+                    if (newText !== null && newText.trim() !== '') {
+                        $.post(ajaxurl, {
+                            action: 'zadaniomat_update_cel_text',
+                            nonce: nonce,
+                            cel_id: celId,
+                            cel: newText.trim()
+                        }, function(resp) {
+                            if (resp.success) {
+                                loadGoalsSummary(currentOkresId, kategoria);
+                                showToast('Cel zaktualizowany!', 'success');
+                            }
+                        });
+                    }
+                }
+            });
+        };
+
+        // Cofnij ukończenie celu (przywróć jako aktywny)
+        window.uncompleteGoal = function(celId, kategoria) {
+            if (!confirm('Czy na pewno chcesz cofnąć ukończenie tego celu? Stanie się ponownie aktywnym celem.')) {
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_uncomplete_goal',
+                nonce: nonce,
+                cel_id: celId
+            }, function(response) {
+                if (response.success) {
+                    // Odśwież widok
+                    loadGoalsSummary(currentOkresId, kategoria);
+
+                    // Ustaw ten cel jako aktywny w karcie
+                    var $card = $('.cel-card[data-kategoria="' + kategoria + '"]');
+                    var $display = $card.find('.cel-okres-display');
+                    var $textarea = $card.find('.cel-okres-input');
+
+                    $display.html(escapeHtml(response.data.cel)).removeClass('empty');
+                    $display.data('cel-id', celId);
+                    $textarea.val(response.data.cel);
+                    $textarea.data('cel-id', celId);
+                    $card.find('.complete-goal-btn').show();
+
+                    showToast('Cel przywrócony jako aktywny!', 'success');
+                }
             });
         };
 
@@ -5828,35 +5960,69 @@ function zadaniomat_page_main() {
             timerPopupWindow.document.close();
         };
 
-        // Inicjalizacja dźwięku (generowany programowo)
+        // Inicjalizacja dźwięku (generowany programowo) - ciągły alarm
+        var alarmInterval = null;
+        var alarmAudioContext = null;
+        var alarmOscillator = null;
+        var alarmGainNode = null;
+
         window.initTimerAudio = function() {
             if (timerAudio) return;
             var AudioContext = window.AudioContext || window.webkitAudioContext;
             if (!AudioContext) return;
 
             timerAudio = {
+                playing: false,
                 play: function() {
-                    var ctx = new AudioContext();
-                    var oscillator = ctx.createOscillator();
-                    var gainNode = ctx.createGain();
+                    if (this.playing) return;
+                    this.playing = true;
+                    var self = this;
 
-                    oscillator.connect(gainNode);
-                    gainNode.connect(ctx.destination);
+                    // Graj alarm w pętli co 1.5 sekundy
+                    function playBeepPattern() {
+                        if (!self.playing) return;
 
-                    oscillator.frequency.value = 800;
-                    oscillator.type = 'sine';
-                    gainNode.gain.value = 0.3;
+                        var ctx = new AudioContext();
+                        var oscillator = ctx.createOscillator();
+                        var gainNode = ctx.createGain();
 
-                    oscillator.start();
+                        oscillator.connect(gainNode);
+                        gainNode.connect(ctx.destination);
 
-                    // Beep pattern
-                    setTimeout(function() { gainNode.gain.value = 0; }, 200);
-                    setTimeout(function() { gainNode.gain.value = 0.3; }, 400);
-                    setTimeout(function() { gainNode.gain.value = 0; }, 600);
-                    setTimeout(function() { gainNode.gain.value = 0.3; }, 800);
-                    setTimeout(function() { oscillator.stop(); ctx.close(); }, 1000);
+                        oscillator.frequency.value = 800;
+                        oscillator.type = 'sine';
+                        gainNode.gain.value = 0.4;
+
+                        oscillator.start();
+
+                        // Beep pattern: 3 krótkie dźwięki
+                        setTimeout(function() { gainNode.gain.value = 0; }, 150);
+                        setTimeout(function() { if (self.playing) gainNode.gain.value = 0.4; }, 250);
+                        setTimeout(function() { gainNode.gain.value = 0; }, 400);
+                        setTimeout(function() { if (self.playing) gainNode.gain.value = 0.4; }, 500);
+                        setTimeout(function() { gainNode.gain.value = 0; }, 650);
+                        setTimeout(function() { oscillator.stop(); ctx.close(); }, 700);
+                    }
+
+                    // Odtwórz od razu i ustaw interwał
+                    playBeepPattern();
+                    alarmInterval = setInterval(playBeepPattern, 1500);
+                },
+                stop: function() {
+                    this.playing = false;
+                    if (alarmInterval) {
+                        clearInterval(alarmInterval);
+                        alarmInterval = null;
+                    }
                 }
             };
+        };
+
+        // Zatrzymaj alarm
+        window.stopAlarm = function() {
+            if (timerAudio) {
+                timerAudio.stop();
+            }
         };
 
         // Poproś o pozwolenie na powiadomienia
@@ -6052,6 +6218,9 @@ function zadaniomat_page_main() {
             html += '</div>';
 
             html += '<div class="timer-modal-actions">';
+            if (isOvertime && timerAudio && timerAudio.playing) {
+                html += '<button class="btn-timer-mute" onclick="stopAlarm(); $(this).hide();" style="background:#dc3545; animation: pulse-alarm 1s infinite;">🔔 Wycisz alarm</button>';
+            }
             html += '<button class="btn-timer-done" onclick="stopTimer(true)">✓ Zakończone</button>';
             if (isOvertime) {
                 html += '<button class="btn-timer-extend" onclick="showExtendOptions()">+ Przedłuż</button>';
@@ -6100,6 +6269,7 @@ function zadaniomat_page_main() {
         window.extendTimer = function(minutes) {
             if (!activeTimer) return;
 
+            stopAlarm(); // Zatrzymaj alarm
             activeTimer.plannedTime += minutes * 60;
             activeTimer.notified = false;
             saveTimerToStorage(); // Zapisz nowy czas
@@ -6113,6 +6283,7 @@ function zadaniomat_page_main() {
         window.stopTimer = function(markAsComplete) {
             if (!activeTimer) return;
 
+            stopAlarm(); // Zatrzymaj alarm
             clearInterval(activeTimer.interval);
             var totalMinutes = formatMinutes(getTotalElapsed());
             var taskId = activeTimer.taskId;
@@ -6161,6 +6332,7 @@ function zadaniomat_page_main() {
             if (!activeTimer) return;
             if (!confirm('Anulować timer bez zapisywania czasu?')) return;
 
+            stopAlarm(); // Zatrzymaj alarm
             clearInterval(activeTimer.interval);
             activeTimer = null;
             clearTimerStorage(); // Usuń ze storage
@@ -6206,6 +6378,23 @@ function zadaniomat_page_main() {
                 }
             });
         };
+
+        // Ostrzeżenie przed zamknięciem strony gdy timer jest uruchomiony
+        window.addEventListener('beforeunload', function(e) {
+            if (activeTimer) {
+                var message = 'Timer jest uruchomiony! Czy na pewno chcesz opuścić stronę? Czas zostanie zapisany automatycznie.';
+                e.preventDefault();
+                e.returnValue = message;
+                return message;
+            }
+        });
+
+        // Zapisz timer przy zmianie widoczności strony (np. przełączanie kart)
+        document.addEventListener('visibilitychange', function() {
+            if (activeTimer && document.visibilityState === 'hidden') {
+                saveTimerToStorage();
+            }
+        });
 
     })(jQuery);
     </script>
