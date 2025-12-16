@@ -132,6 +132,14 @@ function zadaniomat_create_tables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
+    // Tabela dni wolnych
+    $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
+    $sql7 = "CREATE TABLE IF NOT EXISTS $table_dni_wolne (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        dzien DATE NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) $charset_collate;";
+
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql1);
     dbDelta($sql2);
@@ -139,6 +147,7 @@ function zadaniomat_create_tables() {
     dbDelta($sql4);
     dbDelta($sql5);
     dbDelta($sql6);
+    dbDelta($sql7);
 }
 
 add_action('admin_init', function() {
@@ -223,6 +232,20 @@ add_action('admin_init', function() {
         // Usuń starą kolumnę i zmień nazwę nowej
         $wpdb->query("ALTER TABLE $table_zadania DROP COLUMN status");
         $wpdb->query("ALTER TABLE $table_zadania CHANGE COLUMN status_new status VARCHAR(20) DEFAULT 'nowe'");
+    }
+
+    // Migracja - dodaj kolumny dla wielu celów w okresie
+    if (!in_array('completed_at', $columns)) {
+        $wpdb->query("ALTER TABLE $table_cele_okres ADD COLUMN completed_at DATETIME DEFAULT NULL");
+    }
+    if (!in_array('pozycja', $columns)) {
+        $wpdb->query("ALTER TABLE $table_cele_okres ADD COLUMN pozycja INT DEFAULT 1");
+    }
+
+    // Utwórz tabelę dni wolnych jeśli nie istnieje
+    $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
+    if($wpdb->get_var("SHOW TABLES LIKE '$table_dni_wolne'") != $table_dni_wolne) {
+        zadaniomat_create_tables();
     }
 });
 
@@ -544,12 +567,26 @@ add_action('wp_ajax_zadaniomat_save_cel_okres', function() {
 add_action('wp_ajax_zadaniomat_update_cel_okres_status', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_cele_okres';
     $id = intval($_POST['id']);
-    $status = $_POST['status'] === '' ? null : floatval($_POST['status']);
-    
-    $wpdb->update($table, ['status' => $status], ['id' => $id]);
+
+    $update_data = [];
+
+    // Obsługa statusu procentowego
+    if (isset($_POST['status'])) {
+        $update_data['status'] = $_POST['status'] === '' ? null : floatval($_POST['status']);
+    }
+
+    // Obsługa osiągnięcia celu
+    if (isset($_POST['osiagniety'])) {
+        $update_data['osiagniety'] = $_POST['osiagniety'] === '' ? null : intval($_POST['osiagniety']);
+    }
+
+    if (!empty($update_data)) {
+        $wpdb->update($table, $update_data, ['id' => $id]);
+    }
+
     wp_send_json_success();
 });
 
@@ -825,6 +862,528 @@ add_action('wp_ajax_zadaniomat_reset_kategorie', function() {
         'kategorie_zadania' => ZADANIOMAT_DEFAULT_KATEGORIE_ZADANIA
     ]);
 });
+
+// =============================================
+// WIELOKROTNE CELE W OKRESIE - AJAX HANDLERS
+// =============================================
+
+// Oznacz cel jako ukończony i opcjonalnie dodaj nowy
+add_action('wp_ajax_zadaniomat_complete_goal', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $cel_id = intval($_POST['cel_id']);
+
+    // Oznacz cel jako ukończony
+    $wpdb->update($table, [
+        'completed_at' => current_time('mysql'),
+        'osiagniety' => 1
+    ], ['id' => $cel_id]);
+
+    wp_send_json_success(['cel_id' => $cel_id]);
+});
+
+// Dodaj kolejny cel w tej samej kategorii i okresie
+add_action('wp_ajax_zadaniomat_add_next_goal', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $okres_id = intval($_POST['okres_id']);
+    $kategoria = sanitize_text_field($_POST['kategoria']);
+    $cel = sanitize_textarea_field($_POST['cel']);
+
+    // Znajdź maksymalną pozycję dla tej kategorii w okresie
+    $max_pozycja = $wpdb->get_var($wpdb->prepare(
+        "SELECT MAX(pozycja) FROM $table WHERE okres_id = %d AND kategoria = %s",
+        $okres_id, $kategoria
+    ));
+    $new_pozycja = ($max_pozycja ?: 0) + 1;
+
+    $wpdb->insert($table, [
+        'okres_id' => $okres_id,
+        'kategoria' => $kategoria,
+        'cel' => $cel,
+        'pozycja' => $new_pozycja
+    ]);
+
+    $cel_id = $wpdb->insert_id;
+
+    wp_send_json_success([
+        'cel_id' => $cel_id,
+        'pozycja' => $new_pozycja
+    ]);
+});
+
+// Pobierz wszystkie cele dla kategorii w okresie (włącznie z ukończonymi)
+add_action('wp_ajax_zadaniomat_get_category_goals', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $okres_id = intval($_POST['okres_id']);
+    $kategoria = sanitize_text_field($_POST['kategoria']);
+
+    $cele = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE okres_id = %d AND kategoria = %s ORDER BY pozycja ASC",
+        $okres_id, $kategoria
+    ));
+
+    $completed_count = 0;
+    foreach ($cele as $cel) {
+        if ($cel->completed_at) {
+            $completed_count++;
+        }
+    }
+
+    wp_send_json_success([
+        'cele' => $cele,
+        'completed_count' => $completed_count,
+        'total_count' => count($cele)
+    ]);
+});
+
+// Pobierz podsumowanie celów dla okresu (licznik x2, x3 itp.)
+add_action('wp_ajax_zadaniomat_get_goals_summary', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $okres_id = intval($_POST['okres_id']);
+
+    $summary = $wpdb->get_results($wpdb->prepare(
+        "SELECT kategoria,
+                COUNT(*) as total,
+                SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) as completed
+         FROM $table
+         WHERE okres_id = %d
+         GROUP BY kategoria",
+        $okres_id
+    ));
+
+    $result = [];
+    foreach ($summary as $s) {
+        $result[$s->kategoria] = [
+            'total' => intval($s->total),
+            'completed' => intval($s->completed)
+        ];
+    }
+
+    wp_send_json_success(['summary' => $result]);
+});
+
+// =============================================
+// DNI WOLNE - AJAX HANDLERS
+// =============================================
+
+// Toggle dnia wolnego
+add_action('wp_ajax_zadaniomat_toggle_dzien_wolny', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_dni_wolne';
+    $dzien = sanitize_text_field($_POST['dzien']);
+
+    // Sprawdź czy dzień jest już oznaczony jako wolny
+    $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM $table WHERE dzien = %s", $dzien
+    ));
+
+    if ($existing) {
+        // Usuń - dzień staje się roboczym
+        $wpdb->delete($table, ['dzien' => $dzien]);
+        $is_wolny = false;
+    } else {
+        // Dodaj - dzień staje się wolnym
+        $wpdb->insert($table, ['dzien' => $dzien]);
+        $is_wolny = true;
+    }
+
+    wp_send_json_success(['dzien' => $dzien, 'is_wolny' => $is_wolny]);
+});
+
+// Pobierz dni wolne dla miesiąca
+add_action('wp_ajax_zadaniomat_get_dni_wolne', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_dni_wolne';
+    $start = sanitize_text_field($_POST['start']);
+    $end = sanitize_text_field($_POST['end']);
+
+    $dni = $wpdb->get_col($wpdb->prepare(
+        "SELECT dzien FROM $table WHERE dzien BETWEEN %s AND %s",
+        $start, $end
+    ));
+
+    wp_send_json_success(['dni_wolne' => $dni]);
+});
+
+// Sprawdź czy dzień jest roboczy
+add_action('wp_ajax_zadaniomat_is_dzien_roboczy', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_dni_wolne';
+    $dzien = sanitize_text_field($_POST['dzien']);
+
+    // Sprawdź dzień tygodnia (0 = niedziela, 6 = sobota)
+    $day_of_week = date('w', strtotime($dzien));
+    $is_weekend = ($day_of_week == 0 || $day_of_week == 6);
+
+    // Sprawdź czy jest w tabeli dni wolnych
+    $is_marked_wolny = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table WHERE dzien = %s", $dzien
+    )) > 0;
+
+    // Dzień jest roboczy jeśli: (pn-pt i nie oznaczony jako wolny) LUB (weekend ale NIE oznaczony jako wolny przez użytkownika)
+    // Logika: pn-pt domyślnie robocze, sobota-niedziela domyślnie wolne
+    // Jeśli jest w tabeli dni_wolne to jest ODWROTNIE niż domyślnie
+    $is_roboczy = false;
+    if ($is_weekend) {
+        // Weekend - domyślnie wolny, ale jeśli jest w tabeli to jest roboczy
+        $is_roboczy = $is_marked_wolny;
+    } else {
+        // Pn-Pt - domyślnie roboczy, ale jeśli jest w tabeli to jest wolny
+        $is_roboczy = !$is_marked_wolny;
+    }
+
+    wp_send_json_success([
+        'dzien' => $dzien,
+        'is_roboczy' => $is_roboczy,
+        'is_weekend' => $is_weekend,
+        'is_marked' => $is_marked_wolny
+    ]);
+});
+
+// =============================================
+// SKRÓTY KATEGORII - AJAX HANDLERS
+// =============================================
+
+// Pobierz skróty kategorii
+add_action('wp_ajax_zadaniomat_get_skroty', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $skroty = get_option('zadaniomat_skroty_kategorii', []);
+
+    wp_send_json_success(['skroty' => $skroty]);
+});
+
+// Zapisz skróty kategorii
+add_action('wp_ajax_zadaniomat_save_skroty', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $skroty = [];
+    if (isset($_POST['skroty']) && is_array($_POST['skroty'])) {
+        foreach ($_POST['skroty'] as $kat => $skrot) {
+            $key = sanitize_key($kat);
+            $value = sanitize_text_field($skrot);
+            if ($key) {
+                $skroty[$key] = $value;
+            }
+        }
+    }
+
+    update_option('zadaniomat_skroty_kategorii', $skroty);
+
+    wp_send_json_success();
+});
+
+// =============================================
+// NIEOZNACZONE CELE - AJAX HANDLERS
+// =============================================
+
+// Pobierz nieoznaczone cele z zakończonych okresów
+add_action('wp_ajax_zadaniomat_get_unmarked_goals', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table_cele = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
+
+    // Znajdź cele z zakończonych okresów, które nie mają ustawionego osiagniety
+    $unmarked = $wpdb->get_results(
+        "SELECT c.*, o.nazwa as okres_nazwa, o.data_start, o.data_koniec
+         FROM $table_cele c
+         JOIN $table_okresy o ON c.okres_id = o.id
+         WHERE o.data_koniec < CURDATE()
+         AND c.osiagniety IS NULL
+         AND c.cel IS NOT NULL AND c.cel != ''
+         ORDER BY o.data_koniec DESC, c.kategoria"
+    );
+
+    foreach ($unmarked as &$cel) {
+        $cel->kategoria_label = zadaniomat_get_kategoria_label($cel->kategoria);
+    }
+
+    wp_send_json_success(['unmarked' => $unmarked]);
+});
+
+// =============================================
+// PUBLICZNA STRONA - AJAX HANDLERS
+// =============================================
+
+// Pobierz dane dla publicznej strony (bez wymogu logowania)
+add_action('wp_ajax_zadaniomat_public_get_data', 'zadaniomat_public_get_data_handler');
+add_action('wp_ajax_nopriv_zadaniomat_public_get_data', 'zadaniomat_public_get_data_handler');
+
+function zadaniomat_public_get_data_handler() {
+    global $wpdb;
+
+    $table_roki = $wpdb->prefix . 'zadaniomat_roki';
+    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
+    $table_cele_okres = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
+
+    $filter_type = sanitize_text_field($_POST['filter_type'] ?? ''); // 'rok', 'okres', 'dzien'
+    $filter_id = intval($_POST['filter_id'] ?? 0);
+    $filter_date = sanitize_text_field($_POST['filter_date'] ?? '');
+
+    $result = [
+        'roki' => [],
+        'okresy' => [],
+        'stats' => null,
+        'cele' => [],
+        'day_stats' => null
+    ];
+
+    // Pobierz wszystkie roki i okresy
+    $result['roki'] = $wpdb->get_results("SELECT * FROM $table_roki ORDER BY data_start DESC");
+    $result['okresy'] = $wpdb->get_results("SELECT * FROM $table_okresy ORDER BY data_start DESC");
+
+    // Pobierz skróty kategorii
+    $skroty = get_option('zadaniomat_skroty_kategorii', []);
+    $result['skroty'] = $skroty;
+    $result['kategorie'] = zadaniomat_get_kategorie_zadania();
+
+    // Jeśli mamy filtr - pobierz statystyki
+    if ($filter_type === 'rok' && $filter_id) {
+        $rok = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_roki WHERE id = %d", $filter_id));
+        if ($rok) {
+            $result['stats'] = zadaniomat_calculate_public_stats($rok->data_start, $rok->data_koniec, $filter_id, 'rok');
+            $result['cele'] = zadaniomat_get_public_goals($filter_id, 'rok');
+        }
+    } elseif ($filter_type === 'okres' && $filter_id) {
+        $okres = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_okresy WHERE id = %d", $filter_id));
+        if ($okres) {
+            $result['stats'] = zadaniomat_calculate_public_stats($okres->data_start, $okres->data_koniec, $okres->rok_id, 'okres');
+            $result['cele'] = zadaniomat_get_public_goals($filter_id, 'okres');
+        }
+    }
+
+    // Statystyki dla konkretnego dnia
+    if ($filter_date) {
+        $result['day_stats'] = zadaniomat_get_day_stats($filter_date);
+    }
+
+    wp_send_json_success($result);
+}
+
+// Helper - oblicz statystyki publiczne
+function zadaniomat_calculate_public_stats($start_date, $end_date, $rok_id, $type) {
+    global $wpdb;
+
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
+    $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
+
+    // Policz dni
+    $date1 = new DateTime($start_date);
+    $date2 = new DateTime($end_date);
+    $dni_w_okresie = $date2->diff($date1)->days + 1;
+
+    // Policz dni robocze
+    $dni_robocze = 0;
+    $current = clone $date1;
+    while ($current <= $date2) {
+        $day_of_week = $current->format('w');
+        $is_weekend = ($day_of_week == 0 || $day_of_week == 6);
+        $date_str = $current->format('Y-m-d');
+
+        $is_marked = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table_dni_wolne WHERE dzien = %s", $date_str
+        )) > 0;
+
+        if ($is_weekend) {
+            if ($is_marked) $dni_robocze++; // Weekend oznaczony jako roboczy
+        } else {
+            if (!$is_marked) $dni_robocze++; // Dzień roboczy nie oznaczony jako wolny
+        }
+
+        $current->modify('+1 day');
+    }
+
+    // Podstawowe statystyki
+    $stats = $wpdb->get_row($wpdb->prepare(
+        "SELECT
+            COUNT(*) as liczba_zadan,
+            SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_czas_suma,
+            SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+         FROM $table_zadania
+         WHERE dzien BETWEEN %s AND %s",
+        $start_date, $end_date
+    ));
+
+    // Średnia godzina rozpoczęcia pracy (tylko dni robocze)
+    $start_times = $wpdb->get_col($wpdb->prepare(
+        "SELECT MIN(godzina_start)
+         FROM $table_zadania
+         WHERE dzien BETWEEN %s AND %s
+         AND godzina_start IS NOT NULL
+         GROUP BY dzien",
+        $start_date, $end_date
+    ));
+
+    $avg_start = null;
+    if (!empty($start_times)) {
+        $total_minutes = 0;
+        $count = 0;
+        foreach ($start_times as $time) {
+            if ($time) {
+                list($h, $m, $s) = explode(':', $time);
+                $total_minutes += $h * 60 + $m;
+                $count++;
+            }
+        }
+        if ($count > 0) {
+            $avg_minutes = round($total_minutes / $count);
+            $avg_start = sprintf('%02d:%02d', floor($avg_minutes / 60), $avg_minutes % 60);
+        }
+    }
+
+    // Statystyki per kategoria
+    $stats_by_kat = $wpdb->get_results($wpdb->prepare(
+        "SELECT
+            kategoria,
+            COUNT(*) as liczba_zadan,
+            SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_czas
+         FROM $table_zadania
+         WHERE dzien BETWEEN %s AND %s
+         GROUP BY kategoria",
+        $start_date, $end_date
+    ));
+
+    $by_kategoria = [];
+    foreach ($stats_by_kat as $s) {
+        $by_kategoria[$s->kategoria] = [
+            'liczba_zadan' => intval($s->liczba_zadan),
+            'faktyczny_czas' => intval($s->faktyczny_czas)
+        ];
+    }
+
+    // Progres (procent ukończonych)
+    $progress = $stats->liczba_zadan > 0
+        ? round(($stats->ukonczone / $stats->liczba_zadan) * 100, 1)
+        : 0;
+
+    return [
+        'dni_w_okresie' => $dni_w_okresie,
+        'dni_robocze' => $dni_robocze,
+        'liczba_zadan' => intval($stats->liczba_zadan),
+        'ukonczone' => intval($stats->ukonczone),
+        'faktyczny_czas' => intval($stats->faktyczny_czas_suma),
+        'progress' => $progress,
+        'avg_start_time' => $avg_start,
+        'by_kategoria' => $by_kategoria
+    ];
+}
+
+// Helper - pobierz cele dla publicznej strony
+function zadaniomat_get_public_goals($filter_id, $type) {
+    global $wpdb;
+
+    $table_cele_okres = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
+    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
+
+    $cele = [];
+
+    if ($type === 'rok') {
+        // Cele strategiczne dla roku
+        $cele_rok = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table_cele_rok WHERE rok_id = %d", $filter_id
+        ));
+        foreach ($cele_rok as $c) {
+            $c->kategoria_label = zadaniomat_get_kategoria_label($c->kategoria);
+            $c->type = 'rok';
+        }
+        $cele['rok'] = $cele_rok;
+
+        // Cele okresowe dla wszystkich okresów w tym roku
+        $okresy = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table_okresy WHERE rok_id = %d ORDER BY data_start", $filter_id
+        ));
+
+        foreach ($okresy as $okres) {
+            $cele_okres = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM $table_cele_okres WHERE okres_id = %d ORDER BY kategoria, pozycja", $okres->id
+            ));
+            foreach ($cele_okres as $c) {
+                $c->kategoria_label = zadaniomat_get_kategoria_label($c->kategoria);
+                $c->okres_nazwa = $okres->nazwa;
+            }
+            $cele['okresy'][$okres->id] = [
+                'okres' => $okres,
+                'cele' => $cele_okres
+            ];
+        }
+    } else {
+        // Cele dla konkretnego okresu
+        $cele_okres = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table_cele_okres WHERE okres_id = %d ORDER BY kategoria, pozycja", $filter_id
+        ));
+        foreach ($cele_okres as $c) {
+            $c->kategoria_label = zadaniomat_get_kategoria_label($c->kategoria);
+        }
+        $cele['okres'] = $cele_okres;
+    }
+
+    return $cele;
+}
+
+// Helper - statystyki dla konkretnego dnia
+function zadaniomat_get_day_stats($date) {
+    global $wpdb;
+
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $skroty = get_option('zadaniomat_skroty_kategorii', []);
+
+    $stats = $wpdb->get_results($wpdb->prepare(
+        "SELECT
+            kategoria,
+            COUNT(*) as liczba_zadan,
+            SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_czas
+         FROM $table_zadania
+         WHERE dzien = %s
+         GROUP BY kategoria",
+        $date
+    ));
+
+    $result = [];
+    foreach ($stats as $s) {
+        $result[$s->kategoria] = [
+            'liczba_zadan' => intval($s->liczba_zadan),
+            'faktyczny_czas' => intval($s->faktyczny_czas),
+            'skrot' => $skroty[$s->kategoria] ?? '',
+            'kategoria_label' => zadaniomat_get_kategoria_label($s->kategoria)
+        ];
+    }
+
+    // Godzina rozpoczęcia pracy
+    $start_time = $wpdb->get_var($wpdb->prepare(
+        "SELECT MIN(godzina_start) FROM $table_zadania WHERE dzien = %s AND godzina_start IS NOT NULL",
+        $date
+    ));
+
+    return [
+        'date' => $date,
+        'by_kategoria' => $result,
+        'start_time' => $start_time
+    ];
+}
 
 // =============================================
 // HARMONOGRAM DNIA - AJAX HANDLERS
@@ -2733,6 +3292,17 @@ function zadaniomat_page_main() {
                     <div class="date-big" id="selected-date-display"></div>
                     <div class="day-name" id="selected-day-name"></div>
                     <div class="okres-name" id="selected-okres-name"></div>
+
+                    <!-- Toggle dzień wolny/roboczy -->
+                    <div style="margin-top:10px; padding-top:10px; border-top:1px solid #eee;">
+                        <button type="button" id="toggle-day-type-btn"
+                                onclick="toggleDzienWolny()"
+                                class="button button-small"
+                                style="width:100%; font-size:11px;">
+                            🔄 Oznacz jako dzień wolny
+                        </button>
+                        <div id="day-type-info" style="font-size:11px; color:#666; margin-top:5px; text-align:center;"></div>
+                    </div>
                 </div>
             </div>
             
@@ -2754,13 +3324,17 @@ function zadaniomat_page_main() {
                                 $cel_data = $cele_okres[$key] ?? ['cel' => '', 'status' => null, 'id' => null];
                                 $cel_rok = $cele_rok[$key] ?? '';
                             ?>
-                                <div class="cel-card <?php echo $key; ?>">
-                                    <h4><?php echo $label; ?></h4>
+                                <div class="cel-card <?php echo $key; ?>" data-kategoria="<?php echo $key; ?>">
+                                    <h4><?php echo $label; ?> <span class="goals-counter" id="counter-<?php echo $key; ?>" style="display:none; background:#28a745; color:#fff; padding:2px 6px; border-radius:10px; font-size:10px; margin-left:5px;"></span></h4>
                                     <?php if ($cel_rok): ?>
                                         <div class="cel-rok-display">
                                             <strong>Cel roczny:</strong> <?php echo esc_html($cel_rok); ?>
                                         </div>
                                     <?php endif; ?>
+
+                                    <!-- Lista ukończonych celów -->
+                                    <div class="completed-goals-list" id="completed-<?php echo $key; ?>" style="display:none; margin-bottom:8px;"></div>
+
                                     <div class="cel-okres-display <?php echo empty($cel_data['cel']) ? 'empty' : ''; ?>"
                                          data-okres="<?php echo $current_okres->id; ?>"
                                          data-kategoria="<?php echo $key; ?>"
@@ -2777,6 +3351,17 @@ function zadaniomat_page_main() {
                                               data-kategoria="<?php echo $key; ?>"
                                               data-cel-id="<?php echo $cel_data['id'] ?: ''; ?>"
                                               placeholder="Cel na 2 tygodnie..."><?php echo esc_textarea($cel_data['cel']); ?></textarea>
+
+                                    <!-- Przycisk ukończ i dodaj kolejny -->
+                                    <div class="goal-actions" style="margin-top:8px; display:flex; gap:5px; flex-wrap:wrap;">
+                                        <button type="button" class="button button-small complete-goal-btn"
+                                                data-okres="<?php echo $current_okres->id; ?>"
+                                                data-kategoria="<?php echo $key; ?>"
+                                                onclick="completeAndAddNew(this)"
+                                                style="font-size:11px; <?php echo empty($cel_data['cel']) ? 'display:none;' : ''; ?>">
+                                            ✅ Ukończ i dodaj nowy
+                                        </button>
+                                    </div>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -2928,6 +3513,8 @@ function zadaniomat_page_main() {
             bindEvents();
             checkShowHarmonogram();
             loadRokiOkresy(); // Załaduj lata i okresy dla filtrów
+            loadAllGoalsSummaries(); // Załaduj podsumowania celów
+            checkUnmarkedGoals(); // Sprawdź nieoznaczone cele
         });
 
         // ==================== STATYSTYKI ====================
@@ -3203,6 +3790,9 @@ function zadaniomat_page_main() {
             $('#selected-date-display').text(d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getFullYear());
             $('#selected-day-name').text(dayNames[d.getDay()]);
             // Okres info could be loaded via AJAX if needed
+
+            // Aktualizuj info o dniu roboczym/wolnym
+            updateDayTypeInfo();
         };
         
         // ==================== TASKS ====================
@@ -3995,8 +4585,214 @@ function zadaniomat_page_main() {
                     }
                 });
             });
+
+            // Po zapisie celu, pokaż przycisk "Ukończ i dodaj nowy"
+            $(document).on('blur', '.cel-okres-input', function() {
+                var $textarea = $(this);
+                var cel = $textarea.val().trim();
+                var $card = $textarea.closest('.cel-card');
+                var $btn = $card.find('.complete-goal-btn');
+
+                if (cel) {
+                    $btn.show();
+                } else {
+                    $btn.hide();
+                }
+            });
         };
-        
+
+        // ==================== WIELOKROTNE CELE ====================
+        window.completeAndAddNew = function(btn) {
+            var $btn = $(btn);
+            var okresId = $btn.data('okres');
+            var kategoria = $btn.data('kategoria');
+            var $card = $btn.closest('.cel-card');
+            var $display = $card.find('.cel-okres-display');
+            var $textarea = $card.find('.cel-okres-input');
+            var celId = $display.data('cel-id');
+
+            if (!celId) {
+                showToast('Najpierw zapisz cel', 'error');
+                return;
+            }
+
+            // Oznacz cel jako ukończony
+            $.post(ajaxurl, {
+                action: 'zadaniomat_complete_goal',
+                nonce: nonce,
+                cel_id: celId
+            }, function(response) {
+                if (response.success) {
+                    // Wyczyść pole tekstowe dla nowego celu
+                    $textarea.val('');
+                    $display.html('<span class="placeholder">Kliknij aby dodać kolejny cel...</span>').addClass('empty');
+                    $display.data('cel-id', '');
+                    $textarea.data('cel-id', '');
+                    $btn.hide();
+
+                    // Odśwież licznik i listę ukończonych
+                    loadGoalsSummary(okresId, kategoria);
+
+                    showToast('Cel ukończony! Dodaj kolejny.', 'success');
+                }
+            });
+        };
+
+        window.loadGoalsSummary = function(okresId, kategoria) {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_category_goals',
+                nonce: nonce,
+                okres_id: okresId,
+                kategoria: kategoria
+            }, function(response) {
+                if (response.success) {
+                    var data = response.data;
+                    var $counter = $('#counter-' + kategoria);
+                    var $completed = $('#completed-' + kategoria);
+
+                    if (data.completed_count > 0) {
+                        $counter.text('x' + data.completed_count).show();
+
+                        // Pokaż listę ukończonych celów
+                        var html = '<div style="font-size:11px; color:#666; margin-bottom:5px;"><strong>Ukończone:</strong></div>';
+                        data.cele.forEach(function(cel) {
+                            if (cel.completed_at) {
+                                html += '<div style="font-size:11px; color:#28a745; padding:3px 6px; background:#f0fff4; border-radius:4px; margin-bottom:3px;">';
+                                html += '✓ ' + escapeHtml(cel.cel.substring(0, 50)) + (cel.cel.length > 50 ? '...' : '');
+                                html += '</div>';
+                            }
+                        });
+                        $completed.html(html).show();
+                    } else {
+                        $counter.hide();
+                        $completed.hide();
+                    }
+                }
+            });
+        };
+
+        // Załaduj podsumowanie celów przy starcie
+        window.loadAllGoalsSummaries = function() {
+            var okresId = currentOkresId;
+            if (!okresId) return;
+
+            Object.keys(kategorie).forEach(function(kat) {
+                loadGoalsSummary(okresId, kat);
+            });
+        };
+
+        // ==================== POWIADOMIENIA O NIEOZNACZONYCH CELACH ====================
+        window.checkUnmarkedGoals = function() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_unmarked_goals',
+                nonce: nonce
+            }, function(response) {
+                if (response.success && response.data.unmarked && response.data.unmarked.length > 0) {
+                    showUnmarkedGoalsAlert(response.data.unmarked);
+                }
+            });
+        };
+
+        window.showUnmarkedGoalsAlert = function(goals) {
+            var html = '<div class="unmarked-goals-alert" style="position:fixed; top:80px; right:20px; width:350px; background:#fff3cd; border:2px solid #ffc107; border-radius:12px; padding:15px; box-shadow:0 4px 20px rgba(0,0,0,0.2); z-index:9999;">';
+            html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">';
+            html += '<strong style="color:#856404;">⚠️ Nieoznaczone cele!</strong>';
+            html += '<button onclick="$(this).closest(\'.unmarked-goals-alert\').fadeOut()" style="background:none; border:none; font-size:18px; cursor:pointer; color:#856404;">&times;</button>';
+            html += '</div>';
+            html += '<p style="font-size:12px; color:#856404; margin-bottom:10px;">Masz cele z zakończonych okresów, które nie zostały oznaczone jako osiągnięte/nieosiągnięte:</p>';
+            html += '<div style="max-height:200px; overflow-y:auto;">';
+
+            goals.forEach(function(goal) {
+                html += '<div style="background:#fff; padding:8px; border-radius:6px; margin-bottom:5px; font-size:12px;">';
+                html += '<div style="color:#666; font-size:10px;">' + goal.okres_nazwa + ' | ' + goal.kategoria_label + '</div>';
+                html += '<div style="color:#333;">' + escapeHtml(goal.cel.substring(0, 60)) + (goal.cel.length > 60 ? '...' : '') + '</div>';
+                html += '<div style="margin-top:5px;">';
+                html += '<button onclick="markGoalAchieved(' + goal.id + ', 1, this)" class="button button-small" style="font-size:10px; background:#28a745; color:#fff; border:none;">✓ Osiągnięty</button> ';
+                html += '<button onclick="markGoalAchieved(' + goal.id + ', 0, this)" class="button button-small" style="font-size:10px; background:#dc3545; color:#fff; border:none;">✗ Nie osiągnięty</button>';
+                html += '</div>';
+                html += '</div>';
+            });
+
+            html += '</div></div>';
+
+            // Usuń poprzedni alert jeśli istnieje
+            $('.unmarked-goals-alert').remove();
+            $('body').append(html);
+        };
+
+        window.markGoalAchieved = function(goalId, osiagniety, btn) {
+            var $goalDiv = $(btn).closest('div').parent();
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_cel_podsumowanie',
+                nonce: nonce,
+                okres_id: 0, // nie używamy, bo mamy już id celu
+                kategoria: '',
+                osiagniety: osiagniety,
+                uwagi: ''
+            });
+
+            // Użyj bezpośredniego update
+            $.post(ajaxurl, {
+                action: 'zadaniomat_update_cel_okres_status',
+                nonce: nonce,
+                id: goalId,
+                osiagniety: osiagniety
+            }, function(response) {
+                if (response.success) {
+                    $goalDiv.fadeOut(300, function() {
+                        $(this).remove();
+                        // Jeśli nie ma więcej celów, ukryj alert
+                        if ($('.unmarked-goals-alert > div:last-child > div').length === 0) {
+                            $('.unmarked-goals-alert').fadeOut();
+                        }
+                    });
+                    showToast(osiagniety ? 'Cel oznaczony jako osiągnięty' : 'Cel oznaczony jako nieosiągnięty', 'success');
+                }
+            });
+        };
+
+        // ==================== DNI WOLNE / ROBOCZE ====================
+        window.toggleDzienWolny = function() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_toggle_dzien_wolny',
+                nonce: nonce,
+                dzien: selectedDate
+            }, function(response) {
+                if (response.success) {
+                    updateDayTypeInfo();
+                    renderCalendar(); // Odśwież kalendarz
+                    showToast(response.data.is_wolny ? 'Dzień oznaczony jako wolny' : 'Dzień oznaczony jako roboczy', 'success');
+                }
+            });
+        };
+
+        window.updateDayTypeInfo = function() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_is_dzien_roboczy',
+                nonce: nonce,
+                dzien: selectedDate
+            }, function(response) {
+                if (response.success) {
+                    var data = response.data;
+                    var $btn = $('#toggle-day-type-btn');
+                    var $info = $('#day-type-info');
+
+                    if (data.is_roboczy) {
+                        $btn.text('🔄 Oznacz jako dzień wolny');
+                        $info.html('<span style="color:#28a745;">✓ Dzień roboczy</span>');
+                    } else {
+                        $btn.text('🔄 Oznacz jako dzień roboczy');
+                        $info.html('<span style="color:#dc3545;">✗ Dzień wolny</span>');
+                    }
+
+                    if (data.is_weekend) {
+                        $info.append(' <span style="color:#888;">(weekend)</span>');
+                    }
+                }
+            });
+        };
+
         // ==================== EDIT / DELETE ====================
         window.editTask = function(id, btn) {
             var $row = $(btn).closest('tr');
@@ -5554,6 +6350,17 @@ function zadaniomat_page_settings() {
                 <button type="button" class="button" onclick="resetKategorie()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
                 <span id="kategorie-save-status" style="margin-left: 15px; color: #28a745;"></span>
             </div>
+
+            <!-- Skróty kategorii -->
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #007bff;">
+                <h3>Skróty kategorii</h3>
+                <p style="color: #666; margin-bottom: 15px;">Ustaw krótkie skróty (2-4 znaki) dla kategorii. Będą wyświetlane na publicznej stronie statystyk.</p>
+                <div id="skroty-list" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px;"></div>
+                <div style="margin-top: 15px;">
+                    <button type="button" class="button button-primary" onclick="saveSkroty()">💾 Zapisz skróty</button>
+                    <span id="skroty-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -5813,6 +6620,61 @@ function zadaniomat_page_settings() {
                 }
             });
         };
+
+        // ==================== SKRÓTY KATEGORII ====================
+        var skroty = {};
+
+        function loadSkroty() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_skroty',
+                nonce: nonce
+            }, function(response) {
+                if (response.success) {
+                    skroty = response.data.skroty || {};
+                    renderSkrotyList();
+                }
+            });
+        }
+
+        function renderSkrotyList() {
+            var html = '';
+            for (var key in kategorieZadania) {
+                var skrot = skroty[key] || '';
+                html += '<div style="display: flex; gap: 10px; align-items: center; background: #f8f9fa; padding: 10px; border-radius: 6px;">';
+                html += '<span style="min-width: 150px; font-weight: 500;">' + escapeHtml(kategorieZadania[key]) + '</span>';
+                html += '<input type="text" class="skrot-input" data-kategoria="' + key + '" value="' + escapeHtml(skrot) + '" placeholder="np. ZAP" maxlength="6" style="width: 80px; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; text-transform: uppercase; font-weight: bold;">';
+                html += '</div>';
+            }
+            $('#skroty-list').html(html);
+        }
+
+        window.saveSkroty = function() {
+            var skrotyData = {};
+            $('.skrot-input').each(function() {
+                var kat = $(this).data('kategoria');
+                var val = $(this).val().trim().toUpperCase();
+                if (kat) {
+                    skrotyData[kat] = val;
+                }
+            });
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_skroty',
+                nonce: nonce,
+                skroty: skrotyData
+            }, function(response) {
+                if (response.success) {
+                    skroty = skrotyData;
+                    $('#skroty-save-status').text('✓ Skróty zapisane!').show();
+                    setTimeout(function() { $('#skroty-save-status').fadeOut(); }, 3000);
+                } else {
+                    alert('Błąd podczas zapisywania skrótów.');
+                }
+            });
+        };
+
+        // Załaduj skróty przy starcie
+        loadSkroty();
 
         // ==================== STAŁE ZADANIA ====================
         var staleZadania = [];
@@ -6081,4 +6943,306 @@ function zadaniomat_page_settings() {
     });
     </script>
     <?php
+}
+
+// =============================================
+// PUBLICZNA STRONA - SHORTCODE
+// =============================================
+add_shortcode('zadaniomat_public', 'zadaniomat_public_page');
+
+function zadaniomat_public_page($atts) {
+    ob_start();
+    ?>
+    <style>
+        .zadaniomat-public {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .zadaniomat-public h2 { margin-top: 30px; color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        .zadaniomat-public .filters { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; }
+        .zadaniomat-public .filters select, .zadaniomat-public .filters input { padding: 10px 15px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        .zadaniomat-public .filters select { min-width: 200px; }
+        .zadaniomat-public .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .zadaniomat-public .stat-card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
+        .zadaniomat-public .stat-card .value { font-size: 32px; font-weight: bold; color: #007bff; }
+        .zadaniomat-public .stat-card .label { font-size: 12px; color: #666; text-transform: uppercase; margin-top: 5px; }
+        .zadaniomat-public .progress-bar { background: #e9ecef; border-radius: 10px; height: 20px; overflow: hidden; margin: 10px 0; }
+        .zadaniomat-public .progress-bar .fill { height: 100%; background: linear-gradient(90deg, #28a745, #20c997); transition: width 0.3s; }
+        .zadaniomat-public .goals-section { margin-top: 30px; }
+        .zadaniomat-public .goal-card { background: #fff; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #007bff; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+        .zadaniomat-public .goal-card.osiagniety { border-left-color: #28a745; background: #f0fff4; }
+        .zadaniomat-public .goal-card.nie-osiagniety { border-left-color: #dc3545; background: #fff5f5; }
+        .zadaniomat-public .goal-card .kategoria { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 5px; }
+        .zadaniomat-public .goal-card .cel-text { font-size: 14px; color: #333; }
+        .zadaniomat-public .goal-card .status-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; margin-left: 10px; }
+        .zadaniomat-public .goal-card .status-badge.success { background: #d4edda; color: #155724; }
+        .zadaniomat-public .goal-card .status-badge.danger { background: #f8d7da; color: #721c24; }
+        .zadaniomat-public .goal-card .status-badge.pending { background: #fff3cd; color: #856404; }
+        .zadaniomat-public .day-stats { margin-top: 30px; }
+        .zadaniomat-public .day-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+        .zadaniomat-public .day-stat-card { background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+        .zadaniomat-public .day-stat-card .skrot { font-size: 24px; font-weight: bold; color: #007bff; }
+        .zadaniomat-public .day-stat-card .details { font-size: 12px; color: #666; margin-top: 5px; }
+        .zadaniomat-public .loading { text-align: center; padding: 40px; color: #666; }
+        .zadaniomat-public .okres-section { margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; }
+        .zadaniomat-public .okres-section h4 { margin: 0 0 15px 0; color: #495057; }
+    </style>
+
+    <div class="zadaniomat-public">
+        <h1>Zadaniomat - Statystyki</h1>
+
+        <div class="filters">
+            <select id="zp-rok-filter">
+                <option value="">-- Wybierz rok (90 dni) --</option>
+            </select>
+            <select id="zp-okres-filter">
+                <option value="">-- Wybierz okres (2 tyg) --</option>
+            </select>
+            <input type="date" id="zp-day-filter" placeholder="Wybierz dzien">
+            <button id="zp-load-btn" style="padding: 10px 20px; background: #007bff; color: #fff; border: none; border-radius: 6px; cursor: pointer;">Zaladuj</button>
+        </div>
+
+        <div id="zp-stats-container" class="loading">
+            Wybierz rok lub okres, aby zaladowac statystyki...
+        </div>
+
+        <div id="zp-day-stats-container" style="display: none;">
+            <h2>Statystyki dnia</h2>
+            <div id="zp-day-stats-content"></div>
+        </div>
+
+        <div id="zp-goals-container" style="display: none;">
+            <h2>Cele</h2>
+            <div id="zp-goals-content"></div>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        var ajaxurl = '<?php echo admin_url('admin-ajax.php'); ?>';
+        var data = { roki: [], okresy: [], kategorie: {}, skroty: {} };
+
+        // Zaladuj poczatkowe dane
+        fetch(ajaxurl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'action=zadaniomat_public_get_data'
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(response) {
+            if (response.success) {
+                data = response.data;
+                renderFilters();
+            }
+        });
+
+        function renderFilters() {
+            var rokSelect = document.getElementById('zp-rok-filter');
+            var okresSelect = document.getElementById('zp-okres-filter');
+
+            data.roki.forEach(function(rok) {
+                var opt = document.createElement('option');
+                opt.value = rok.id;
+                opt.textContent = rok.nazwa + ' (' + formatDate(rok.data_start) + ' - ' + formatDate(rok.data_koniec) + ')';
+                rokSelect.appendChild(opt);
+            });
+
+            rokSelect.addEventListener('change', function() {
+                okresSelect.innerHTML = '<option value="">-- Wybierz okres (2 tyg) --</option>';
+                var rokId = this.value;
+                if (rokId) {
+                    data.okresy.filter(function(o) { return o.rok_id == rokId; }).forEach(function(okres) {
+                        var opt = document.createElement('option');
+                        opt.value = okres.id;
+                        opt.textContent = okres.nazwa + ' (' + formatDate(okres.data_start) + ' - ' + formatDate(okres.data_koniec) + ')';
+                        okresSelect.appendChild(opt);
+                    });
+                }
+            });
+        }
+
+        document.getElementById('zp-load-btn').addEventListener('click', function() {
+            var rokId = document.getElementById('zp-rok-filter').value;
+            var okresId = document.getElementById('zp-okres-filter').value;
+            var dayDate = document.getElementById('zp-day-filter').value;
+
+            var filterType = okresId ? 'okres' : (rokId ? 'rok' : '');
+            var filterId = okresId || rokId;
+
+            var params = 'action=zadaniomat_public_get_data';
+            if (filterType) params += '&filter_type=' + filterType + '&filter_id=' + filterId;
+            if (dayDate) params += '&filter_date=' + dayDate;
+
+            document.getElementById('zp-stats-container').innerHTML = '<div class="loading">Ladowanie...</div>';
+
+            fetch(ajaxurl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(response) {
+                if (response.success) {
+                    renderStats(response.data);
+                    renderDayStats(response.data.day_stats);
+                    renderGoals(response.data.cele);
+                }
+            });
+        });
+
+        function renderStats(d) {
+            var container = document.getElementById('zp-stats-container');
+            if (!d.stats) {
+                container.innerHTML = '<div class="loading">Wybierz rok lub okres, aby zobaczyc statystyki.</div>';
+                return;
+            }
+
+            var s = d.stats;
+            var html = '<div class="stats-grid">';
+            html += '<div class="stat-card"><div class="value">' + s.progress + '%</div><div class="label">Progres</div><div class="progress-bar"><div class="fill" style="width:' + s.progress + '%"></div></div></div>';
+            html += '<div class="stat-card"><div class="value">' + s.liczba_zadan + '</div><div class="label">Liczba zadan</div></div>';
+            html += '<div class="stat-card"><div class="value">' + (s.faktyczny_czas / 60).toFixed(1) + 'h</div><div class="label">Czas pracy</div></div>';
+            html += '<div class="stat-card"><div class="value">' + (s.avg_start_time || '-') + '</div><div class="label">Srednia godz. startu</div></div>';
+            html += '<div class="stat-card"><div class="value">' + s.dni_robocze + '</div><div class="label">Dni robocze</div></div>';
+            html += '</div>';
+
+            // Statystyki per kategoria
+            if (s.by_kategoria && Object.keys(s.by_kategoria).length > 0) {
+                html += '<h3>Statystyki per kategoria</h3><div class="stats-grid">';
+                Object.keys(s.by_kategoria).forEach(function(kat) {
+                    var ks = s.by_kategoria[kat];
+                    var label = d.kategorie[kat] || kat;
+                    var skrot = d.skroty[kat] || '';
+                    html += '<div class="stat-card">';
+                    if (skrot) html += '<div style="font-size:11px;color:#999;">' + skrot + '</div>';
+                    html += '<div style="font-size:14px;font-weight:bold;">' + label + '</div>';
+                    html += '<div class="value" style="font-size:20px;">' + ks.liczba_zadan + ' zadan</div>';
+                    html += '<div class="label">' + (ks.faktyczny_czas / 60).toFixed(1) + 'h</div>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+
+            container.innerHTML = html;
+        }
+
+        function renderDayStats(dayStats) {
+            var container = document.getElementById('zp-day-stats-container');
+            var content = document.getElementById('zp-day-stats-content');
+
+            if (!dayStats || !dayStats.by_kategoria || Object.keys(dayStats.by_kategoria).length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+            var html = '<p><strong>Data:</strong> ' + formatDate(dayStats.date);
+            if (dayStats.start_time) html += ' | <strong>Start pracy:</strong> ' + dayStats.start_time;
+            html += '</p>';
+
+            html += '<div class="day-stats-grid">';
+            Object.keys(dayStats.by_kategoria).forEach(function(kat) {
+                var s = dayStats.by_kategoria[kat];
+                html += '<div class="day-stat-card">';
+                html += '<div class="skrot">' + (s.skrot || kat.substring(0,3).toUpperCase()) + '</div>';
+                html += '<div style="font-size:12px;">' + s.kategoria_label + '</div>';
+                html += '<div class="details">' + s.liczba_zadan + ' zadan | ' + (s.faktyczny_czas / 60).toFixed(1) + 'h</div>';
+                html += '</div>';
+            });
+            html += '</div>';
+
+            content.innerHTML = html;
+        }
+
+        function renderGoals(cele) {
+            var container = document.getElementById('zp-goals-container');
+            var content = document.getElementById('zp-goals-content');
+
+            if (!cele || (Object.keys(cele).length === 0)) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+            var html = '';
+
+            // Cele roczne
+            if (cele.rok && cele.rok.length > 0) {
+                html += '<h3>Cele strategiczne (90 dni)</h3>';
+                cele.rok.forEach(function(c) {
+                    if (c.cel) {
+                        html += '<div class="goal-card">';
+                        html += '<div class="kategoria">' + c.kategoria_label + '</div>';
+                        html += '<div class="cel-text">' + escapeHtml(c.cel) + '</div>';
+                        html += '</div>';
+                    }
+                });
+            }
+
+            // Cele okresowe
+            if (cele.okres && cele.okres.length > 0) {
+                html += '<h3>Cele okresu (2 tygodnie)</h3>';
+                cele.okres.forEach(function(c) {
+                    if (c.cel) {
+                        var statusClass = c.osiagniety === '1' || c.osiagniety === 1 ? 'osiagniety' : (c.osiagniety === '0' || c.osiagniety === 0 ? 'nie-osiagniety' : '');
+                        var badgeClass = c.osiagniety === '1' || c.osiagniety === 1 ? 'success' : (c.osiagniety === '0' || c.osiagniety === 0 ? 'danger' : 'pending');
+                        var badgeText = c.osiagniety === '1' || c.osiagniety === 1 ? 'Osiagniety' : (c.osiagniety === '0' || c.osiagniety === 0 ? 'Nie osiagniety' : 'Nieoznaczony');
+
+                        html += '<div class="goal-card ' + statusClass + '">';
+                        html += '<div class="kategoria">' + c.kategoria_label;
+                        if (c.completed_at) html += ' <span class="status-badge success">Ukonczony</span>';
+                        html += '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span></div>';
+                        html += '<div class="cel-text">' + escapeHtml(c.cel) + '</div>';
+                        html += '</div>';
+                    }
+                });
+            }
+
+            // Cele w okresach (gdy filtrujemy rok)
+            if (cele.okresy) {
+                Object.keys(cele.okresy).forEach(function(okresId) {
+                    var okresData = cele.okresy[okresId];
+                    if (okresData.cele && okresData.cele.length > 0) {
+                        html += '<div class="okres-section">';
+                        html += '<h4>' + okresData.okres.nazwa + ' (' + formatDate(okresData.okres.data_start) + ' - ' + formatDate(okresData.okres.data_koniec) + ')</h4>';
+                        okresData.cele.forEach(function(c) {
+                            if (c.cel) {
+                                var statusClass = c.osiagniety === '1' || c.osiagniety === 1 ? 'osiagniety' : (c.osiagniety === '0' || c.osiagniety === 0 ? 'nie-osiagniety' : '');
+                                var badgeClass = c.osiagniety === '1' || c.osiagniety === 1 ? 'success' : (c.osiagniety === '0' || c.osiagniety === 0 ? 'danger' : 'pending');
+                                var badgeText = c.osiagniety === '1' || c.osiagniety === 1 ? 'Osiagniety' : (c.osiagniety === '0' || c.osiagniety === 0 ? 'Nie osiagniety' : 'Nieoznaczony');
+
+                                html += '<div class="goal-card ' + statusClass + '">';
+                                html += '<div class="kategoria">' + c.kategoria_label;
+                                if (c.completed_at) html += ' <span class="status-badge success">x' + (c.pozycja || 1) + '</span>';
+                                html += '<span class="status-badge ' + badgeClass + '">' + badgeText + '</span></div>';
+                                html += '<div class="cel-text">' + escapeHtml(c.cel) + '</div>';
+                                html += '</div>';
+                            }
+                        });
+                        html += '</div>';
+                    }
+                });
+            }
+
+            content.innerHTML = html || '<p>Brak celow do wyswietlenia.</p>';
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            var parts = dateStr.split('-');
+            return parts[2] + '.' + parts[1] + '.' + parts[0];
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    })();
+    </script>
+    <?php
+    return ob_get_clean();
 }
