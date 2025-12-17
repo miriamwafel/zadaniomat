@@ -2241,9 +2241,18 @@ add_action('admin_head', function() {
             .goal-panel-item.sprawy_organizacyjne { border-left-color: #6c757d; background: #f8f9fa; }
             .goal-panel-item.poboczne_tematy { border-left-color: #fd7e14; background: #fff8f0; }
             .goal-panel-kategoria { display: block; font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+            .goal-panel-kategoria .goal-hours { font-weight: 400; color: #667eea; }
             .goal-panel-text { display: block; font-size: 12px; color: #333; line-height: 1.4; }
             .goals-panel .no-goals { color: #888; font-size: 12px; font-style: italic; margin: 0; }
             .tasks-panel { flex: 1; min-width: 0; }
+
+            /* Daily progress section */
+            .daily-progress-section { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
+            .daily-progress-section h4 { margin: 0 0 10px 0; font-size: 13px; color: #333; }
+            .daily-progress-bar-container { position: relative; background: #e9ecef; border-radius: 10px; height: 24px; overflow: hidden; }
+            .daily-progress-bar { height: 100%; background: linear-gradient(90deg, #28a745, #20c997); border-radius: 10px; transition: width 0.5s ease; }
+            .daily-progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #333; white-space: nowrap; }
+            .daily-stats-mini { display: flex; gap: 10px; margin-top: 8px; font-size: 11px; color: #666; }
 
             /* ========== HARMONOGRAM DNIA ========== */
 
@@ -3659,6 +3668,48 @@ function zadaniomat_page_main() {
                     <!-- Cele na okres - lewa strona -->
                     <?php if ($current_okres): ?>
                     <div class="goals-panel">
+                        <?php
+                        // Pobierz dane do dzisiejszego progresu
+                        $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
+                        $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+
+                        // Planowane godziny dziennie per kategoria
+                        $planowane_raw = $wpdb->get_results($wpdb->prepare(
+                            "SELECT kategoria, planowane_godziny_dziennie FROM $table_cele_rok WHERE rok_id = %d",
+                            $current_rok->id
+                        ));
+                        $planowane_map = [];
+                        $total_planowane = 0;
+                        foreach ($planowane_raw as $p) {
+                            $planowane_map[$p->kategoria] = floatval($p->planowane_godziny_dziennie);
+                            $total_planowane += floatval($p->planowane_godziny_dziennie);
+                        }
+
+                        // Faktycznie przepracowane dzisiaj
+                        $dzis_stats = $wpdb->get_row($wpdb->prepare(
+                            "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
+                                    COUNT(*) as liczba_zadan,
+                                    SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+                             FROM $table_zadania WHERE dzien = %s",
+                            $today
+                        ));
+                        $faktyczny_h = ($dzis_stats->faktyczny_min ?: 0) / 60;
+                        $procent_dnia = $total_planowane > 0 ? min(100, round(($faktyczny_h / $total_planowane) * 100)) : 0;
+                        ?>
+
+                        <!-- Dzisiejszy progres -->
+                        <div class="daily-progress-section">
+                            <h4>📊 Dziś: <?php echo date('d.m'); ?></h4>
+                            <div class="daily-progress-bar-container">
+                                <div class="daily-progress-bar" style="width: <?php echo $procent_dnia; ?>%"></div>
+                                <span class="daily-progress-text"><?php echo number_format($faktyczny_h, 1); ?>h / <?php echo number_format($total_planowane, 1); ?>h (<?php echo $procent_dnia; ?>%)</span>
+                            </div>
+                            <div class="daily-stats-mini">
+                                <span>📋 <?php echo $dzis_stats->liczba_zadan ?: 0; ?> zadań</span>
+                                <span>✅ <?php echo $dzis_stats->ukonczone ?: 0; ?> ukończ.</span>
+                            </div>
+                        </div>
+
                         <h3>🎯 Cele: <?php echo esc_html($current_okres->nazwa); ?></h3>
                         <div class="goals-panel-list">
                             <?php
@@ -3683,10 +3734,11 @@ function zadaniomat_page_main() {
                             foreach (ZADANIOMAT_KATEGORIE_ZADANIA as $kat_key => $kat_label):
                                 if (isset($panel_cele_map[$kat_key])):
                                     $cel = $panel_cele_map[$kat_key];
+                                    $planowane_h = isset($planowane_map[$kat_key]) ? $planowane_map[$kat_key] : 0;
                                     $has_goals = true;
                             ?>
                                 <div class="goal-panel-item <?php echo esc_attr($cel->kategoria); ?>">
-                                    <span class="goal-panel-kategoria"><?php echo esc_html($kat_label); ?></span>
+                                    <span class="goal-panel-kategoria"><?php echo esc_html($kat_label); ?><?php if ($planowane_h > 0): ?> <span class="goal-hours">(<?php echo $planowane_h; ?>h/d)</span><?php endif; ?></span>
                                     <span class="goal-panel-text"><?php echo esc_html($cel->cel); ?></span>
                                 </div>
                             <?php
