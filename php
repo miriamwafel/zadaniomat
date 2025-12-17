@@ -608,23 +608,27 @@ add_action('wp_ajax_zadaniomat_update_cel_okres_status', function() {
     wp_send_json_success();
 });
 
-// Pobierz cele okresu (do modala)
+// Pobierz cele okresu (do modala) - wszystkie cele, włącznie z ukończonymi
 add_action('wp_ajax_zadaniomat_get_okres_cele', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table_cele = $wpdb->prefix . 'zadaniomat_cele_okres';
     $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
     $okres_id = intval($_POST['okres_id']);
-    
+
     $okres = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_okresy WHERE id = %d", $okres_id));
-    $cele = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_cele WHERE okres_id = %d", $okres_id));
-    
+    $cele = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_cele WHERE okres_id = %d ORDER BY kategoria, pozycja ASC, id ASC", $okres_id));
+
+    // Grupuj cele po kategorii - WSZYSTKIE cele (aktywne i ukończone)
     $cele_by_kat = [];
     foreach ($cele as $c) {
-        $cele_by_kat[$c->kategoria] = $c;
+        if (!isset($cele_by_kat[$c->kategoria])) {
+            $cele_by_kat[$c->kategoria] = [];
+        }
+        $cele_by_kat[$c->kategoria][] = $c;
     }
-    
+
     wp_send_json_success([
         'okres' => $okres,
         'cele' => $cele_by_kat,
@@ -632,28 +636,37 @@ add_action('wp_ajax_zadaniomat_get_okres_cele', function() {
     ]);
 });
 
-// Zapisz podsumowanie celu okresu (osiągnięty + uwagi)
+// Zapisz podsumowanie celu okresu (osiągnięty + uwagi) - teraz obsługuje konkretny cel_id
 add_action('wp_ajax_zadaniomat_save_cel_podsumowanie', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $cel_id = isset($_POST['cel_id']) ? intval($_POST['cel_id']) : 0;
     $okres_id = intval($_POST['okres_id']);
     $kategoria = sanitize_text_field($_POST['kategoria']);
     $osiagniety = $_POST['osiagniety'] === '' ? null : intval($_POST['osiagniety']);
-    $uwagi = sanitize_textarea_field($_POST['uwagi']);
-    
-    $existing = $wpdb->get_row($wpdb->prepare(
-        "SELECT id FROM $table WHERE okres_id = %d AND kategoria = %s", $okres_id, $kategoria
-    ));
-    
-    if ($existing) {
-        $wpdb->update($table, ['osiagniety' => $osiagniety, 'uwagi' => $uwagi], ['id' => $existing->id]);
+    $uwagi = isset($_POST['uwagi']) ? sanitize_textarea_field($_POST['uwagi']) : '';
+
+    $update_data = ['osiagniety' => $osiagniety, 'uwagi' => $uwagi];
+
+    // Jeśli mamy cel_id, aktualizuj ten konkretny cel
+    if ($cel_id > 0) {
+        $wpdb->update($table, $update_data, ['id' => $cel_id]);
+        wp_send_json_success(['cel_id' => $cel_id]);
     } else {
-        $wpdb->insert($table, ['okres_id' => $okres_id, 'kategoria' => $kategoria, 'osiagniety' => $osiagniety, 'uwagi' => $uwagi]);
+        // Kompatybilność wsteczna - szukaj istniejącego celu
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM $table WHERE okres_id = %d AND kategoria = %s AND completed_at IS NULL ORDER BY id DESC LIMIT 1", $okres_id, $kategoria
+        ));
+
+        if ($existing) {
+            $wpdb->update($table, $update_data, ['id' => $existing->id]);
+            wp_send_json_success(['cel_id' => $existing->id]);
+        } else {
+            wp_send_json_error(['message' => 'Nie znaleziono celu']);
+        }
     }
-    
-    wp_send_json_success();
 });
 
 // Zapisz cel roku
@@ -1147,6 +1160,19 @@ add_action('wp_ajax_zadaniomat_uncomplete_goal', function() {
         'cel' => $cel->cel,
         'kategoria' => $cel->kategoria
     ]);
+});
+
+// Usuń cel
+add_action('wp_ajax_zadaniomat_delete_cel', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_cele_okres';
+    $cel_id = intval($_POST['cel_id']);
+
+    $wpdb->delete($table, ['id' => $cel_id]);
+
+    wp_send_json_success(['cel_id' => $cel_id]);
 });
 
 // =============================================
@@ -2231,7 +2257,12 @@ add_action('admin_head', function() {
             .goals-panel { width: 220px; flex-shrink: 0; background: #fff; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); position: sticky; top: 20px; }
             .goals-panel h3 { margin: 0 0 12px 0; font-size: 14px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 8px; }
             .goals-panel-list { display: flex; flex-direction: column; gap: 8px; }
-            .goal-panel-item { padding: 10px 12px; border-radius: 8px; border-left: 4px solid #667eea; background: #f8f9fa; }
+            .goal-panel-item { padding: 10px 12px; border-radius: 8px; border-left: 4px solid #667eea; background: #f8f9fa; display: flex; gap: 10px; align-items: flex-start; }
+            .goal-panel-item.goal-achieved { opacity: 0.7; }
+            .goal-panel-item.goal-not-achieved { background: #fff5f5; }
+            .goal-panel-status { cursor: pointer; font-size: 16px; user-select: none; transition: transform 0.2s; }
+            .goal-panel-status:hover { transform: scale(1.2); }
+            .goal-panel-content { flex: 1; }
             .goal-panel-item.zapianowany { border-left-color: #28a745; background: #f0fff4; }
             .goal-panel-item.klejpan { border-left-color: #17a2b8; background: #e8f8fb; }
             .goal-panel-item.marka_langer { border-left-color: #ffc107; background: #fffbeb; }
@@ -2240,6 +2271,8 @@ add_action('admin_head', function() {
             .goal-panel-item.obsluga_telefoniczna { border-left-color: #20c997; background: #e6fffa; }
             .goal-panel-item.sprawy_organizacyjne { border-left-color: #6c757d; background: #f8f9fa; }
             .goal-panel-item.poboczne_tematy { border-left-color: #fd7e14; background: #fff8f0; }
+            .cel-item.osiagniety-yes { background: #d4edda !important; border-color: #28a745 !important; }
+            .cel-item.osiagniety-no { background: #f8d7da !important; border-color: #dc3545 !important; }
             .goal-panel-kategoria { display: block; font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; margin-bottom: 4px; }
             .goal-panel-kategoria .goal-hours { font-weight: 400; color: #667eea; }
             .goal-panel-text { display: block; font-size: 12px; color: #333; line-height: 1.4; }
@@ -3776,9 +3809,20 @@ function zadaniomat_page_main() {
                                     $planowane_h = isset($planowane_map[$kat_key]) ? $planowane_map[$kat_key] : 0;
                                     $has_goals = true;
                             ?>
-                                <div class="goal-panel-item <?php echo esc_attr($cel->kategoria); ?>">
-                                    <span class="goal-panel-kategoria"><?php echo esc_html($kat_label); ?><?php if ($planowane_h > 0): ?> <span class="goal-hours">(<?php echo $planowane_h; ?>h/d)</span><?php endif; ?></span>
-                                    <span class="goal-panel-text"><?php echo esc_html($cel->cel); ?></span>
+                                <div class="goal-panel-item <?php echo esc_attr($cel->kategoria); ?><?php echo ($cel->osiagniety === '1' || $cel->osiagniety == 1) ? ' goal-achieved' : (($cel->osiagniety === '0' || $cel->osiagniety == 0) ? ' goal-not-achieved' : ''); ?>" data-cel-id="<?php echo $cel->id; ?>">
+                                    <div class="goal-panel-status" onclick="toggleGoalStatus(<?php echo $cel->id; ?>, this)" title="Kliknij aby zmienić status">
+                                        <?php if ($cel->osiagniety === '1' || $cel->osiagniety == 1): ?>
+                                            ✅
+                                        <?php elseif ($cel->osiagniety === '0' || $cel->osiagniety == 0): ?>
+                                            ❌
+                                        <?php else: ?>
+                                            ⬜
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="goal-panel-content">
+                                        <span class="goal-panel-kategoria"><?php echo esc_html($kat_label); ?><?php if ($planowane_h > 0): ?> <span class="goal-hours">(<?php echo $planowane_h; ?>h/d)</span><?php endif; ?></span>
+                                        <span class="goal-panel-text"><?php echo esc_html($cel->cel); ?></span>
+                                    </div>
                                 </div>
                             <?php
                                 endif;
@@ -5070,6 +5114,44 @@ function zadaniomat_page_main() {
             });
         };
 
+        // Przełącz status celu (z dashboardu)
+        window.toggleGoalStatus = function(celId, element) {
+            var $el = $(element);
+            var $item = $el.closest('.goal-panel-item');
+            var currentStatus = $item.hasClass('goal-achieved') ? '1' : ($item.hasClass('goal-not-achieved') ? '0' : '');
+
+            // Cykl: puste -> tak -> nie -> puste
+            var newStatus = '';
+            if (currentStatus === '') newStatus = '1';
+            else if (currentStatus === '1') newStatus = '0';
+            else newStatus = '';
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_cel_podsumowanie',
+                nonce: nonce,
+                cel_id: celId,
+                okres_id: currentOkresId,
+                kategoria: '',
+                osiagniety: newStatus,
+                uwagi: ''
+            }, function(response) {
+                if (response.success) {
+                    // Aktualizuj wygląd
+                    $item.removeClass('goal-achieved goal-not-achieved');
+                    if (newStatus === '1') {
+                        $item.addClass('goal-achieved');
+                        $el.text('✅');
+                    } else if (newStatus === '0') {
+                        $item.addClass('goal-not-achieved');
+                        $el.text('❌');
+                    } else {
+                        $el.text('⬜');
+                    }
+                    showToast('Status zapisany!', 'success');
+                }
+            });
+        };
+
         window.loadGoalsSummary = function(okresId, kategoria) {
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_category_goals',
@@ -6319,8 +6401,9 @@ function zadaniomat_page_main() {
             timerPopupWindow.document.close();
         };
 
-        // Inicjalizacja dźwięku (generowany programowo) - ciągły alarm
+        // Inicjalizacja dźwięku (generowany programowo) - alarm z auto-stop po 5 sekundach
         var alarmInterval = null;
+        var alarmAutoStopTimeout = null;
         var alarmAudioContext = null;
         var alarmOscillator = null;
         var alarmGainNode = null;
@@ -6366,9 +6449,18 @@ function zadaniomat_page_main() {
                     // Odtwórz od razu i ustaw interwał
                     playBeepPattern();
                     alarmInterval = setInterval(playBeepPattern, 1500);
+
+                    // Auto-stop po 5 sekundach
+                    alarmAutoStopTimeout = setTimeout(function() {
+                        self.stop();
+                    }, 5000);
                 },
                 stop: function() {
                     this.playing = false;
+                    if (alarmAutoStopTimeout) {
+                        clearTimeout(alarmAutoStopTimeout);
+                        alarmAutoStopTimeout = null;
+                    }
                     if (alarmInterval) {
                         clearInterval(alarmInterval);
                         alarmInterval = null;
@@ -7148,79 +7240,217 @@ function zadaniomat_page_settings() {
         
         window.renderOkresModal = function(data) {
             var okres = data.okres;
-            var cele = data.cele;
+            var cele = data.cele; // Teraz to tablica celów per kategoria
             var kategorie = data.kategorie;
             var today = new Date().toISOString().split('T')[0];
             var isPast = okres.data_koniec < today;
-            
+
             var startDate = new Date(okres.data_start);
             var endDate = new Date(okres.data_koniec);
             var dateStr = startDate.getDate() + '.' + (startDate.getMonth()+1) + ' - ' + endDate.getDate() + '.' + (endDate.getMonth()+1) + '.' + endDate.getFullYear();
-            
+
             var html = '<div class="modal-overlay" onclick="closeOkresModal(event)">';
-            html += '<div class="modal okres-modal" onclick="event.stopPropagation()">';
+            html += '<div class="modal okres-modal" onclick="event.stopPropagation()" style="max-width:900px;">';
             html += '<button class="modal-close" onclick="closeOkresModal()">&times;</button>';
             html += '<div class="okres-modal-header ' + (isPast ? 'past' : '') + '">';
             html += '<h3>' + (isPast ? '📊 Podsumowanie: ' : '🎯 Cele: ') + escapeHtml(okres.nazwa) + '</h3>';
             html += '<div class="dates">📅 ' + dateStr + '</div>';
             html += '</div>';
-            
+
             for (var kat in kategorie) {
-                var cel = cele[kat] || {};
-                var celText = cel.cel || '';
-                var osiagniety = cel.osiagniety;
-                var uwagi = cel.uwagi || '';
-                
-                var cardClass = '';
-                if (osiagniety === '1' || osiagniety === 1) cardClass = 'osiagniety-yes';
-                else if (osiagniety === '0' || osiagniety === 0) cardClass = 'osiagniety-no';
-                else if (osiagniety === '2' || osiagniety === 2) cardClass = 'osiagniety-partial';
-                
-                html += '<div class="cel-review-card ' + kat + ' ' + cardClass + '" data-kategoria="' + kat + '">';
+                var katCele = cele[kat] || [];
+                var uwagi = '';
+
+                // Zbierz uwagi z wszystkich celów kategorii
+                katCele.forEach(function(c) { if (c.uwagi) uwagi = c.uwagi; });
+
+                html += '<div class="cel-review-card ' + kat + '" data-kategoria="' + kat + '" data-okres="' + okres.id + '">';
                 html += '<h4>' + kategorie[kat] + '</h4>';
-                html += '<div class="cel-text ' + (celText ? '' : 'empty') + '">' + (celText ? escapeHtml(celText) : 'Brak celu') + '</div>';
-                
-                html += '<div class="cel-review-row">';
-                html += '<div class="field">';
-                html += '<label>Czy cel został osiągnięty?</label>';
-                html += '<select class="osiagniety-select" data-okres="' + okres.id + '" data-kategoria="' + kat + '">';
-                html += '<option value="">-- wybierz --</option>';
-                html += '<option value="1"' + (osiagniety == 1 ? ' selected' : '') + '>✅ Tak</option>';
-                html += '<option value="2"' + (osiagniety == 2 ? ' selected' : '') + '>🟡 Częściowo</option>';
-                html += '<option value="0"' + (osiagniety == 0 ? ' selected' : '') + '>❌ Nie</option>';
-                html += '</select>';
+
+                // Lista celów (wszystkie - aktywne i ukończone)
+                html += '<div class="cele-lista" style="margin-bottom:10px;">';
+
+                if (katCele.length === 0) {
+                    html += '<div class="cel-item-empty" style="color:#999; font-size:12px; padding:8px;">Brak celów - dodaj poniżej</div>';
+                } else {
+                    katCele.forEach(function(cel) {
+                        var isCompleted = cel.completed_at !== null;
+                        var osiagniety = cel.osiagniety;
+                        var statusClass = '';
+                        if (osiagniety === '1' || osiagniety === 1 || parseInt(osiagniety) === 1) statusClass = 'osiagniety-yes';
+                        else if (osiagniety === '0' || osiagniety === 0 || parseInt(osiagniety) === 0) statusClass = 'osiagniety-no';
+
+                        html += '<div class="cel-item ' + statusClass + '" data-cel-id="' + cel.id + '" style="display:flex; gap:8px; align-items:flex-start; padding:8px; background:' + (isCompleted ? '#f8f9fa' : '#fff') + '; border:1px solid #ddd; border-radius:6px; margin-bottom:6px;">';
+
+                        // Tekst celu (edytowalny)
+                        html += '<div style="flex:1;">';
+                        html += '<textarea class="cel-text-input" data-cel-id="' + cel.id + '" style="width:100%; min-height:40px; border:1px solid #e0e0e0; border-radius:4px; padding:6px; font-size:13px; resize:vertical;">' + escapeHtml(cel.cel || '') + '</textarea>';
+                        html += '</div>';
+
+                        // Status osiągnięcia (tylko Tak/Nie)
+                        html += '<div style="display:flex; flex-direction:column; gap:4px; min-width:100px;">';
+                        html += '<select class="cel-status-select" data-cel-id="' + cel.id + '" data-okres="' + okres.id + '" data-kategoria="' + kat + '" style="padding:4px; border-radius:4px; font-size:12px;">';
+                        html += '<option value="">--</option>';
+                        html += '<option value="1"' + (parseInt(osiagniety) === 1 ? ' selected' : '') + '>✅ Tak</option>';
+                        html += '<option value="0"' + (parseInt(osiagniety) === 0 ? ' selected' : '') + '>❌ Nie</option>';
+                        html += '</select>';
+
+                        // Przycisk usunięcia (tylko jeśli cel jest pusty lub nieaktywny)
+                        html += '<button class="btn-delete-cel" data-cel-id="' + cel.id + '" data-kategoria="' + kat + '" style="background:#dc3545; color:#fff; border:none; border-radius:4px; padding:4px 8px; cursor:pointer; font-size:11px;">🗑️</button>';
+                        html += '</div>';
+
+                        html += '</div>';
+                    });
+                }
+
+                // Przycisk dodania nowego celu
+                html += '<button class="btn-add-cel" data-okres="' + okres.id + '" data-kategoria="' + kat + '" style="width:100%; padding:8px; background:#28a745; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:12px; margin-top:4px;">➕ Dodaj cel</button>';
                 html += '</div>';
-                html += '<div class="field" style="flex: 2;">';
-                html += '<label>Uwagi / wnioski</label>';
-                html += '<textarea class="uwagi-input" data-okres="' + okres.id + '" data-kategoria="' + kat + '" placeholder="Co poszło dobrze? Co można poprawić?">' + escapeHtml(uwagi) + '</textarea>';
+
+                // Uwagi / wnioski (wspólne dla kategorii)
+                html += '<div class="field" style="margin-top:10px;">';
+                html += '<label style="font-size:12px; color:#666;">📝 Uwagi / wnioski</label>';
+                html += '<textarea class="uwagi-input" data-okres="' + okres.id + '" data-kategoria="' + kat + '" placeholder="Co poszło dobrze? Co można poprawić?" style="width:100%; min-height:50px; border:1px solid #ddd; border-radius:4px; padding:6px; font-size:12px;">' + escapeHtml(uwagi) + '</textarea>';
                 html += '</div>';
-                html += '</div>';
+
                 html += '</div>';
             }
-            
+
             html += '<div class="modal-buttons">';
             html += '<button class="button button-primary" onclick="closeOkresModal()">Zamknij</button>';
             html += '</div>';
             html += '</div></div>';
-            
+
             $('body').append(html);
-            
-            // Bind events
-            $('.osiagniety-select').on('change', function() {
+
+            // Bind events - zmiana tekstu celu
+            $('.cel-text-input').on('change', function() {
                 var $this = $(this);
-                var $card = $this.closest('.cel-review-card');
-                var uwagi = $card.find('.uwagi-input').val();
-                
-                saveCelPodsumowanie($this.data('okres'), $this.data('kategoria'), $this.val(), uwagi, $card);
+                var celId = $this.data('cel-id');
+                var newText = $this.val().trim();
+
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_update_cel_text',
+                    nonce: nonce,
+                    cel_id: celId,
+                    cel: newText
+                }, function(response) {
+                    if (response.success) {
+                        $this.css('border-color', '#28a745');
+                        setTimeout(function() { $this.css('border-color', '#e0e0e0'); }, 500);
+                        // Odśwież dashboard jeśli jest widoczny
+                        if (typeof loadAllGoalsSummaries === 'function') loadAllGoalsSummaries();
+                    }
+                });
             });
-            
+
+            // Bind events - zmiana statusu celu
+            $('.cel-status-select').on('change', function() {
+                var $this = $(this);
+                var celId = $this.data('cel-id');
+                var okresId = $this.data('okres');
+                var kategoria = $this.data('kategoria');
+                var $item = $this.closest('.cel-item');
+
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_save_cel_podsumowanie',
+                    nonce: nonce,
+                    cel_id: celId,
+                    okres_id: okresId,
+                    kategoria: kategoria,
+                    osiagniety: $this.val(),
+                    uwagi: ''
+                }, function(response) {
+                    if (response.success) {
+                        $item.removeClass('osiagniety-yes osiagniety-no');
+                        if ($this.val() === '1') $item.addClass('osiagniety-yes');
+                        else if ($this.val() === '0') $item.addClass('osiagniety-no');
+                        // Odśwież dashboard
+                        if (typeof loadAllGoalsSummaries === 'function') loadAllGoalsSummaries();
+                        refreshDashboardGoals();
+                    }
+                });
+            });
+
+            // Bind events - dodawanie nowego celu
+            $('.btn-add-cel').on('click', function() {
+                var $btn = $(this);
+                var okresId = $btn.data('okres');
+                var kategoria = $btn.data('kategoria');
+
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_add_next_goal',
+                    nonce: nonce,
+                    okres_id: okresId,
+                    kategoria: kategoria,
+                    cel: ''
+                }, function(response) {
+                    if (response.success) {
+                        // Przeładuj modal
+                        closeOkresModal();
+                        openOkresModal(okresId);
+                        // Odśwież dashboard
+                        if (typeof loadAllGoalsSummaries === 'function') loadAllGoalsSummaries();
+                    }
+                });
+            });
+
+            // Bind events - usuwanie celu
+            $('.btn-delete-cel').on('click', function() {
+                var $btn = $(this);
+                var celId = $btn.data('cel-id');
+                var kategoria = $btn.data('kategoria');
+
+                if (!confirm('Czy na pewno usunąć ten cel?')) return;
+
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_delete_cel',
+                    nonce: nonce,
+                    cel_id: celId
+                }, function(response) {
+                    if (response.success) {
+                        $btn.closest('.cel-item').fadeOut(200, function() { $(this).remove(); });
+                        // Odśwież dashboard
+                        if (typeof loadAllGoalsSummaries === 'function') loadAllGoalsSummaries();
+                        refreshDashboardGoals();
+                    }
+                });
+            });
+
+            // Bind events - uwagi
             $('.uwagi-input').on('change', function() {
                 var $this = $(this);
+                var okresId = $this.data('okres');
+                var kategoria = $this.data('kategoria');
                 var $card = $this.closest('.cel-review-card');
-                var osiagniety = $card.find('.osiagniety-select').val();
-                
-                saveCelPodsumowanie($this.data('okres'), $this.data('kategoria'), osiagniety, $this.val(), $card);
+                var $firstCel = $card.find('.cel-status-select').first();
+                var celId = $firstCel.length ? $firstCel.data('cel-id') : 0;
+
+                if (celId) {
+                    $.post(ajaxurl, {
+                        action: 'zadaniomat_save_cel_podsumowanie',
+                        nonce: nonce,
+                        cel_id: celId,
+                        okres_id: okresId,
+                        kategoria: kategoria,
+                        osiagniety: $firstCel.val() || '',
+                        uwagi: $this.val()
+                    }, function(response) {
+                        if (response.success) {
+                            $this.css('border-color', '#28a745');
+                            setTimeout(function() { $this.css('border-color', '#ddd'); }, 500);
+                        }
+                    });
+                }
             });
+        };
+
+        // Funkcja do odświeżenia celów na dashboardzie
+        window.refreshDashboardGoals = function() {
+            // Przeładuj panel celów jeśli jesteśmy na dashboardzie
+            if ($('.goals-panel').length) {
+                location.reload();
+            }
         };
         
         window.saveCelPodsumowanie = function(okresId, kategoria, osiagniety, uwagi, $card) {
