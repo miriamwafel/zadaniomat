@@ -4035,17 +4035,20 @@ function zadaniomat_page_main() {
 
             // Statystyki per kategoria
             var html = '';
+            var planowaneGodzinyMap = data.planowane_godziny || {};
             Object.keys(kategorie).forEach(function(kat) {
+                // Pobierz planowane godziny z mapy cele_rok (priorytet)
+                var planowaneGodziny = planowaneGodzinyMap[kat] || 1.0;
+
                 var stats = data.stats_by_kategoria[kat] || {
                     liczba_zadan: 0,
                     ukonczone: 0,
                     faktyczny_czas: 0,
-                    planowane_godziny_dziennie: 1.0,
-                    planowane_w_okresie: data.dni_w_okresie * 60,
+                    planowane_godziny_dziennie: planowaneGodziny,
+                    planowane_w_okresie: planowaneGodziny * data.dni_w_okresie * 60,
                     procent_realizacji: 0
                 };
 
-                var planowaneGodziny = stats.planowane_godziny_dziennie || 1.0;
                 var planowaneWOkresieMin = planowaneGodziny * data.dni_w_okresie * 60;
                 var faktycznyMin = stats.faktyczny_czas || 0;
                 var procent = planowaneWOkresieMin > 0 ? Math.round((faktycznyMin / planowaneWOkresieMin) * 100) : 0;
