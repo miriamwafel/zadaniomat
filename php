@@ -731,19 +731,35 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
     $start_date = $filter_data->data_start;
     $end_date = $filter_data->data_koniec;
 
-    // Policz dni robocze w okresie (bez dni wolnych)
+    // Policz dni robocze w okresie (bez weekendów i dni wolnych)
     $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
-    $date1 = new DateTime($start_date);
-    $date2 = new DateTime($end_date);
-    $total_days = $date2->diff($date1)->days + 1;
 
-    // Policz dni wolne w tym okresie
-    $dni_wolne_count = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM $table_dni_wolne WHERE dzien BETWEEN %s AND %s",
+    // Pobierz dni oznaczone jako wolne w tabeli
+    $dni_wolne_db = $wpdb->get_col($wpdb->prepare(
+        "SELECT dzien FROM $table_dni_wolne WHERE dzien BETWEEN %s AND %s",
         $start_date, $end_date
     ));
+    $dni_wolne_set = array_flip($dni_wolne_db);
 
-    $dni_w_okresie = $total_days - intval($dni_wolne_count);
+    // Policz dni robocze (bez weekendów i dni z tabeli dni_wolne)
+    $current = new DateTime($start_date);
+    $end = new DateTime($end_date);
+    $total_days = 0;
+    $dni_wolne_count = 0;
+
+    while ($current <= $end) {
+        $total_days++;
+        $weekday = (int)$current->format('N'); // 1=Pn, 6=Sb, 7=Nd
+        $date_str = $current->format('Y-m-d');
+
+        // Weekend lub dzień oznaczony jako wolny
+        if ($weekday >= 6 || isset($dni_wolne_set[$date_str])) {
+            $dni_wolne_count++;
+        }
+        $current->modify('+1 day');
+    }
+
+    $dni_w_okresie = $total_days - $dni_wolne_count;
 
     // Pobierz statystyki per kategoria
     $stats = $wpdb->get_results($wpdb->prepare(
@@ -851,11 +867,16 @@ add_action('wp_ajax_zadaniomat_get_okres_days', function() {
 
     while ($current <= $end) {
         $date_str = $current->format('Y-m-d');
+        $weekday = (int)$current->format('N'); // 1=Pn, 6=Sb, 7=Nd
+        $is_weekend = ($weekday >= 6);
+        $is_marked_free = isset($dni_wolne_set[$date_str]);
+
         $days[] = [
             'date' => $date_str,
             'day' => (int)$current->format('d'),
-            'weekday' => $current->format('N'), // 1=Pn, 7=Nd
-            'is_free' => isset($dni_wolne_set[$date_str])
+            'weekday' => $weekday,
+            'is_free' => $is_weekend || $is_marked_free,
+            'is_weekend' => $is_weekend
         ];
         $current->modify('+1 day');
     }
