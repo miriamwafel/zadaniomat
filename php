@@ -509,7 +509,7 @@ add_action('wp_ajax_zadaniomat_get_overdue', function() {
     $table = $wpdb->prefix . 'zadaniomat_zadania';
 
     $tasks = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM $table WHERE dzien < %s AND (status IS NULL OR status = 'nowe' OR status = 'rozpoczete') ORDER BY dzien ASC",
+        "SELECT * FROM $table WHERE dzien < %s AND (status IS NULL OR status = 'nowe') ORDER BY dzien ASC",
         date('Y-m-d')
     ));
 
@@ -731,10 +731,19 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
     $start_date = $filter_data->data_start;
     $end_date = $filter_data->data_koniec;
 
-    // Policz dni w okresie
+    // Policz dni robocze w okresie (bez dni wolnych)
+    $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
     $date1 = new DateTime($start_date);
     $date2 = new DateTime($end_date);
-    $dni_w_okresie = $date2->diff($date1)->days + 1;
+    $total_days = $date2->diff($date1)->days + 1;
+
+    // Policz dni wolne w tym okresie
+    $dni_wolne_count = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_dni_wolne WHERE dzien BETWEEN %s AND %s",
+        $start_date, $end_date
+    ));
+
+    $dni_w_okresie = $total_days - intval($dni_wolne_count);
 
     // Pobierz statystyki per kategoria
     $stats = $wpdb->get_results($wpdb->prepare(
@@ -791,6 +800,8 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
         'filter_type' => $filter_type,
         'filter_data' => $filter_data,
         'dni_w_okresie' => $dni_w_okresie,
+        'dni_wszystkie' => $total_days,
+        'dni_wolne' => intval($dni_wolne_count),
         'rok_id' => $rok_id,
         'stats_by_kategoria' => $stats_by_kategoria,
         'total' => [
@@ -1875,6 +1886,7 @@ add_action('admin_head', function() {
             /* Status wierszy zadań */
             .status-nowe { background-color: #fff !important; }
             .status-rozpoczete { background-color: #fff3cd !important; }
+            .status-w_trakcie { background-color: #e8f4fd !important; }
             .status-zakonczone { background-color: #d4edda !important; }
             .status-zakonczone td strong { text-decoration: line-through; color: #666; }
             .status-anulowane { background-color: #f8d7da !important; }
@@ -1891,6 +1903,7 @@ add_action('admin_head', function() {
             }
             .status-select.status-nowe { background: #f8f9fa; border-color: #dee2e6; }
             .status-select.status-rozpoczete { background: #fff3cd; border-color: #ffc107; color: #856404; }
+            .status-select.status-w_trakcie { background: #e8f4fd; border-color: #17a2b8; color: #0c5460; }
             .status-select.status-zakonczone { background: #d4edda; border-color: #28a745; color: #155724; }
             .status-select.status-anulowane { background: #f8d7da; border-color: #dc3545; color: #721c24; }
 
@@ -2102,6 +2115,22 @@ add_action('admin_head', function() {
             .day-info .date-big { font-size: 24px; font-weight: 600; color: #667eea; }
             .day-info .day-name { font-size: 14px; color: #888; margin-top: 4px; }
             .day-info .okres-name { font-size: 12px; color: #28a745; margin-top: 8px; }
+
+            /* Sidebar cele na okres */
+            .sidebar-goals { margin-top: 15px; padding: 15px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+            .sidebar-goals h4 { margin: 0 0 12px 0; font-size: 14px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+            .sidebar-goals-list { display: flex; flex-direction: column; gap: 8px; }
+            .sidebar-goal-item { padding: 8px 10px; border-radius: 6px; border-left: 3px solid #667eea; background: #f8f9fa; }
+            .sidebar-goal-item.zapianowany { border-left-color: #28a745; }
+            .sidebar-goal-item.klejpan { border-left-color: #17a2b8; }
+            .sidebar-goal-item.marka_langer { border-left-color: #ffc107; }
+            .sidebar-goal-item.marketing_construction { border-left-color: #dc3545; }
+            .sidebar-goal-item.fjo { border-left-color: #6f42c1; }
+            .sidebar-goal-item.obsluga_telefoniczna { border-left-color: #20c997; }
+            .sidebar-goal-item.sprawy_organizacyjne { border-left-color: #6c757d; }
+            .sidebar-goal-item.poboczne_tematy { border-left-color: #fd7e14; }
+            .sidebar-goal-kategoria { display: block; font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; margin-bottom: 3px; }
+            .sidebar-goal-text { display: block; font-size: 12px; color: #333; line-height: 1.3; }
 
             /* ========== HARMONOGRAM DNIA ========== */
 
@@ -3299,10 +3328,10 @@ function zadaniomat_page_main() {
         <!-- Sekcja statystyk i filtrów -->
         <div class="stats-filters-section">
             <button class="stats-toggle-btn" onclick="toggleStatsSection()">
-                📊 <span id="stats-toggle-text">Pokaż statystyki i postęp celów</span>
+                📊 <span id="stats-toggle-text">Ukryj statystyki</span>
             </button>
 
-            <div class="stats-content" id="stats-content">
+            <div class="stats-content visible" id="stats-content">
                 <div class="stats-header">
                     <h2>📊 Podsumowanie godzin i postęp celów</h2>
                     <div class="stats-filters">
@@ -3333,6 +3362,7 @@ function zadaniomat_page_main() {
                     <div class="stat-box">
                         <div class="stat-value" id="total-days">0</div>
                         <div class="stat-label">Dni w okresie</div>
+                        <div class="stat-sublabel" id="total-days-info" style="font-size:11px;color:#888;margin-top:2px;"></div>
                     </div>
                 </div>
 
@@ -3376,6 +3406,34 @@ function zadaniomat_page_main() {
                         <div id="day-type-info" style="font-size:11px; color:#666; margin-top:5px; text-align:center;"></div>
                     </div>
                 </div>
+
+                <!-- Cele na okres -->
+                <?php if ($current_okres): ?>
+                <div class="sidebar-goals">
+                    <h4>🎯 Cele: <?php echo esc_html($current_okres->nazwa); ?></h4>
+                    <div class="sidebar-goals-list" id="sidebar-goals-list">
+                        <?php
+                        $table_cele_okres = $wpdb->prefix . 'zadaniomat_cele_okres';
+                        $sidebar_cele = $wpdb->get_results($wpdb->prepare(
+                            "SELECT * FROM $table_cele_okres WHERE okres_id = %d AND cel IS NOT NULL AND cel != '' AND completed_at IS NULL ORDER BY kategoria ASC",
+                            $current_okres->id
+                        ));
+                        if ($sidebar_cele):
+                            foreach ($sidebar_cele as $cel):
+                        ?>
+                            <div class="sidebar-goal-item <?php echo esc_attr($cel->kategoria); ?>">
+                                <span class="sidebar-goal-kategoria"><?php echo esc_html(ZADANIOMAT_KATEGORIE[$cel->kategoria] ?? $cel->kategoria); ?></span>
+                                <span class="sidebar-goal-text"><?php echo esc_html($cel->cel); ?></span>
+                            </div>
+                        <?php
+                            endforeach;
+                        else:
+                        ?>
+                            <p style="color:#888; font-size:12px; font-style:italic;">Brak aktywnych celów</p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
             </div>
             
             <!-- CONTENT -->
@@ -3574,7 +3632,7 @@ function zadaniomat_page_main() {
         var allOkresy = [];
         var currentRokId = <?php echo $current_rok ? $current_rok->id : 'null'; ?>;
         var currentOkresId = <?php echo $current_okres ? $current_okres->id : 'null'; ?>;
-        var statsVisible = false;
+        var statsVisible = true;
 
         // ==================== INIT ====================
         $(document).ready(function() {
@@ -3619,6 +3677,11 @@ function zadaniomat_page_main() {
                     allRoki = response.data.roki;
                     allOkresy = response.data.okresy;
                     renderRokiSelect();
+                    // Auto-select current rok and okres if available
+                    if (currentRokId) {
+                        $('#stats-rok-filter').val(currentRokId);
+                        onRokFilterChange();
+                    }
                 }
             });
         };
@@ -3644,6 +3707,10 @@ function zadaniomat_page_main() {
                 });
             }
             $('#stats-okres-filter').html(html);
+            // Auto-select current okres if available
+            if (currentOkresId) {
+                $('#stats-okres-filter').val(currentOkresId);
+            }
             loadStats();
         };
 
@@ -3682,6 +3749,12 @@ function zadaniomat_page_main() {
             $('#total-tasks').text(data.total.liczba_zadan);
             $('#total-completed').text(data.total.ukonczone);
             $('#total-days').text(data.dni_w_okresie);
+            // Pokaż info o dniach wolnych
+            if (data.dni_wolne > 0) {
+                $('#total-days-info').text('(- ' + data.dni_wolne + ' woln.)');
+            } else {
+                $('#total-days-info').text('');
+            }
 
             // Statystyki per kategoria
             var html = '';
@@ -4097,6 +4170,7 @@ function zadaniomat_page_main() {
             html += '<select class="status-select status-' + taskStatus + '" onchange="changeTaskStatus(' + t.id + ', this.value)">';
             html += '<option value="nowe"' + (taskStatus === 'nowe' ? ' selected' : '') + '>Nowe</option>';
             html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
+            html += '<option value="w_trakcie"' + (taskStatus === 'w_trakcie' ? ' selected' : '') + '>W trakcie (kont.)</option>';
             html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
             html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
             html += '</select>';
@@ -4395,6 +4469,7 @@ function zadaniomat_page_main() {
                 html += '<select class="status-select status-' + taskStatus + '" onchange="updateOverdueStatus(' + t.id + ', this.value)">';
                 html += '<option value="nowe"' + (taskStatus === 'nowe' ? ' selected' : '') + '>Nowe</option>';
                 html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
+                html += '<option value="w_trakcie"' + (taskStatus === 'w_trakcie' ? ' selected' : '') + '>W trakcie (kont.)</option>';
                 html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
                 html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
                 html += '</select>';
@@ -4472,8 +4547,8 @@ function zadaniomat_page_main() {
                 value: status
             }, function(response) {
                 if (response.success) {
-                    // Ukryj zadanie jeśli status to zakonczone lub anulowane
-                    if (status === 'zakonczone' || status === 'anulowane') {
+                    // Ukryj zadanie jeśli status to zakonczone, anulowane lub w_trakcie (kontynuacja)
+                    if (status === 'zakonczone' || status === 'anulowane' || status === 'w_trakcie') {
                         var $container = $('[data-task-id="' + id + '"].overdue-task');
                         $container.slideUp(300, function() {
                             $(this).remove();
@@ -4483,6 +4558,7 @@ function zadaniomat_page_main() {
                     var statusLabels = {
                         'nowe': 'Nowe',
                         'rozpoczete': 'Rozpoczęte',
+                        'w_trakcie': 'W trakcie (kont.)',
                         'zakonczone': 'Zakończone',
                         'anulowane': 'Anulowane'
                     };
@@ -6464,7 +6540,17 @@ function zadaniomat_page_settings() {
     );
     
     $roki = $wpdb->get_results("SELECT * FROM $table_roki ORDER BY data_start DESC");
-    $selected_rok = isset($_GET['rok_id']) ? intval($_GET['rok_id']) : ($roki ? $roki[0]->id : null);
+    // Auto-select current rok (containing today's date) if no rok_id in URL
+    $default_rok_id = null;
+    if (!isset($_GET['rok_id'])) {
+        $current_date = date('Y-m-d');
+        $current_rok_data = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM $table_roki WHERE %s BETWEEN data_start AND data_koniec LIMIT 1",
+            $current_date
+        ));
+        $default_rok_id = $current_rok_data ? $current_rok_data->id : ($roki ? $roki[0]->id : null);
+    }
+    $selected_rok = isset($_GET['rok_id']) ? intval($_GET['rok_id']) : $default_rok_id;
     $current_rok = $selected_rok ? $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_roki WHERE id = %d", $selected_rok)) : null;
     
     $okresy = $selected_rok ? $wpdb->get_results($wpdb->prepare(
