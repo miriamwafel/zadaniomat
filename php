@@ -814,6 +814,55 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
     ]);
 });
 
+// Pobierz dni okresu z oznaczeniem wolnych
+add_action('wp_ajax_zadaniomat_get_okres_days', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $filter_type = sanitize_text_field($_POST['filter_type']);
+    $filter_id = intval($_POST['filter_id']);
+
+    $table_roki = $wpdb->prefix . 'zadaniomat_roki';
+    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
+    $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
+
+    if ($filter_type === 'rok') {
+        $data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_roki WHERE id = %d", $filter_id));
+    } else {
+        $data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_okresy WHERE id = %d", $filter_id));
+    }
+
+    if (!$data) {
+        wp_send_json_error(['message' => 'Nie znaleziono okresu']);
+        return;
+    }
+
+    // Pobierz wszystkie dni wolne w tym okresie
+    $dni_wolne = $wpdb->get_col($wpdb->prepare(
+        "SELECT dzien FROM $table_dni_wolne WHERE dzien BETWEEN %s AND %s",
+        $data->data_start, $data->data_koniec
+    ));
+    $dni_wolne_set = array_flip($dni_wolne);
+
+    // Generuj listę dni
+    $days = [];
+    $current = new DateTime($data->data_start);
+    $end = new DateTime($data->data_koniec);
+
+    while ($current <= $end) {
+        $date_str = $current->format('Y-m-d');
+        $days[] = [
+            'date' => $date_str,
+            'day' => (int)$current->format('d'),
+            'weekday' => $current->format('N'), // 1=Pn, 7=Nd
+            'is_free' => isset($dni_wolne_set[$date_str])
+        ];
+        $current->modify('+1 day');
+    }
+
+    wp_send_json_success(['days' => $days]);
+});
+
 // Pobierz kategorie
 add_action('wp_ajax_zadaniomat_get_kategorie', function() {
     check_ajax_referer('zadaniomat_ajax', 'nonce');
@@ -1889,6 +1938,8 @@ add_action('admin_head', function() {
             .status-w_trakcie { background-color: #e8f4fd !important; }
             .status-zakonczone { background-color: #d4edda !important; }
             .status-zakonczone td strong { text-decoration: line-through; color: #666; }
+            .status-niezrealizowane { background-color: #ffe4e1 !important; }
+            .status-niezrealizowane td strong { text-decoration: line-through; color: #999; }
             .status-anulowane { background-color: #f8d7da !important; }
             .status-anulowane td strong { text-decoration: line-through; color: #999; }
 
@@ -1905,6 +1956,7 @@ add_action('admin_head', function() {
             .status-select.status-rozpoczete { background: #fff3cd; border-color: #ffc107; color: #856404; }
             .status-select.status-w_trakcie { background: #e8f4fd; border-color: #17a2b8; color: #0c5460; }
             .status-select.status-zakonczone { background: #d4edda; border-color: #28a745; color: #155724; }
+            .status-select.status-niezrealizowane { background: #ffe4e1; border-color: #ff6b6b; color: #c92a2a; }
             .status-select.status-anulowane { background: #f8d7da; border-color: #dc3545; color: #721c24; }
 
             .task-done-checkbox {
@@ -2116,21 +2168,24 @@ add_action('admin_head', function() {
             .day-info .day-name { font-size: 14px; color: #888; margin-top: 4px; }
             .day-info .okres-name { font-size: 12px; color: #28a745; margin-top: 8px; }
 
-            /* Sidebar cele na okres */
-            .sidebar-goals { margin-top: 15px; padding: 15px; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-            .sidebar-goals h4 { margin: 0 0 12px 0; font-size: 14px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 8px; }
-            .sidebar-goals-list { display: flex; flex-direction: column; gap: 8px; }
-            .sidebar-goal-item { padding: 8px 10px; border-radius: 6px; border-left: 3px solid #667eea; background: #f8f9fa; }
-            .sidebar-goal-item.zapianowany { border-left-color: #28a745; }
-            .sidebar-goal-item.klejpan { border-left-color: #17a2b8; }
-            .sidebar-goal-item.marka_langer { border-left-color: #ffc107; }
-            .sidebar-goal-item.marketing_construction { border-left-color: #dc3545; }
-            .sidebar-goal-item.fjo { border-left-color: #6f42c1; }
-            .sidebar-goal-item.obsluga_telefoniczna { border-left-color: #20c997; }
-            .sidebar-goal-item.sprawy_organizacyjne { border-left-color: #6c757d; }
-            .sidebar-goal-item.poboczne_tematy { border-left-color: #fd7e14; }
-            .sidebar-goal-kategoria { display: block; font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; margin-bottom: 3px; }
-            .sidebar-goal-text { display: block; font-size: 12px; color: #333; line-height: 1.3; }
+            /* Tasks with Goals layout */
+            .tasks-with-goals-layout { display: flex; gap: 20px; align-items: flex-start; }
+            .goals-panel { width: 220px; flex-shrink: 0; background: #fff; border-radius: 12px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); position: sticky; top: 20px; }
+            .goals-panel h3 { margin: 0 0 12px 0; font-size: 14px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+            .goals-panel-list { display: flex; flex-direction: column; gap: 8px; }
+            .goal-panel-item { padding: 10px 12px; border-radius: 8px; border-left: 4px solid #667eea; background: #f8f9fa; }
+            .goal-panel-item.zapianowany { border-left-color: #28a745; background: #f0fff4; }
+            .goal-panel-item.klejpan { border-left-color: #17a2b8; background: #e8f8fb; }
+            .goal-panel-item.marka_langer { border-left-color: #ffc107; background: #fffbeb; }
+            .goal-panel-item.marketing_construction { border-left-color: #dc3545; background: #fff5f5; }
+            .goal-panel-item.fjo { border-left-color: #6f42c1; background: #f8f5ff; }
+            .goal-panel-item.obsluga_telefoniczna { border-left-color: #20c997; background: #e6fffa; }
+            .goal-panel-item.sprawy_organizacyjne { border-left-color: #6c757d; background: #f8f9fa; }
+            .goal-panel-item.poboczne_tematy { border-left-color: #fd7e14; background: #fff8f0; }
+            .goal-panel-kategoria { display: block; font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+            .goal-panel-text { display: block; font-size: 12px; color: #333; line-height: 1.4; }
+            .goals-panel .no-goals { color: #888; font-size: 12px; font-style: italic; margin: 0; }
+            .tasks-panel { flex: 1; min-width: 0; }
 
             /* ========== HARMONOGRAM DNIA ========== */
 
@@ -3120,6 +3175,22 @@ add_action('admin_head', function() {
             .stat-box.tasks .stat-value { color: #17a2b8; }
             .stat-box.completed .stat-value { color: #ffc107; }
 
+            /* Wizualizacja dni okresu */
+            .okres-days-visualization { margin: 15px 0; padding: 15px; background: #fff; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+            .okres-days-grid { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+            .okres-day-tile {
+                width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+                font-size: 12px; font-weight: 600; cursor: default; transition: transform 0.1s;
+            }
+            .okres-day-tile:hover { transform: scale(1.1); }
+            .okres-day-tile.working { background: #d4edda; color: #155724; border: 1px solid #28a745; }
+            .okres-day-tile.free { background: #f8d7da; color: #721c24; border: 1px solid #dc3545; }
+            .okres-day-tile.today { box-shadow: 0 0 0 2px #667eea; }
+            .okres-days-legend { display: flex; gap: 15px; font-size: 12px; color: #666; }
+            .legend-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }
+            .legend-dot.working { background: #d4edda; border: 1px solid #28a745; }
+            .legend-dot.free { background: #f8d7da; border: 1px solid #dc3545; }
+
             /* Statystyki per kategoria */
             .stats-categories {
                 display: grid;
@@ -3361,8 +3432,18 @@ function zadaniomat_page_main() {
                     </div>
                     <div class="stat-box">
                         <div class="stat-value" id="total-days">0</div>
-                        <div class="stat-label">Dni w okresie</div>
+                        <div class="stat-label">Dni roboczych</div>
                         <div class="stat-sublabel" id="total-days-info" style="font-size:11px;color:#888;margin-top:2px;"></div>
+                    </div>
+                </div>
+
+                <!-- Wizualizacja dni okresu -->
+                <div class="okres-days-visualization" id="okres-days-container">
+                    <h4 style="margin: 15px 0 10px; font-size: 13px; color: #666;">📅 Dni w okresie:</h4>
+                    <div class="okres-days-grid" id="okres-days-grid"></div>
+                    <div class="okres-days-legend">
+                        <span><span class="legend-dot working"></span> Roboczy</span>
+                        <span><span class="legend-dot free"></span> Wolny</span>
                     </div>
                 </div>
 
@@ -3406,34 +3487,6 @@ function zadaniomat_page_main() {
                         <div id="day-type-info" style="font-size:11px; color:#666; margin-top:5px; text-align:center;"></div>
                     </div>
                 </div>
-
-                <!-- Cele na okres -->
-                <?php if ($current_okres): ?>
-                <div class="sidebar-goals">
-                    <h4>🎯 Cele: <?php echo esc_html($current_okres->nazwa); ?></h4>
-                    <div class="sidebar-goals-list" id="sidebar-goals-list">
-                        <?php
-                        $table_cele_okres = $wpdb->prefix . 'zadaniomat_cele_okres';
-                        $sidebar_cele = $wpdb->get_results($wpdb->prepare(
-                            "SELECT * FROM $table_cele_okres WHERE okres_id = %d AND cel IS NOT NULL AND cel != '' AND completed_at IS NULL ORDER BY kategoria ASC",
-                            $current_okres->id
-                        ));
-                        if ($sidebar_cele):
-                            foreach ($sidebar_cele as $cel):
-                        ?>
-                            <div class="sidebar-goal-item <?php echo esc_attr($cel->kategoria); ?>">
-                                <span class="sidebar-goal-kategoria"><?php echo esc_html(ZADANIOMAT_KATEGORIE[$cel->kategoria] ?? $cel->kategoria); ?></span>
-                                <span class="sidebar-goal-text"><?php echo esc_html($cel->cel); ?></span>
-                            </div>
-                        <?php
-                            endforeach;
-                        else:
-                        ?>
-                            <p style="color:#888; font-size:12px; font-style:italic;">Brak aktywnych celów</p>
-                        <?php endif; ?>
-                    </div>
-                </div>
-                <?php endif; ?>
             </div>
             
             <!-- CONTENT -->
@@ -3543,18 +3596,51 @@ function zadaniomat_page_main() {
                     </form>
                 </div>
 
-                <!-- Zadania na dziś -->
-                <div class="zadaniomat-card" id="today-tasks-section">
-                    <div class="tasks-header">
-                        <h2>📋 Zadania na dziś</h2>
-                        <div class="tasks-date-nav">
-                            <button onclick="changeTasksDate(-1)" title="Poprzedni dzień">←</button>
-                            <input type="date" id="tasks-list-date" value="<?php echo $today; ?>" onchange="loadTasksForDate(this.value)">
-                            <button onclick="changeTasksDate(1)" title="Następny dzień">→</button>
-                            <button onclick="goToTodayTasks()" class="btn-today">Dziś</button>
+                <!-- Layout: Cele + Zadania -->
+                <div class="tasks-with-goals-layout">
+                    <!-- Cele na okres - lewa strona -->
+                    <?php if ($current_okres): ?>
+                    <div class="goals-panel">
+                        <h3>🎯 Cele: <?php echo esc_html($current_okres->nazwa); ?></h3>
+                        <div class="goals-panel-list">
+                            <?php
+                            $table_cele_okres = $wpdb->prefix . 'zadaniomat_cele_okres';
+                            $panel_cele = $wpdb->get_results($wpdb->prepare(
+                                "SELECT * FROM $table_cele_okres WHERE okres_id = %d AND cel IS NOT NULL AND cel != '' AND completed_at IS NULL ORDER BY kategoria ASC",
+                                $current_okres->id
+                            ));
+                            if ($panel_cele):
+                                foreach ($panel_cele as $cel):
+                            ?>
+                                <div class="goal-panel-item <?php echo esc_attr($cel->kategoria); ?>">
+                                    <span class="goal-panel-kategoria"><?php echo esc_html(ZADANIOMAT_KATEGORIE[$cel->kategoria] ?? $cel->kategoria); ?></span>
+                                    <span class="goal-panel-text"><?php echo esc_html($cel->cel); ?></span>
+                                </div>
+                            <?php
+                                endforeach;
+                            else:
+                            ?>
+                                <p class="no-goals">Brak aktywnych celów</p>
+                            <?php endif; ?>
                         </div>
                     </div>
-                    <div id="today-tasks-container"></div>
+                    <?php endif; ?>
+
+                    <!-- Zadania na dziś - prawa strona -->
+                    <div class="tasks-panel">
+                        <div class="zadaniomat-card" id="today-tasks-section">
+                            <div class="tasks-header">
+                                <h2>📋 Zadania na dziś</h2>
+                                <div class="tasks-date-nav">
+                                    <button onclick="changeTasksDate(-1)" title="Poprzedni dzień">←</button>
+                                    <input type="date" id="tasks-list-date" value="<?php echo $today; ?>" onchange="loadTasksForDate(this.value)">
+                                    <button onclick="changeTasksDate(1)" title="Następny dzień">→</button>
+                                    <button onclick="goToTodayTasks()" class="btn-today">Dziś</button>
+                                </div>
+                            </div>
+                            <div id="today-tasks-container"></div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Harmonogram dnia - z wyborem daty -->
@@ -3720,6 +3806,7 @@ function zadaniomat_page_main() {
 
             if (!rokId && !okresId) {
                 $('#stats-categories').html('<p style="color: #888; text-align: center;">Wybierz rok lub okres aby zobaczyć statystyki...</p>');
+                $('#okres-days-grid').html('');
                 return;
             }
 
@@ -3736,7 +3823,32 @@ function zadaniomat_page_main() {
                     renderStats(response.data);
                 }
             });
+
+            // Załaduj wizualizację dni
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_okres_days',
+                nonce: nonce,
+                filter_type: filterType,
+                filter_id: filterId
+            }, function(response) {
+                if (response.success) {
+                    renderOkresDays(response.data.days);
+                }
+            });
         };
+
+        function renderOkresDays(days) {
+            var html = '';
+            days.forEach(function(d) {
+                var isToday = d.date === today;
+                var typeClass = d.is_free ? 'free' : 'working';
+                var todayClass = isToday ? ' today' : '';
+                var weekdayNames = ['', 'Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'Sb', 'Nd'];
+                var title = d.date + ' (' + weekdayNames[d.weekday] + ') - ' + (d.is_free ? 'Wolne' : 'Roboczy');
+                html += '<div class="okres-day-tile ' + typeClass + todayClass + '" title="' + title + '">' + d.day + '</div>';
+            });
+            $('#okres-days-grid').html(html);
+        }
 
         function renderStats(data) {
             // Aktualizuj info o filtrze
@@ -4172,6 +4284,7 @@ function zadaniomat_page_main() {
             html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
             html += '<option value="w_trakcie"' + (taskStatus === 'w_trakcie' ? ' selected' : '') + '>W trakcie (kont.)</option>';
             html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
+            html += '<option value="niezrealizowane"' + (taskStatus === 'niezrealizowane' ? ' selected' : '') + '>Niezrealizowane</option>';
             html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
             html += '</select>';
             html += '</td>';
@@ -4471,6 +4584,7 @@ function zadaniomat_page_main() {
                 html += '<option value="rozpoczete"' + (taskStatus === 'rozpoczete' ? ' selected' : '') + '>Rozpoczęte</option>';
                 html += '<option value="w_trakcie"' + (taskStatus === 'w_trakcie' ? ' selected' : '') + '>W trakcie (kont.)</option>';
                 html += '<option value="zakonczone"' + (taskStatus === 'zakonczone' ? ' selected' : '') + '>Zakończone</option>';
+                html += '<option value="niezrealizowane"' + (taskStatus === 'niezrealizowane' ? ' selected' : '') + '>Niezrealizowane</option>';
                 html += '<option value="anulowane"' + (taskStatus === 'anulowane' ? ' selected' : '') + '>Anulowane</option>';
                 html += '</select>';
 
@@ -4547,8 +4661,8 @@ function zadaniomat_page_main() {
                 value: status
             }, function(response) {
                 if (response.success) {
-                    // Ukryj zadanie jeśli status to zakonczone, anulowane lub w_trakcie (kontynuacja)
-                    if (status === 'zakonczone' || status === 'anulowane' || status === 'w_trakcie') {
+                    // Ukryj zadanie jeśli status to zakonczone, anulowane, w_trakcie lub niezrealizowane
+                    if (status === 'zakonczone' || status === 'anulowane' || status === 'w_trakcie' || status === 'niezrealizowane') {
                         var $container = $('[data-task-id="' + id + '"].overdue-task');
                         $container.slideUp(300, function() {
                             $(this).remove();
@@ -4560,6 +4674,7 @@ function zadaniomat_page_main() {
                         'rozpoczete': 'Rozpoczęte',
                         'w_trakcie': 'W trakcie (kont.)',
                         'zakonczone': 'Zakończone',
+                        'niezrealizowane': 'Niezrealizowane',
                         'anulowane': 'Anulowane'
                     };
                     showToast('Status: ' + statusLabels[status], 'success');
