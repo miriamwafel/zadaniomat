@@ -2249,9 +2249,11 @@ add_action('admin_head', function() {
             /* Daily progress section */
             .daily-progress-section { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
             .daily-progress-section h4 { margin: 0 0 10px 0; font-size: 13px; color: #333; }
+            .daily-progress-label { font-size: 11px; font-weight: 600; color: #555; margin-bottom: 4px; }
             .daily-progress-bar-container { position: relative; background: #e9ecef; border-radius: 10px; height: 24px; overflow: hidden; }
             .daily-progress-bar { height: 100%; background: linear-gradient(90deg, #28a745, #20c997); border-radius: 10px; transition: width 0.5s ease; }
             .daily-progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #333; white-space: nowrap; }
+            .daily-other-stats { display: flex; gap: 15px; margin-top: 10px; font-size: 12px; color: #555; font-weight: 500; }
             .daily-stats-mini { display: flex; gap: 10px; margin-top: 8px; font-size: 11px; color: #666; }
 
             /* ========== HARMONOGRAM DNIA ========== */
@@ -3673,7 +3675,11 @@ function zadaniomat_page_main() {
                         $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
                         $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
 
-                        // Planowane godziny dziennie per kategoria
+                        // Kategorie celów (tylko te mają progres)
+                        $kategorie_celow = zadaniomat_get_kategorie();
+                        $kategorie_celow_keys = array_keys($kategorie_celow);
+
+                        // Planowane godziny dziennie per kategoria (tylko dla kategorii celów)
                         $planowane_raw = $wpdb->get_results($wpdb->prepare(
                             "SELECT kategoria, planowane_godziny_dziennie FROM $table_cele_rok WHERE rok_id = %d",
                             $current_rok->id
@@ -3682,31 +3688,63 @@ function zadaniomat_page_main() {
                         $total_planowane = 0;
                         foreach ($planowane_raw as $p) {
                             $planowane_map[$p->kategoria] = floatval($p->planowane_godziny_dziennie);
-                            $total_planowane += floatval($p->planowane_godziny_dziennie);
+                            // Tylko kategorie celów liczą się do progresu
+                            if (in_array($p->kategoria, $kategorie_celow_keys)) {
+                                $total_planowane += floatval($p->planowane_godziny_dziennie);
+                            }
                         }
 
-                        // Faktycznie przepracowane dzisiaj
-                        $dzis_stats = $wpdb->get_row($wpdb->prepare(
+                        // Faktycznie przepracowane dzisiaj - rozdzielone na cele vs inne
+                        $dzis_stats_cele = $wpdb->get_row($wpdb->prepare(
+                            "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
+                                    COUNT(*) as liczba_zadan,
+                                    SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+                             FROM $table_zadania WHERE dzien = %s AND kategoria IN ('" . implode("','", array_map('esc_sql', $kategorie_celow_keys)) . "')",
+                            $today
+                        ));
+
+                        $dzis_stats_inne = $wpdb->get_row($wpdb->prepare(
+                            "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
+                                    COUNT(*) as liczba_zadan,
+                                    SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+                             FROM $table_zadania WHERE dzien = %s AND (kategoria IS NULL OR kategoria NOT IN ('" . implode("','", array_map('esc_sql', $kategorie_celow_keys)) . "'))",
+                            $today
+                        ));
+
+                        $dzis_stats_total = $wpdb->get_row($wpdb->prepare(
                             "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
                                     COUNT(*) as liczba_zadan,
                                     SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
                              FROM $table_zadania WHERE dzien = %s",
                             $today
                         ));
-                        $faktyczny_h = ($dzis_stats->faktyczny_min ?: 0) / 60;
-                        $procent_dnia = $total_planowane > 0 ? min(100, round(($faktyczny_h / $total_planowane) * 100)) : 0;
+
+                        $faktyczny_cele_h = ($dzis_stats_cele->faktyczny_min ?: 0) / 60;
+                        $faktyczny_inne_h = ($dzis_stats_inne->faktyczny_min ?: 0) / 60;
+                        $faktyczny_total_h = ($dzis_stats_total->faktyczny_min ?: 0) / 60;
+                        $procent_dnia = $total_planowane > 0 ? min(100, round(($faktyczny_cele_h / $total_planowane) * 100)) : 0;
                         ?>
 
                         <!-- Dzisiejszy progres -->
                         <div class="daily-progress-section">
                             <h4>📊 Dziś: <?php echo date('d.m'); ?></h4>
+
+                            <!-- Progres celów -->
+                            <div class="daily-progress-label">🎯 Cele:</div>
                             <div class="daily-progress-bar-container">
                                 <div class="daily-progress-bar" style="width: <?php echo $procent_dnia; ?>%"></div>
-                                <span class="daily-progress-text"><?php echo number_format($faktyczny_h, 1); ?>h / <?php echo number_format($total_planowane, 1); ?>h (<?php echo $procent_dnia; ?>%)</span>
+                                <span class="daily-progress-text"><?php echo number_format($faktyczny_cele_h, 1); ?>h / <?php echo number_format($total_planowane, 1); ?>h (<?php echo $procent_dnia; ?>%)</span>
                             </div>
+
+                            <!-- Czas na inne zadania -->
+                            <div class="daily-other-stats">
+                                <span>📁 Inne: <?php echo number_format($faktyczny_inne_h, 1); ?>h</span>
+                                <span>⏱️ Razem: <?php echo number_format($faktyczny_total_h, 1); ?>h</span>
+                            </div>
+
                             <div class="daily-stats-mini">
-                                <span>📋 <?php echo $dzis_stats->liczba_zadan ?: 0; ?> zadań</span>
-                                <span>✅ <?php echo $dzis_stats->ukonczone ?: 0; ?> ukończ.</span>
+                                <span>📋 <?php echo $dzis_stats_total->liczba_zadan ?: 0; ?> zadań</span>
+                                <span>✅ <?php echo $dzis_stats_total->ukonczone ?: 0; ?> ukończ.</span>
                             </div>
                         </div>
 
@@ -3731,7 +3769,8 @@ function zadaniomat_page_main() {
                                 $panel_cele_map[$cel->kategoria] = $cel;
                             }
                             $has_goals = false;
-                            foreach (ZADANIOMAT_KATEGORIE_ZADANIA as $kat_key => $kat_label):
+                            // Tylko kategorie celów (nie wszystkie kategorie zadań)
+                            foreach ($kategorie_celow as $kat_key => $kat_label):
                                 if (isset($panel_cele_map[$kat_key])):
                                     $cel = $panel_cele_map[$kat_key];
                                     $planowane_h = isset($planowane_map[$kat_key]) ? $planowane_map[$kat_key] : 0;
@@ -4046,7 +4085,7 @@ function zadaniomat_page_main() {
                 html += '  </div>';
                 html += '  <div class="hours-edit-row" id="hours-edit-' + kat + '" style="display: none;">';
                 html += '    <label>Planowane h/dzień:</label>';
-                html += '    <input type="number" step="0.5" min="0" max="24" value="' + planowaneGodziny + '" id="hours-input-' + kat + '">';
+                html += '    <input type="number" step="0.25" min="0" max="24" value="' + planowaneGodziny + '" id="hours-input-' + kat + '">';
                 html += '    <button class="btn-save-hours" onclick="savePlanowaneGodziny(\'' + kat + '\')">Zapisz</button>';
                 html += '  </div>';
                 html += '</div>';
