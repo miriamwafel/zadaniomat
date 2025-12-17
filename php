@@ -731,19 +731,42 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
     $start_date = $filter_data->data_start;
     $end_date = $filter_data->data_koniec;
 
-    // Policz dni robocze w okresie (bez dni wolnych)
+    // Policz dni robocze w okresie
+    // Logika: weekendy domyślnie wolne, dni Pn-Pt domyślnie robocze
+    // Wpis w tabeli dni_wolne = odwrócony status
     $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
-    $date1 = new DateTime($start_date);
-    $date2 = new DateTime($end_date);
-    $total_days = $date2->diff($date1)->days + 1;
 
-    // Policz dni wolne w tym okresie
-    $dni_wolne_count = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM $table_dni_wolne WHERE dzien BETWEEN %s AND %s",
+    // Pobierz dni z odwróconym statusem
+    $dni_override = $wpdb->get_col($wpdb->prepare(
+        "SELECT dzien FROM $table_dni_wolne WHERE dzien BETWEEN %s AND %s",
         $start_date, $end_date
     ));
+    $dni_override_set = array_flip($dni_override);
 
-    $dni_w_okresie = $total_days - intval($dni_wolne_count);
+    // Policz dni robocze
+    $current = new DateTime($start_date);
+    $end = new DateTime($end_date);
+    $total_days = 0;
+    $dni_wolne_count = 0;
+
+    while ($current <= $end) {
+        $total_days++;
+        $weekday = (int)$current->format('N'); // 1=Pn, 6=Sb, 7=Nd
+        $date_str = $current->format('Y-m-d');
+        $is_weekend = ($weekday >= 6);
+        $has_override = isset($dni_override_set[$date_str]);
+
+        // Weekend domyślnie wolny, wpis w tabeli = roboczy
+        // Dzień Pn-Pt domyślnie roboczy, wpis w tabeli = wolny
+        $is_free = $is_weekend ? !$has_override : $has_override;
+
+        if ($is_free) {
+            $dni_wolne_count++;
+        }
+        $current->modify('+1 day');
+    }
+
+    $dni_w_okresie = $total_days - $dni_wolne_count;
 
     // Pobierz statystyki per kategoria
     $stats = $wpdb->get_results($wpdb->prepare(
@@ -837,25 +860,36 @@ add_action('wp_ajax_zadaniomat_get_okres_days', function() {
         return;
     }
 
-    // Pobierz wszystkie dni wolne w tym okresie
-    $dni_wolne = $wpdb->get_col($wpdb->prepare(
+    // Pobierz dni z odwróconym statusem
+    $dni_override = $wpdb->get_col($wpdb->prepare(
         "SELECT dzien FROM $table_dni_wolne WHERE dzien BETWEEN %s AND %s",
         $data->data_start, $data->data_koniec
     ));
-    $dni_wolne_set = array_flip($dni_wolne);
+    $dni_override_set = array_flip($dni_override);
 
     // Generuj listę dni
+    // Logika: weekendy domyślnie wolne, dni Pn-Pt domyślnie robocze
+    // Wpis w tabeli = odwrócony status
     $days = [];
     $current = new DateTime($data->data_start);
     $end = new DateTime($data->data_koniec);
 
     while ($current <= $end) {
         $date_str = $current->format('Y-m-d');
+        $weekday = (int)$current->format('N'); // 1=Pn, 6=Sb, 7=Nd
+        $is_weekend = ($weekday >= 6);
+        $has_override = isset($dni_override_set[$date_str]);
+
+        // Weekend domyślnie wolny, wpis = roboczy
+        // Dzień Pn-Pt domyślnie roboczy, wpis = wolny
+        $is_free = $is_weekend ? !$has_override : $has_override;
+
         $days[] = [
             'date' => $date_str,
             'day' => (int)$current->format('d'),
-            'weekday' => $current->format('N'), // 1=Pn, 7=Nd
-            'is_free' => isset($dni_wolne_set[$date_str])
+            'weekday' => $weekday,
+            'is_free' => $is_free,
+            'is_weekend' => $is_weekend
         ];
         $current->modify('+1 day');
     }
@@ -1109,19 +1143,25 @@ add_action('wp_ajax_zadaniomat_toggle_dzien_wolny', function() {
     $table = $wpdb->prefix . 'zadaniomat_dni_wolne';
     $dzien = sanitize_text_field($_POST['dzien']);
 
-    // Sprawdź czy dzień jest już oznaczony jako wolny
+    // Sprawdź dzień tygodnia
+    $day_of_week = date('w', strtotime($dzien));
+    $is_weekend = ($day_of_week == 0 || $day_of_week == 6);
+
+    // Sprawdź czy dzień jest w tabeli (ma odwrócony status)
     $existing = $wpdb->get_var($wpdb->prepare(
         "SELECT id FROM $table WHERE dzien = %s", $dzien
     ));
 
     if ($existing) {
-        // Usuń - dzień staje się roboczym
+        // Usuń wpis - wróć do domyślnego statusu
         $wpdb->delete($table, ['dzien' => $dzien]);
-        $is_wolny = false;
+        // Po usunięciu: weekend = wolny, dzień roboczy = roboczy
+        $is_wolny = $is_weekend;
     } else {
-        // Dodaj - dzień staje się wolnym
+        // Dodaj wpis - odwróć domyślny status
         $wpdb->insert($table, ['dzien' => $dzien]);
-        $is_wolny = true;
+        // Po dodaniu: weekend = roboczy, dzień roboczy = wolny
+        $is_wolny = !$is_weekend;
     }
 
     wp_send_json_success(['dzien' => $dzien, 'is_wolny' => $is_wolny]);
