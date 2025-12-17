@@ -542,24 +542,42 @@ add_action('wp_ajax_zadaniomat_get_calendar_dots', function() {
 add_action('wp_ajax_zadaniomat_save_cel_okres', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_cele_okres';
     $okres_id = intval($_POST['okres_id']);
     $kategoria = sanitize_text_field($_POST['kategoria']);
     $cel = sanitize_textarea_field($_POST['cel']);
-    
-    $existing = $wpdb->get_row($wpdb->prepare(
-        "SELECT id FROM $table WHERE okres_id = %d AND kategoria = %s", $okres_id, $kategoria
-    ));
-    
-    if ($existing) {
-        $wpdb->update($table, ['cel' => $cel], ['id' => $existing->id]);
-        $cel_id = $existing->id;
+    $cel_id = isset($_POST['cel_id']) ? intval($_POST['cel_id']) : 0;
+
+    // Jeśli mamy konkretne cel_id, aktualizuj ten cel
+    if ($cel_id > 0) {
+        $wpdb->update($table, ['cel' => $cel], ['id' => $cel_id]);
     } else {
-        $wpdb->insert($table, ['okres_id' => $okres_id, 'kategoria' => $kategoria, 'cel' => $cel]);
-        $cel_id = $wpdb->insert_id;
+        // Szukaj istniejącego NIEUKOŃCZONEGO celu dla tej kategorii
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM $table WHERE okres_id = %d AND kategoria = %s AND completed_at IS NULL ORDER BY id DESC LIMIT 1",
+            $okres_id, $kategoria
+        ));
+
+        if ($existing) {
+            $wpdb->update($table, ['cel' => $cel], ['id' => $existing->id]);
+            $cel_id = $existing->id;
+        } else {
+            // Brak nieukończonych celów - dodaj nowy
+            $max_pozycja = $wpdb->get_var($wpdb->prepare(
+                "SELECT MAX(pozycja) FROM $table WHERE okres_id = %d AND kategoria = %s",
+                $okres_id, $kategoria
+            ));
+            $wpdb->insert($table, [
+                'okres_id' => $okres_id,
+                'kategoria' => $kategoria,
+                'cel' => $cel,
+                'pozycja' => ($max_pozycja ?: 0) + 1
+            ]);
+            $cel_id = $wpdb->insert_id;
+        }
     }
-    
+
     wp_send_json_success(['cel_id' => $cel_id]);
 });
 
@@ -2223,9 +2241,20 @@ add_action('admin_head', function() {
             .goal-panel-item.sprawy_organizacyjne { border-left-color: #6c757d; background: #f8f9fa; }
             .goal-panel-item.poboczne_tematy { border-left-color: #fd7e14; background: #fff8f0; }
             .goal-panel-kategoria { display: block; font-size: 10px; font-weight: 600; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+            .goal-panel-kategoria .goal-hours { font-weight: 400; color: #667eea; }
             .goal-panel-text { display: block; font-size: 12px; color: #333; line-height: 1.4; }
             .goals-panel .no-goals { color: #888; font-size: 12px; font-style: italic; margin: 0; }
             .tasks-panel { flex: 1; min-width: 0; }
+
+            /* Daily progress section */
+            .daily-progress-section { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
+            .daily-progress-section h4 { margin: 0 0 10px 0; font-size: 13px; color: #333; }
+            .daily-progress-label { font-size: 11px; font-weight: 600; color: #555; margin-bottom: 4px; }
+            .daily-progress-bar-container { position: relative; background: #e9ecef; border-radius: 10px; height: 24px; overflow: hidden; }
+            .daily-progress-bar { height: 100%; background: linear-gradient(90deg, #28a745, #20c997); border-radius: 10px; transition: width 0.5s ease; }
+            .daily-progress-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; color: #333; white-space: nowrap; }
+            .daily-other-stats { display: flex; gap: 15px; margin-top: 10px; font-size: 12px; color: #555; font-weight: 500; }
+            .daily-stats-mini { display: flex; gap: 10px; margin-top: 8px; font-size: 11px; color: #666; }
 
             /* ========== HARMONOGRAM DNIA ========== */
 
@@ -3641,24 +3670,120 @@ function zadaniomat_page_main() {
                     <!-- Cele na okres - lewa strona -->
                     <?php if ($current_okres): ?>
                     <div class="goals-panel">
+                        <?php
+                        // Pobierz dane do dzisiejszego progresu
+                        $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
+                        $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+
+                        // Kategorie celów (tylko te mają progres)
+                        $kategorie_celow = zadaniomat_get_kategorie();
+                        $kategorie_celow_keys = array_keys($kategorie_celow);
+
+                        // Planowane godziny dziennie per kategoria (tylko dla kategorii celów)
+                        $planowane_raw = $wpdb->get_results($wpdb->prepare(
+                            "SELECT kategoria, planowane_godziny_dziennie FROM $table_cele_rok WHERE rok_id = %d",
+                            $current_rok->id
+                        ));
+                        $planowane_map = [];
+                        $total_planowane = 0;
+                        foreach ($planowane_raw as $p) {
+                            $planowane_map[$p->kategoria] = floatval($p->planowane_godziny_dziennie);
+                            // Tylko kategorie celów liczą się do progresu
+                            if (in_array($p->kategoria, $kategorie_celow_keys)) {
+                                $total_planowane += floatval($p->planowane_godziny_dziennie);
+                            }
+                        }
+
+                        // Faktycznie przepracowane dzisiaj - rozdzielone na cele vs inne
+                        $dzis_stats_cele = $wpdb->get_row($wpdb->prepare(
+                            "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
+                                    COUNT(*) as liczba_zadan,
+                                    SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+                             FROM $table_zadania WHERE dzien = %s AND kategoria IN ('" . implode("','", array_map('esc_sql', $kategorie_celow_keys)) . "')",
+                            $today
+                        ));
+
+                        $dzis_stats_inne = $wpdb->get_row($wpdb->prepare(
+                            "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
+                                    COUNT(*) as liczba_zadan,
+                                    SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+                             FROM $table_zadania WHERE dzien = %s AND (kategoria IS NULL OR kategoria NOT IN ('" . implode("','", array_map('esc_sql', $kategorie_celow_keys)) . "'))",
+                            $today
+                        ));
+
+                        $dzis_stats_total = $wpdb->get_row($wpdb->prepare(
+                            "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
+                                    COUNT(*) as liczba_zadan,
+                                    SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+                             FROM $table_zadania WHERE dzien = %s",
+                            $today
+                        ));
+
+                        $faktyczny_cele_h = ($dzis_stats_cele->faktyczny_min ?: 0) / 60;
+                        $faktyczny_inne_h = ($dzis_stats_inne->faktyczny_min ?: 0) / 60;
+                        $faktyczny_total_h = ($dzis_stats_total->faktyczny_min ?: 0) / 60;
+                        $procent_dnia = $total_planowane > 0 ? min(100, round(($faktyczny_cele_h / $total_planowane) * 100)) : 0;
+                        ?>
+
+                        <!-- Dzisiejszy progres -->
+                        <div class="daily-progress-section">
+                            <h4>📊 Dziś: <?php echo date('d.m'); ?></h4>
+
+                            <!-- Progres celów -->
+                            <div class="daily-progress-label">🎯 Cele:</div>
+                            <div class="daily-progress-bar-container">
+                                <div class="daily-progress-bar" style="width: <?php echo $procent_dnia; ?>%"></div>
+                                <span class="daily-progress-text"><?php echo number_format($faktyczny_cele_h, 1); ?>h / <?php echo number_format($total_planowane, 1); ?>h (<?php echo $procent_dnia; ?>%)</span>
+                            </div>
+
+                            <!-- Czas na inne zadania -->
+                            <div class="daily-other-stats">
+                                <span>📁 Inne: <?php echo number_format($faktyczny_inne_h, 1); ?>h</span>
+                                <span>⏱️ Razem: <?php echo number_format($faktyczny_total_h, 1); ?>h</span>
+                            </div>
+
+                            <div class="daily-stats-mini">
+                                <span>📋 <?php echo $dzis_stats_total->liczba_zadan ?: 0; ?> zadań</span>
+                                <span>✅ <?php echo $dzis_stats_total->ukonczone ?: 0; ?> ukończ.</span>
+                            </div>
+                        </div>
+
                         <h3>🎯 Cele: <?php echo esc_html($current_okres->nazwa); ?></h3>
                         <div class="goals-panel-list">
                             <?php
                             $table_cele_okres = $wpdb->prefix . 'zadaniomat_cele_okres';
-                            $panel_cele = $wpdb->get_results($wpdb->prepare(
-                                "SELECT * FROM $table_cele_okres WHERE okres_id = %d AND cel IS NOT NULL AND cel != '' AND completed_at IS NULL ORDER BY kategoria ASC",
+                            // Pobierz najnowszy aktywny cel dla każdej kategorii
+                            $panel_cele_raw = $wpdb->get_results($wpdb->prepare(
+                                "SELECT c1.* FROM $table_cele_okres c1
+                                 INNER JOIN (
+                                     SELECT kategoria, MAX(id) as max_id
+                                     FROM $table_cele_okres
+                                     WHERE okres_id = %d AND cel IS NOT NULL AND cel != '' AND completed_at IS NULL
+                                     GROUP BY kategoria
+                                 ) c2 ON c1.id = c2.max_id",
                                 $current_okres->id
                             ));
-                            if ($panel_cele):
-                                foreach ($panel_cele as $cel):
+                            // Uporządkuj według kolejności kategorii zadań
+                            $panel_cele_map = [];
+                            foreach ($panel_cele_raw as $cel) {
+                                $panel_cele_map[$cel->kategoria] = $cel;
+                            }
+                            $has_goals = false;
+                            // Tylko kategorie celów (nie wszystkie kategorie zadań)
+                            foreach ($kategorie_celow as $kat_key => $kat_label):
+                                if (isset($panel_cele_map[$kat_key])):
+                                    $cel = $panel_cele_map[$kat_key];
+                                    $planowane_h = isset($planowane_map[$kat_key]) ? $planowane_map[$kat_key] : 0;
+                                    $has_goals = true;
                             ?>
                                 <div class="goal-panel-item <?php echo esc_attr($cel->kategoria); ?>">
-                                    <span class="goal-panel-kategoria"><?php echo esc_html(ZADANIOMAT_KATEGORIE[$cel->kategoria] ?? $cel->kategoria); ?></span>
+                                    <span class="goal-panel-kategoria"><?php echo esc_html($kat_label); ?><?php if ($planowane_h > 0): ?> <span class="goal-hours">(<?php echo $planowane_h; ?>h/d)</span><?php endif; ?></span>
                                     <span class="goal-panel-text"><?php echo esc_html($cel->cel); ?></span>
                                 </div>
                             <?php
-                                endforeach;
-                            else:
+                                endif;
+                            endforeach;
+                            if (!$has_goals):
                             ?>
                                 <p class="no-goals">Brak aktywnych celów</p>
                             <?php endif; ?>
@@ -3960,7 +4085,7 @@ function zadaniomat_page_main() {
                 html += '  </div>';
                 html += '  <div class="hours-edit-row" id="hours-edit-' + kat + '" style="display: none;">';
                 html += '    <label>Planowane h/dzień:</label>';
-                html += '    <input type="number" step="0.5" min="0" max="24" value="' + planowaneGodziny + '" id="hours-input-' + kat + '">';
+                html += '    <input type="number" step="0.25" min="0" max="24" value="' + planowaneGodziny + '" id="hours-input-' + kat + '">';
                 html += '    <button class="btn-save-hours" onclick="savePlanowaneGodziny(\'' + kat + '\')">Zapisz</button>';
                 html += '  </div>';
                 html += '</div>';
