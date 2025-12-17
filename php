@@ -3645,20 +3645,36 @@ function zadaniomat_page_main() {
                         <div class="goals-panel-list">
                             <?php
                             $table_cele_okres = $wpdb->prefix . 'zadaniomat_cele_okres';
-                            $panel_cele = $wpdb->get_results($wpdb->prepare(
-                                "SELECT * FROM $table_cele_okres WHERE okres_id = %d AND cel IS NOT NULL AND cel != '' AND completed_at IS NULL ORDER BY kategoria ASC",
+                            // Pobierz najnowszy aktywny cel dla każdej kategorii
+                            $panel_cele_raw = $wpdb->get_results($wpdb->prepare(
+                                "SELECT c1.* FROM $table_cele_okres c1
+                                 INNER JOIN (
+                                     SELECT kategoria, MAX(id) as max_id
+                                     FROM $table_cele_okres
+                                     WHERE okres_id = %d AND cel IS NOT NULL AND cel != '' AND completed_at IS NULL
+                                     GROUP BY kategoria
+                                 ) c2 ON c1.id = c2.max_id",
                                 $current_okres->id
                             ));
-                            if ($panel_cele):
-                                foreach ($panel_cele as $cel):
+                            // Uporządkuj według kolejności kategorii zadań
+                            $panel_cele_map = [];
+                            foreach ($panel_cele_raw as $cel) {
+                                $panel_cele_map[$cel->kategoria] = $cel;
+                            }
+                            $has_goals = false;
+                            foreach (ZADANIOMAT_KATEGORIE_ZADANIA as $kat_key => $kat_label):
+                                if (isset($panel_cele_map[$kat_key])):
+                                    $cel = $panel_cele_map[$kat_key];
+                                    $has_goals = true;
                             ?>
                                 <div class="goal-panel-item <?php echo esc_attr($cel->kategoria); ?>">
-                                    <span class="goal-panel-kategoria"><?php echo esc_html(ZADANIOMAT_KATEGORIE[$cel->kategoria] ?? $cel->kategoria); ?></span>
+                                    <span class="goal-panel-kategoria"><?php echo esc_html($kat_label); ?></span>
                                     <span class="goal-panel-text"><?php echo esc_html($cel->cel); ?></span>
                                 </div>
                             <?php
-                                endforeach;
-                            else:
+                                endif;
+                            endforeach;
+                            if (!$has_goals):
                             ?>
                                 <p class="no-goals">Brak aktywnych celów</p>
                             <?php endif; ?>
