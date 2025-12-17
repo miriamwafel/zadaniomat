@@ -542,24 +542,42 @@ add_action('wp_ajax_zadaniomat_get_calendar_dots', function() {
 add_action('wp_ajax_zadaniomat_save_cel_okres', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_cele_okres';
     $okres_id = intval($_POST['okres_id']);
     $kategoria = sanitize_text_field($_POST['kategoria']);
     $cel = sanitize_textarea_field($_POST['cel']);
-    
-    $existing = $wpdb->get_row($wpdb->prepare(
-        "SELECT id FROM $table WHERE okres_id = %d AND kategoria = %s", $okres_id, $kategoria
-    ));
-    
-    if ($existing) {
-        $wpdb->update($table, ['cel' => $cel], ['id' => $existing->id]);
-        $cel_id = $existing->id;
+    $cel_id = isset($_POST['cel_id']) ? intval($_POST['cel_id']) : 0;
+
+    // Jeśli mamy konkretne cel_id, aktualizuj ten cel
+    if ($cel_id > 0) {
+        $wpdb->update($table, ['cel' => $cel], ['id' => $cel_id]);
     } else {
-        $wpdb->insert($table, ['okres_id' => $okres_id, 'kategoria' => $kategoria, 'cel' => $cel]);
-        $cel_id = $wpdb->insert_id;
+        // Szukaj istniejącego NIEUKOŃCZONEGO celu dla tej kategorii
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM $table WHERE okres_id = %d AND kategoria = %s AND completed_at IS NULL ORDER BY id DESC LIMIT 1",
+            $okres_id, $kategoria
+        ));
+
+        if ($existing) {
+            $wpdb->update($table, ['cel' => $cel], ['id' => $existing->id]);
+            $cel_id = $existing->id;
+        } else {
+            // Brak nieukończonych celów - dodaj nowy
+            $max_pozycja = $wpdb->get_var($wpdb->prepare(
+                "SELECT MAX(pozycja) FROM $table WHERE okres_id = %d AND kategoria = %s",
+                $okres_id, $kategoria
+            ));
+            $wpdb->insert($table, [
+                'okres_id' => $okres_id,
+                'kategoria' => $kategoria,
+                'cel' => $cel,
+                'pozycja' => ($max_pozycja ?: 0) + 1
+            ]);
+            $cel_id = $wpdb->insert_id;
+        }
     }
-    
+
     wp_send_json_success(['cel_id' => $cel_id]);
 });
 
