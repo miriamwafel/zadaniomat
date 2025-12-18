@@ -1906,6 +1906,18 @@ add_action('admin_menu', function() {
 // ALL AJAX HANDLERS
 // =============================================
 
+// Helper to ensure zadania table has all columns
+function zadaniomat_ensure_zadania_columns() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+
+    // Check for jest_cykliczne column
+    $column_check = $wpdb->get_results("SHOW COLUMNS FROM $table LIKE 'jest_cykliczne'");
+    if (empty($column_check)) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN jest_cykliczne TINYINT(1) DEFAULT 0");
+    }
+}
+
 // Dodaj zadanie
 add_action('wp_ajax_zadaniomat_add_task', function() {
     global $wpdb;
@@ -1915,7 +1927,10 @@ add_action('wp_ajax_zadaniomat_add_task', function() {
     $task_date = sanitize_text_field($_POST['dzien']);
     $auto_okres = zadaniomat_get_current_okres($task_date);
 
-    $wpdb->insert($table, [
+    // Ensure all columns exist
+    zadaniomat_ensure_zadania_columns();
+
+    $result = $wpdb->insert($table, [
         'okres_id' => $auto_okres ? $auto_okres->id : null,
         'kategoria' => sanitize_text_field($_POST['kategoria']),
         'dzien' => $task_date,
@@ -1924,10 +1939,20 @@ add_action('wp_ajax_zadaniomat_add_task', function() {
         'planowany_czas' => intval($_POST['planowany_czas']),
         'jest_cykliczne' => !empty($_POST['jest_cykliczne']) ? 1 : 0
     ]);
-    
+
+    if ($result === false) {
+        wp_send_json_error('Błąd bazy danych: ' . $wpdb->last_error);
+        return;
+    }
+
     $task_id = $wpdb->insert_id;
     $task = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $task_id));
-    
+
+    if (!$task) {
+        wp_send_json_error('Nie udało się pobrać zadania po dodaniu');
+        return;
+    }
+
     wp_send_json_success([
         'task' => $task,
         'kategoria_label' => zadaniomat_get_kategoria_label($task->kategoria)
