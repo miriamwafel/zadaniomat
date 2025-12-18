@@ -109,8 +109,15 @@ function zadaniomat_create_tables() {
         godzina_start TIME DEFAULT NULL,
         godzina_koniec TIME DEFAULT NULL,
         pozycja_harmonogram INT DEFAULT NULL,
+        jest_cykliczne TINYINT(1) DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
+
+    // Dodaj kolumnę jest_cykliczne do istniejącej tabeli (jeśli nie istnieje)
+    $column_check = $wpdb->get_results("SHOW COLUMNS FROM $table_zadania LIKE 'jest_cykliczne'");
+    if (empty($column_check)) {
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN jest_cykliczne TINYINT(1) DEFAULT 0");
+    }
 
     // Tabela stałych zadań (cyklicznych)
     $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
@@ -553,28 +560,32 @@ function zadaniomat_get_daily_challenges_config() {
             'xp' => 35,
             'difficulty' => 'medium',
             'condition' => 'Suma faktycznego czasu zadań musi wynosić min. 6 godzin',
-            'param' => 360
+            'param' => 360,
+            'group' => 'work_hours'
         ],
         'work_8_hours' => [
             'desc' => 'Przepracuj 8 godzin',
             'xp' => 50,
             'difficulty' => 'hard',
             'condition' => 'Suma faktycznego czasu zadań musi wynosić min. 8 godzin',
-            'param' => 480
+            'param' => 480,
+            'group' => 'work_hours'
         ],
         '4_categories' => [
             'desc' => 'Zadania w 4 kategoriach',
             'xp' => 30,
             'difficulty' => 'easy',
             'condition' => 'Ukończ min. 1 zadanie w 4 różnych kategoriach',
-            'param' => 4
+            'param' => 4,
+            'group' => 'categories'
         ],
         'all_categories' => [
             'desc' => 'Zadania we wszystkich kategoriach',
             'xp' => 60,
             'difficulty' => 'hard',
             'condition' => 'Ukończ min. 1 zadanie w każdej z 6 kategorii celów',
-            'param' => 6
+            'param' => 6,
+            'group' => 'categories'
         ],
         'all_cyclic' => [
             'desc' => 'Wykonaj wszystkie zadania cykliczne',
@@ -587,14 +598,16 @@ function zadaniomat_get_daily_challenges_config() {
             'xp' => 25,
             'difficulty' => 'medium',
             'condition' => 'Ustaw godzinę startu dnia przed godziną 8:00',
-            'param' => '08:00'
+            'param' => '08:00',
+            'group' => 'early_start'
         ],
         'start_before_9' => [
             'desc' => 'Zacznij przed 9:00',
             'xp' => 15,
             'difficulty' => 'easy',
             'condition' => 'Ustaw godzinę startu dnia przed godziną 9:00',
-            'param' => '09:00'
+            'param' => '09:00',
+            'group' => 'early_start'
         ],
         'morning_plan' => [
             'desc' => 'Zaplanuj dzień rano',
@@ -616,14 +629,16 @@ function zadaniomat_get_daily_challenges_config() {
             'xp' => 20,
             'difficulty' => 'easy',
             'condition' => 'Ukończ 3 zadania z rzędu bez przerwy dłuższej niż 2h',
-            'param' => 3
+            'param' => 3,
+            'group' => 'combo'
         ],
         'combo_5' => [
             'desc' => 'Osiągnij combo x5',
             'xp' => 35,
             'difficulty' => 'medium',
             'condition' => 'Ukończ 5 zadań z rzędu bez przerwy dłuższej niż 2h',
-            'param' => 5
+            'param' => 5,
+            'group' => 'combo'
         ],
         'finish_all' => [
             'desc' => 'Ukończ wszystkie zaplanowane',
@@ -1042,11 +1057,60 @@ function zadaniomat_check_streak_achievements($user_id, $streak_type, $streak_co
     }
 }
 
-// Sprawdź czy zadanie jest cykliczne
-function zadaniomat_is_cyclic_task($task_name) {
+// Sprawdź czy poprzedni dzień kwalifikuje się do streaka (min. 1 zadanie w każdej kategorii LUB 7h pracy)
+function zadaniomat_previous_day_qualifies_for_streak($user_id) {
     global $wpdb;
-    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $yesterday = date('Y-m-d', strtotime('-1 day'));
 
+    // Sprawdź czy wczoraj był dzień roboczy
+    if (!zadaniomat_is_work_day($yesterday)) {
+        return true; // Dni wolne nie wymagają pracy
+    }
+
+    // Kryterium 1: 7h pracy (420 minut)
+    $total_minutes = $wpdb->get_var($wpdb->prepare(
+        "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'",
+        $yesterday
+    ));
+    if (($total_minutes ?: 0) >= 420) {
+        return true;
+    }
+
+    // Kryterium 2: Minimum 1 zadanie w każdej kategorii celów
+    $goal_categories = ['zdrowie', 'relacje', 'praca', 'finanse', 'rozwoj', 'radosc'];
+    $covered_categories = $wpdb->get_col($wpdb->prepare(
+        "SELECT DISTINCT kategoria FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'",
+        $yesterday
+    ));
+
+    $all_covered = true;
+    foreach ($goal_categories as $cat) {
+        if (!in_array($cat, $covered_categories)) {
+            $all_covered = false;
+            break;
+        }
+    }
+
+    return $all_covered;
+}
+
+// Sprawdź czy zadanie jest cykliczne (po ID lub nazwie)
+function zadaniomat_is_cyclic_task($task_name, $task_id = null) {
+    global $wpdb;
+
+    // Najpierw sprawdź flagę jest_cykliczne w tabeli zadań
+    if ($task_id) {
+        $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+        $jest_cykliczne = $wpdb->get_var($wpdb->prepare(
+            "SELECT jest_cykliczne FROM $table_zadania WHERE id = %d",
+            $task_id
+        ));
+        if ($jest_cykliczne) return true;
+    }
+
+    // Następnie sprawdź po nazwie w tabeli stałych zadań
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
     return $wpdb->get_var($wpdb->prepare(
         "SELECT COUNT(*) FROM $table WHERE nazwa = %s AND aktywne = 1",
         $task_name
@@ -1082,9 +1146,12 @@ function zadaniomat_process_task_completion($task_id, $user_id = 1) {
         'achievements' => []
     ];
 
-    // Pobierz streak multiplier
+    // Pobierz streak multiplier - tylko jeśli wczoraj było spełnione kryterium
     $work_streak = zadaniomat_get_streak($user_id, 'work_days');
-    $streak_multiplier = zadaniomat_get_streak_multiplier($work_streak->current_count);
+    $streak_multiplier = 1.0;
+    if ($work_streak->current_count > 0 && zadaniomat_previous_day_qualifies_for_streak($user_id)) {
+        $streak_multiplier = zadaniomat_get_streak_multiplier($work_streak->current_count);
+    }
 
     // Aktualizuj combo
     $combo_result = zadaniomat_update_combo($user_id);
@@ -1095,7 +1162,7 @@ function zadaniomat_process_task_completion($task_id, $user_id = 1) {
     $total_multiplier = $streak_multiplier * $combo_multiplier;
 
     // Oblicz bazowe XP
-    $is_cyclic = zadaniomat_is_cyclic_task($task->zadanie);
+    $is_cyclic = zadaniomat_is_cyclic_task($task->zadanie, $task_id);
     $is_goal_category = zadaniomat_is_goal_category($task->kategoria);
 
     $base_xp = $is_cyclic ? 15 : 10;
@@ -1203,7 +1270,7 @@ function zadaniomat_generate_daily_challenges($user_id, $date) {
         $available = array_keys($all_challenges);
     }
 
-    // Wybierz po jednym z każdej trudności
+    // Wybierz po jednym z każdej trudności, unikając duplikatów z tej samej grupy
     $by_difficulty = ['easy' => [], 'medium' => [], 'hard' => []];
     foreach ($available as $key) {
         $diff = $all_challenges[$key]['difficulty'];
@@ -1211,10 +1278,22 @@ function zadaniomat_generate_daily_challenges($user_id, $date) {
     }
 
     $selected = [];
+    $used_groups = [];
+
     foreach (['easy', 'medium', 'hard'] as $diff) {
         if (!empty($by_difficulty[$diff])) {
             shuffle($by_difficulty[$diff]);
-            $selected[] = $by_difficulty[$diff][0];
+            // Znajdź wyzwanie które nie należy do już użytej grupy
+            foreach ($by_difficulty[$diff] as $candidate) {
+                $group = $all_challenges[$candidate]['group'] ?? null;
+                if ($group === null || !in_array($group, $used_groups)) {
+                    $selected[] = $candidate;
+                    if ($group !== null) {
+                        $used_groups[] = $group;
+                    }
+                    break;
+                }
+            }
         }
     }
 
@@ -1309,11 +1388,12 @@ function zadaniomat_check_daily_challenges($user_id, $date = null) {
                 break;
 
             case 'finish_all':
+                // Tylko zadania z przypisanym czasem (nie szablony)
                 $total = $wpdb->get_var($wpdb->prepare(
-                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s", $date
+                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND planowany_czas > 0", $date
                 ));
                 $completed_count = $wpdb->get_var($wpdb->prepare(
-                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND planowany_czas > 0 AND status = 'zakonczone'", $date
                 ));
                 $is_completed = $total > 0 && $total == $completed_count;
                 break;
@@ -1423,8 +1503,11 @@ function zadaniomat_check_daily_challenges($user_id, $date = null) {
                 'completed_at' => current_time('mysql')
             ], ['id' => $challenge->id]);
 
-            zadaniomat_add_xp($user_id, $challenge->xp_reward, 'daily_challenge',
-                "Wyzwanie: " . (ZADANIOMAT_DAILY_CHALLENGES[$challenge->challenge_key]['desc'] ?? $challenge->challenge_key));
+            $challenge_def = ZADANIOMAT_DAILY_CHALLENGES[$challenge->challenge_key] ?? [];
+            $desc = $challenge_def['desc'] ?? $challenge->challenge_key;
+            $condition = $challenge_def['condition'] ?? '';
+            $full_desc = "Wyzwanie: " . $desc . ($condition ? " | Warunek: " . $condition : '');
+            zadaniomat_add_xp($user_id, $challenge->xp_reward, 'daily_challenge', $full_desc);
 
             $completed[] = $challenge->challenge_key;
         }
@@ -1471,9 +1554,14 @@ function zadaniomat_process_goal_completion($cel_id, $user_id = 1) {
     if ($total_goals >= 25) zadaniomat_award_achievement($user_id, 'goals_25');
     if ($total_goals >= 50) zadaniomat_award_achievement($user_id, 'goals_50');
 
-    // Sprawdź odznaki wielokrotnych celów
-    if ($position >= 2) zadaniomat_award_achievement($user_id, 'goal_x2');
-    if ($position >= 3) zadaniomat_award_achievement($user_id, 'goal_x3');
+    // Sprawdź odznaki wielokrotnych celów w tej samej kategorii i okresie
+    $goals_in_same_category = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_cele
+         WHERE okres_id = %d AND kategoria = %s AND osiagniety = 1",
+        $cel->okres_id, $cel->kategoria
+    ));
+    if ($goals_in_same_category >= 2) zadaniomat_award_achievement($user_id, 'goal_x2');
+    if ($goals_in_same_category >= 3) zadaniomat_award_achievement($user_id, 'goal_x3');
 
     // Sprawdź czy wszystkie cele okresu osiągnięte
     $okres_cele = $wpdb->get_row($wpdb->prepare(
@@ -1580,8 +1668,10 @@ function zadaniomat_process_end_of_day($user_id, $date) {
     $full_hours = floor(($hours_in_goal_categories ?: 0) / 60);
 
     if ($full_hours > 0) {
-        $hours_xp = $full_hours * 5;
-        zadaniomat_add_xp($user_id, $hours_xp, 'category_hour', "$full_hours godzin w kategoriach celów");
+        $config = zadaniomat_get_gam_config();
+        $xp_per_hour = $config['xp_values']['category_hour'] ?? 5;
+        $hours_xp = $full_hours * $xp_per_hour;
+        zadaniomat_add_xp($user_id, $hours_xp, 'category_hour', "$full_hours godzin w kategoriach celów (po $xp_per_hour XP/h)");
         $result['bonuses'][] = ['type' => 'hours', 'hours' => $full_hours, 'xp' => $hours_xp];
         $result['total_xp'] += $hours_xp;
     }
@@ -1803,18 +1893,19 @@ add_action('admin_menu', function() {
 add_action('wp_ajax_zadaniomat_add_task', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $task_date = sanitize_text_field($_POST['dzien']);
     $auto_okres = zadaniomat_get_current_okres($task_date);
-    
+
     $wpdb->insert($table, [
         'okres_id' => $auto_okres ? $auto_okres->id : null,
         'kategoria' => sanitize_text_field($_POST['kategoria']),
         'dzien' => $task_date,
         'zadanie' => sanitize_text_field($_POST['zadanie']),
         'cel_todo' => sanitize_textarea_field($_POST['cel_todo']),
-        'planowany_czas' => intval($_POST['planowany_czas'])
+        'planowany_czas' => intval($_POST['planowany_czas']),
+        'jest_cykliczne' => !empty($_POST['jest_cykliczne']) ? 1 : 0
     ]);
     
     $task_id = $wpdb->insert_id;
@@ -1995,7 +2086,8 @@ add_action('wp_ajax_zadaniomat_copy_task_to_date', function() {
         'status' => 'nowe',
         'godzina_start' => $task->godzina_start,
         'godzina_koniec' => $task->godzina_koniec,
-        'pozycja_harmonogram' => null
+        'pozycja_harmonogram' => null,
+        'jest_cykliczne' => $task->jest_cykliczne ?? 0
     ]);
 
     wp_send_json_success(['new_id' => $wpdb->insert_id]);
@@ -4520,6 +4612,23 @@ add_action('admin_head', function() {
             .tasks-header h2 {
                 margin: 0;
             }
+            .tasks-hours-summary {
+                display: flex;
+                gap: 20px;
+                padding: 10px 15px;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                border-radius: 8px;
+                margin-bottom: 15px;
+                font-size: 13px;
+            }
+            .tasks-hours-summary .hours-item {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+            }
+            .tasks-hours-summary strong {
+                color: #667eea;
+            }
             .harmonogram-actions {
                 display: flex;
                 gap: 10px;
@@ -6319,6 +6428,11 @@ function zadaniomat_page_main() {
                                     <button onclick="goToTodayTasks()" class="btn-today">Dziś</button>
                                 </div>
                             </div>
+                            <div class="tasks-hours-summary" id="tasks-hours-summary">
+                                <span class="hours-item">⏱️ Przepracowano: <strong id="hours-worked">0h 0min</strong></span>
+                                <span class="hours-item">📊 Zaplanowano: <strong id="hours-planned">0h 0min</strong></span>
+                                <span class="hours-item">✅ Ukończono: <strong id="tasks-completed-count">0/0</strong></span>
+                            </div>
                             <div class="morning-checklist-bar" id="morning-checklist-bar">
                                 <label class="morning-checklist-toggle">
                                     <input type="checkbox" id="morning-checklist-checkbox">
@@ -7151,6 +7265,30 @@ function zadaniomat_page_main() {
             // Renderuj do osobnych kontenerów
             $('#today-tasks-container').html(todayHtml || '<p style="color:#888;padding:20px;text-align:center;">Wybierz dziś w kalendarzu aby zobaczyć zadania</p>');
             $('#tasks-container').html(otherDaysHtml || '<p style="color:#888;padding:20px;text-align:center;">Brak zadań na inne dni</p>');
+
+            // Aktualizuj podsumowanie godzin dla wybranej daty
+            updateHoursSummary(byDay[selectedDate] || []);
+        };
+
+        window.updateHoursSummary = function(tasks) {
+            var planned = 0, actual = 0, completed = 0, total = 0;
+            tasks.forEach(function(t) {
+                if (parseInt(t.planowany_czas) > 0) { // Tylko zadania z czasem (nie szablony)
+                    total++;
+                    planned += parseInt(t.planowany_czas) || 0;
+                    actual += parseInt(t.faktyczny_czas) || 0;
+                    if (t.status === 'zakonczone') completed++;
+                }
+            });
+
+            var hoursWorked = Math.floor(actual / 60);
+            var minsWorked = actual % 60;
+            var hoursPlanned = Math.floor(planned / 60);
+            var minsPlanned = planned % 60;
+
+            $('#hours-worked').text(hoursWorked + 'h ' + minsWorked + 'min');
+            $('#hours-planned').text(hoursPlanned + 'h ' + minsPlanned + 'min');
+            $('#tasks-completed-count').text(completed + '/' + total);
         };
         
         window.renderTaskRow = function(t, day) {
@@ -7243,7 +7381,8 @@ function zadaniomat_page_main() {
                 kategoria: stale.kategoria,
                 zadanie: stale.nazwa,
                 cel_todo: '',
-                planowany_czas: stale.planowany_czas || 0
+                planowany_czas: stale.planowany_czas || 0,
+                jest_cykliczne: 1
             }, function(response) {
                 if (response.success) {
                     showToast('Zadanie utworzone ze stałego!', 'success');
