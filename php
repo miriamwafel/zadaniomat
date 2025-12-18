@@ -2983,17 +2983,17 @@ add_action('wp_ajax_zadaniomat_get_xp_history_advanced', function() {
         $params[] = '%' . $wpdb->esc_like($filter_type) . '%';
     }
     if ($filter_date) {
-        $where .= " AND DATE(created_at) = %s";
+        $where .= " AND DATE(earned_at) = %s";
         $params[] = $filter_date;
     }
 
     // Get total count
     if (empty($params)) {
         $total_count = $wpdb->get_var("SELECT COUNT(*) FROM $table WHERE $where");
-        $total_xp = $wpdb->get_var("SELECT SUM(xp_final) FROM $table WHERE $where") ?: 0;
+        $total_xp = $wpdb->get_var("SELECT SUM(ROUND(xp_amount * multiplier)) FROM $table WHERE $where") ?: 0;
     } else {
         $total_count = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE $where", $params));
-        $total_xp = $wpdb->get_var($wpdb->prepare("SELECT SUM(xp_final) FROM $table WHERE $where", $params)) ?: 0;
+        $total_xp = $wpdb->get_var($wpdb->prepare("SELECT SUM(ROUND(xp_amount * multiplier)) FROM $table WHERE $where", $params)) ?: 0;
     }
 
     // Get paginated entries
@@ -3001,11 +3001,11 @@ add_action('wp_ajax_zadaniomat_get_xp_history_advanced', function() {
     $params[] = $offset;
 
     if (count($params) > 2) {
-        $sql = "SELECT * FROM $table WHERE $where ORDER BY created_at DESC LIMIT %d OFFSET %d";
+        $sql = "SELECT *, ROUND(xp_amount * multiplier) as xp_final FROM $table WHERE $where ORDER BY earned_at DESC LIMIT %d OFFSET %d";
         $entries = $wpdb->get_results($wpdb->prepare($sql, $params));
     } else {
         $entries = $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM $table WHERE $where ORDER BY created_at DESC LIMIT %d OFFSET %d",
+            "SELECT *, ROUND(xp_amount * multiplier) as xp_final FROM $table WHERE $where ORDER BY earned_at DESC LIMIT %d OFFSET %d",
             $per_page, $offset
         ));
     }
@@ -11275,7 +11275,7 @@ function zadaniomat_page_gamification() {
                 html = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#666;">Brak wpisów do wyświetlenia</td></tr>';
             } else {
                 data.entries.forEach(function(entry) {
-                    var dateStr = new Date(entry.created_at).toLocaleString('pl-PL');
+                    var dateStr = new Date(entry.earned_at).toLocaleString('pl-PL');
                     html += '<tr data-id="' + entry.id + '">';
                     html += '<td style="padding:8px;border:1px solid #ddd;">' + dateStr + '</td>';
                     html += '<td style="padding:8px;border:1px solid #ddd;"><span class="xp-type-badge type-' + entry.xp_type + '">' + escapeHtml(entry.xp_type) + '</span></td>';
