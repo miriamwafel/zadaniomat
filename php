@@ -1365,15 +1365,25 @@ function zadaniomat_check_daily_challenges($user_id, $date = null) {
                 $config = zadaniomat_get_gam_config();
                 $required_hours = $config['time_settings']['morning_work_hours'] ?? 3;
                 $deadline = $config['time_settings']['morning_work_deadline'] ?? '12:00';
+                $current_time = date('H:i');
 
-                // Get tasks completed before deadline with actual time
-                $minutes_before_deadline = $wpdb->get_var($wpdb->prepare(
-                    "SELECT SUM(faktyczny_czas) FROM $table_zadania
-                     WHERE dzien = %s AND status = 'zakonczone'
-                     AND TIME(updated_at) <= %s",
-                    $date, $deadline . ':00'
-                ));
-                $is_completed = ($minutes_before_deadline ?: 0) >= ($required_hours * 60);
+                // If we're still before the deadline, count all completed work today
+                // After deadline, only count work that was marked complete before deadline
+                if ($current_time <= $deadline) {
+                    $minutes = $wpdb->get_var($wpdb->prepare(
+                        "SELECT SUM(faktyczny_czas) FROM $table_zadania
+                         WHERE dzien = %s AND status = 'zakonczone'",
+                        $date
+                    ));
+                } else {
+                    $minutes = $wpdb->get_var($wpdb->prepare(
+                        "SELECT SUM(faktyczny_czas) FROM $table_zadania
+                         WHERE dzien = %s AND status = 'zakonczone'
+                         AND DATE(updated_at) = %s AND TIME(updated_at) <= %s",
+                        $date, $date, $deadline . ':00'
+                    ));
+                }
+                $is_completed = ($minutes ?: 0) >= ($required_hours * 60);
                 break;
 
             case 'all_cyclic':
@@ -3193,6 +3203,44 @@ add_action('wp_ajax_zadaniomat_reset_achievements_config', function() {
     wp_send_json_success();
 });
 
+// ULTIMATE RESET - wyzeruj całą gamifikację
+add_action('wp_ajax_zadaniomat_ultimate_reset', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    // Wyczyść tabele gamifikacji
+    $tables = [
+        $wpdb->prefix . 'zadaniomat_gamification_stats',
+        $wpdb->prefix . 'zadaniomat_streaks',
+        $wpdb->prefix . 'zadaniomat_xp_log',
+        $wpdb->prefix . 'zadaniomat_achievements',
+        $wpdb->prefix . 'zadaniomat_daily_challenges',
+        $wpdb->prefix . 'zadaniomat_combo_state'
+    ];
+
+    foreach ($tables as $table) {
+        $wpdb->query("TRUNCATE TABLE $table");
+    }
+
+    // Zresetuj opcje
+    delete_option('zadaniomat_morning_checklist');
+    delete_option('zadaniomat_challenges_config');
+    delete_option('zadaniomat_achievements_config');
+
+    // Utwórz nowy rekord statystyk dla użytkownika
+    $stats_table = $wpdb->prefix . 'zadaniomat_gamification_stats';
+    $wpdb->insert($stats_table, [
+        'user_id' => 1,
+        'total_xp' => 0,
+        'current_level' => 1,
+        'prestige' => 0,
+        'freeze_days_available' => 3,
+        'freeze_days_used' => 0
+    ]);
+
+    wp_send_json_success(['message' => 'Gamifikacja zresetowana!']);
+});
+
 // Pobierz stan listy porannej
 add_action('wp_ajax_zadaniomat_get_morning_checklist', function() {
     check_ajax_referer('zadaniomat_ajax', 'nonce');
@@ -3231,7 +3279,7 @@ add_action('wp_ajax_zadaniomat_set_morning_checklist', function() {
             global $wpdb;
             $xp_log_table = $wpdb->prefix . 'zadaniomat_xp_log';
             $already_awarded = $wpdb->get_var($wpdb->prepare(
-                "SELECT COUNT(*) FROM $xp_log_table WHERE user_id = 1 AND xp_type = 'early_planning' AND DATE(created_at) = %s",
+                "SELECT COUNT(*) FROM $xp_log_table WHERE user_id = 1 AND xp_type = 'early_planning' AND DATE(earned_at) = %s",
                 $date
             ));
 
@@ -3246,6 +3294,9 @@ add_action('wp_ajax_zadaniomat_set_morning_checklist', function() {
     }
 
     update_option('zadaniomat_morning_checklist', $data);
+
+    // Check daily challenges after morning checklist is updated
+    zadaniomat_check_daily_challenges(1, $date);
 
     wp_send_json_success([
         'checked' => $checked,
@@ -5486,42 +5537,72 @@ add_action('admin_head', function() {
             .gam-stat-box.streak .stat-value { color: #f6ad55; }
             .gam-stat-box.combo .stat-value { color: #63b3ed; }
 
-            /* Morning checklist */
-            .morning-checklist-section {
-                margin-top: 15px;
-                padding: 12px 15px;
-                background: rgba(72, 187, 120, 0.1);
-                border-radius: 8px;
-                border: 1px dashed rgba(72, 187, 120, 0.3);
-            }
-            .morning-checklist-label {
+            /* Morning checklist bar - under tasks header */
+            .morning-checklist-bar {
                 display: flex;
                 align-items: center;
-                gap: 10px;
-                cursor: pointer;
-                font-size: 14px;
+                gap: 12px;
+                padding: 10px 15px;
+                background: linear-gradient(90deg, #f0fff4 0%, #c6f6d5 100%);
+                border: 1px solid #9ae6b4;
+                border-radius: 8px;
+                margin-bottom: 15px;
             }
-            .morning-checklist-label input[type="checkbox"] {
-                width: 20px;
-                height: 20px;
-                cursor: pointer;
-                accent-color: #48bb78;
-            }
-            .morning-checklist-label .checklist-text {
-                color: #e2e8f0;
-            }
-            .morning-checklist-label .checklist-time {
-                margin-left: auto;
-                font-size: 12px;
-                color: #a0aec0;
-            }
-            .morning-checklist-section.checked {
-                background: rgba(72, 187, 120, 0.25);
+            .morning-checklist-bar.checked {
+                background: linear-gradient(90deg, #c6f6d5 0%, #9ae6b4 100%);
                 border-color: #48bb78;
             }
-            .morning-checklist-section.checked .checklist-text {
-                color: #48bb78;
-                text-decoration: line-through;
+            .morning-checklist-toggle {
+                position: relative;
+                width: 50px;
+                height: 26px;
+                cursor: pointer;
+            }
+            .morning-checklist-toggle input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .toggle-slider {
+                position: absolute;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: #cbd5e0;
+                border-radius: 26px;
+                transition: 0.3s;
+            }
+            .toggle-slider:before {
+                content: "";
+                position: absolute;
+                width: 20px;
+                height: 20px;
+                left: 3px;
+                bottom: 3px;
+                background: white;
+                border-radius: 50%;
+                transition: 0.3s;
+            }
+            .morning-checklist-toggle input:checked + .toggle-slider {
+                background: #48bb78;
+            }
+            .morning-checklist-toggle input:checked + .toggle-slider:before {
+                transform: translateX(24px);
+            }
+            .morning-checklist-bar .checklist-label {
+                font-weight: 600;
+                color: #2d3748;
+                font-size: 14px;
+            }
+            .morning-checklist-bar.checked .checklist-label {
+                color: #276749;
+            }
+            .morning-checklist-bar .checklist-status {
+                margin-left: auto;
+                font-size: 13px;
+                color: #718096;
+            }
+            .morning-checklist-bar.checked .checklist-status {
+                color: #276749;
+                font-weight: 600;
             }
 
             /* Wyzwania dnia */
@@ -5851,14 +5932,6 @@ function zadaniomat_page_main() {
                     <div class="stat-value" id="gam-freeze">0</div>
                     <div class="stat-label">Freeze days</div>
                 </div>
-            </div>
-            <div class="morning-checklist-section">
-                <label class="morning-checklist-label">
-                    <input type="checkbox" id="morning-checklist-checkbox" onchange="toggleMorningChecklist()">
-                    <span class="checkmark"></span>
-                    <span class="checklist-text">📋 Lista poranna gotowa</span>
-                    <span class="checklist-time" id="morning-checklist-time"></span>
-                </label>
             </div>
             <div class="challenges-section">
                 <div class="challenges-title">🎲 Wyzwania dnia</div>
@@ -6246,6 +6319,14 @@ function zadaniomat_page_main() {
                                     <button onclick="goToTodayTasks()" class="btn-today">Dziś</button>
                                 </div>
                             </div>
+                            <div class="morning-checklist-bar" id="morning-checklist-bar">
+                                <label class="morning-checklist-toggle">
+                                    <input type="checkbox" id="morning-checklist-checkbox">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span class="checklist-label">📋 Lista poranna gotowa</span>
+                                <span class="checklist-status" id="morning-checklist-status"></span>
+                            </div>
                             <div id="today-tasks-container"></div>
                         </div>
                     </div>
@@ -6413,47 +6494,56 @@ function zadaniomat_page_main() {
 
         // Morning checklist functions
         function loadMorningChecklist() {
+            var dateToLoad = $('#tasks-list-date').val() || currentDate;
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_morning_checklist',
                 nonce: nonce,
-                date: currentDate
+                date: dateToLoad
             }, function(response) {
                 if (response.success && response.data) {
                     var checked = response.data.checked;
                     var time = response.data.time;
                     $('#morning-checklist-checkbox').prop('checked', checked);
                     if (checked) {
-                        $('.morning-checklist-section').addClass('checked');
-                        $('#morning-checklist-time').text('✓ ' + time);
+                        $('#morning-checklist-bar').addClass('checked');
+                        $('#morning-checklist-status').html('✅ Zapisano o <strong>' + time + '</strong>');
                     } else {
-                        $('.morning-checklist-section').removeClass('checked');
-                        $('#morning-checklist-time').text('');
+                        $('#morning-checklist-bar').removeClass('checked');
+                        $('#morning-checklist-status').text('');
                     }
                 }
             });
         }
 
-        window.toggleMorningChecklist = function() {
-            var checked = $('#morning-checklist-checkbox').is(':checked');
+        // Auto-save morning checklist on checkbox change
+        $(document).on('change', '#morning-checklist-checkbox', function() {
+            var checked = $(this).is(':checked');
+            var dateToSave = $('#tasks-list-date').val() || currentDate;
+
+            // Disable checkbox during save
+            $(this).prop('disabled', true);
+            $('#morning-checklist-status').text('Zapisywanie...');
+
             $.post(ajaxurl, {
                 action: 'zadaniomat_set_morning_checklist',
                 nonce: nonce,
-                date: currentDate,
+                date: dateToSave,
                 checked: checked ? 1 : 0
             }, function(response) {
+                $('#morning-checklist-checkbox').prop('disabled', false);
                 if (response.success) {
                     if (checked) {
-                        $('.morning-checklist-section').addClass('checked');
-                        $('#morning-checklist-time').text('✓ ' + response.data.time);
+                        $('#morning-checklist-bar').addClass('checked');
+                        $('#morning-checklist-status').html('✅ Zapisano o <strong>' + response.data.time + '</strong>');
                         // Refresh gamification data to update challenges
                         loadGamificationData();
                     } else {
-                        $('.morning-checklist-section').removeClass('checked');
-                        $('#morning-checklist-time').text('');
+                        $('#morning-checklist-bar').removeClass('checked');
+                        $('#morning-checklist-status').text('');
                     }
                 }
             });
-        }
+        });
 
         function showNewAchievements() {
             if (!gamificationData || !gamificationData.new_achievements.length) return;
@@ -8234,6 +8324,7 @@ function zadaniomat_page_main() {
             // Przeładuj dane
             loadTasks();
             checkStartDnia();
+            loadMorningChecklist();
         };
 
         window.updateTasksHeader = function() {
@@ -11031,6 +11122,24 @@ function zadaniomat_page_gamification() {
                     <button class="button" onclick="resetOtherSettings()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
                     <span id="other-save-status" style="margin-left: 15px; color: #28a745;"></span>
                 </div>
+
+                <!-- Ultimate Reset Section -->
+                <div style="margin-top: 30px; padding: 20px; background: linear-gradient(135deg, #dc3545 0%, #c82333 100%); border-radius: 8px; color: white;">
+                    <h3 style="margin-top: 0; color: white;">💀 ULTIMATE RESET</h3>
+                    <p style="margin-bottom: 15px; opacity: 0.9;">
+                        Ta opcja całkowicie wyzeruje wszystkie dane gamifikacji:<br>
+                        • Punkty XP → 0<br>
+                        • Poziom → 1<br>
+                        • Wszystkie osiągnięcia/odznaki<br>
+                        • Wszystkie streaki i combo<br>
+                        • Historia XP<br>
+                        • Wyzwania dnia
+                    </p>
+                    <p style="font-weight: bold; margin-bottom: 15px;">⚠️ Tej operacji NIE MOŻNA cofnąć!</p>
+                    <button class="button" style="background: white; color: #dc3545; border: none; font-weight: bold;" onclick="ultimateReset()">
+                        🔥 Wyzeruj całą gamifikację
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -11443,6 +11552,29 @@ function zadaniomat_page_gamification() {
             }, function(response) {
                 if (response.success) {
                     location.reload();
+                }
+            });
+        };
+
+        // Ultimate reset - wyzeruj całą gamifikację
+        window.ultimateReset = function() {
+            var confirmed = prompt('Ta operacja USUNIE WSZYSTKIE dane gamifikacji!\n\nWpisz "RESET" aby potwierdzić:');
+            if (confirmed !== 'RESET') {
+                if (confirmed !== null) {
+                    alert('Anulowano. Wpisz dokładnie "RESET" aby potwierdzić.');
+                }
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_ultimate_reset',
+                nonce: nonce
+            }, function(response) {
+                if (response.success) {
+                    alert('✅ Gamifikacja została całkowicie zresetowana!\n\nStrona zostanie odświeżona.');
+                    location.reload();
+                } else {
+                    alert('❌ Błąd podczas resetowania: ' + (response.data || 'Nieznany błąd'));
                 }
             });
         };
