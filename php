@@ -140,6 +140,89 @@ function zadaniomat_create_tables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
+    // =============================================
+    // GAMIFICATION TABLES
+    // =============================================
+
+    // Główne statystyki gracza
+    $table_gamification_stats = $wpdb->prefix . 'zadaniomat_gamification_stats';
+    $sql8 = "CREATE TABLE IF NOT EXISTS $table_gamification_stats (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 1,
+        total_xp INT NOT NULL DEFAULT 0,
+        current_level INT NOT NULL DEFAULT 1,
+        prestige INT NOT NULL DEFAULT 0,
+        freeze_days_available INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) $charset_collate;";
+
+    // Śledzenie streaków
+    $table_streaks = $wpdb->prefix . 'zadaniomat_streaks';
+    $sql9 = "CREATE TABLE IF NOT EXISTS $table_streaks (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 1,
+        streak_type VARCHAR(50) NOT NULL,
+        current_count INT NOT NULL DEFAULT 0,
+        best_count INT NOT NULL DEFAULT 0,
+        last_date DATE DEFAULT NULL,
+        frozen_today TINYINT(1) NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY user_streak (user_id, streak_type)
+    ) $charset_collate;";
+
+    // Log XP
+    $table_xp_log = $wpdb->prefix . 'zadaniomat_xp_log';
+    $sql10 = "CREATE TABLE IF NOT EXISTS $table_xp_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 1,
+        xp_amount INT NOT NULL,
+        xp_type VARCHAR(50) NOT NULL,
+        multiplier DECIMAL(4,2) NOT NULL DEFAULT 1.00,
+        description VARCHAR(255) DEFAULT NULL,
+        reference_id INT DEFAULT NULL,
+        reference_type VARCHAR(50) DEFAULT NULL,
+        earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) $charset_collate;";
+
+    // Zdobyte odznaki
+    $table_achievements = $wpdb->prefix . 'zadaniomat_achievements';
+    $sql11 = "CREATE TABLE IF NOT EXISTS $table_achievements (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 1,
+        achievement_key VARCHAR(50) NOT NULL,
+        earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        notified TINYINT(1) NOT NULL DEFAULT 0,
+        UNIQUE KEY user_achievement (user_id, achievement_key)
+    ) $charset_collate;";
+
+    // Wyzwania dnia
+    $table_daily_challenges = $wpdb->prefix . 'zadaniomat_daily_challenges';
+    $sql12 = "CREATE TABLE IF NOT EXISTS $table_daily_challenges (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 1,
+        challenge_date DATE NOT NULL,
+        challenge_key VARCHAR(50) NOT NULL,
+        challenge_data TEXT DEFAULT NULL,
+        xp_reward INT NOT NULL,
+        completed TINYINT(1) NOT NULL DEFAULT 0,
+        completed_at TIMESTAMP NULL DEFAULT NULL,
+        UNIQUE KEY user_date_challenge (user_id, challenge_date, challenge_key)
+    ) $charset_collate;";
+
+    // Stan combo dziennego
+    $table_combo_state = $wpdb->prefix . 'zadaniomat_combo_state';
+    $sql13 = "CREATE TABLE IF NOT EXISTS $table_combo_state (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 1,
+        combo_date DATE NOT NULL,
+        current_combo INT NOT NULL DEFAULT 0,
+        max_combo_today INT NOT NULL DEFAULT 0,
+        last_task_time TIMESTAMP NULL DEFAULT NULL,
+        UNIQUE KEY user_combo_date (user_id, combo_date)
+    ) $charset_collate;";
+
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql1);
     dbDelta($sql2);
@@ -148,6 +231,12 @@ function zadaniomat_create_tables() {
     dbDelta($sql5);
     dbDelta($sql6);
     dbDelta($sql7);
+    dbDelta($sql8);
+    dbDelta($sql9);
+    dbDelta($sql10);
+    dbDelta($sql11);
+    dbDelta($sql12);
+    dbDelta($sql13);
 }
 
 add_action('admin_init', function() {
@@ -247,6 +336,12 @@ add_action('admin_init', function() {
     if($wpdb->get_var("SHOW TABLES LIKE '$table_dni_wolne'") != $table_dni_wolne) {
         zadaniomat_create_tables();
     }
+
+    // Migracja - utwórz tabele gamifikacji jeśli nie istnieją
+    $table_gamification_stats = $wpdb->prefix . 'zadaniomat_gamification_stats';
+    if($wpdb->get_var("SHOW TABLES LIKE '$table_gamification_stats'") != $table_gamification_stats) {
+        zadaniomat_create_tables();
+    }
 });
 
 // =============================================
@@ -276,6 +371,1166 @@ function zadaniomat_get_current_rok($date = null) {
 
 function zadaniomat_get_kategoria_label($key) {
     return ZADANIOMAT_KATEGORIE_ZADANIA[$key] ?? $key;
+}
+
+// =============================================
+// GAMIFICATION SYSTEM
+// =============================================
+
+// Definicje poziomów
+define('ZADANIOMAT_LEVEL_THRESHOLDS', [
+    1 => 0,
+    2 => 150,
+    3 => 400,
+    4 => 750,
+    5 => 1200,
+    6 => 1800,
+    7 => 2600,
+    8 => 3600,
+    9 => 5000,
+    10 => 7000
+]);
+
+define('ZADANIOMAT_LEVEL_NAMES', [
+    1 => 'Świeżak',
+    2 => 'Planista',
+    3 => 'Celownik',
+    4 => 'Wykonawca',
+    5 => 'Rzemieślnik',
+    6 => 'Profesjonalista',
+    7 => 'Ekspert',
+    8 => 'Mistrz',
+    9 => 'Guru',
+    10 => 'Legenda'
+]);
+
+define('ZADANIOMAT_LEVEL_ICONS', [
+    1 => '🌱',
+    2 => '📝',
+    3 => '🎯',
+    4 => '⚡',
+    5 => '🔧',
+    6 => '💼',
+    7 => '🏆',
+    8 => '🎖️',
+    9 => '👑',
+    10 => '🌟'
+]);
+
+// Definicje odznak
+define('ZADANIOMAT_ACHIEVEMENTS', [
+    // Streak - Główny
+    'streak_3' => ['name' => 'Zapałka', 'icon' => '🔥', 'desc' => '3 dni streak', 'xp' => 25],
+    'streak_7' => ['name' => 'Ognisko', 'icon' => '🔥🔥', 'desc' => '7 dni streak', 'xp' => 75],
+    'streak_14' => ['name' => 'Pożar', 'icon' => '🔥🔥🔥', 'desc' => '14 dni streak', 'xp' => 150],
+    'streak_30' => ['name' => 'Wulkan', 'icon' => '🌋', 'desc' => '30 dni streak', 'xp' => 300],
+    'streak_60' => ['name' => 'Słońce', 'icon' => '☀️', 'desc' => '60 dni streak', 'xp' => 600],
+    'streak_90' => ['name' => 'Supernowa', 'icon' => '🌟', 'desc' => '90 dni streak', 'xp' => 1000],
+    // Streak - Wczesny start
+    'early_start_7' => ['name' => 'Ranny Ptaszek', 'icon' => '🐦', 'desc' => '7 dni startu przed 8:00', 'xp' => 50],
+    'early_start_14' => ['name' => 'Świt', 'icon' => '🌅', 'desc' => '14 dni startu przed 8:00', 'xp' => 100],
+    'early_start_30' => ['name' => 'Mistrz Poranka', 'icon' => '🌄', 'desc' => '30 dni startu przed 8:00', 'xp' => 250],
+    // Streak - Wczesne planowanie
+    'early_plan_7' => ['name' => 'Planista', 'icon' => '📋', 'desc' => '7 dni planowania przed 10:00', 'xp' => 40],
+    'early_plan_14' => ['name' => 'Strateg', 'icon' => '🗺️', 'desc' => '14 dni planowania przed 10:00', 'xp' => 80],
+    'early_plan_30' => ['name' => 'Architekt Dnia', 'icon' => '🏛️', 'desc' => '30 dni planowania przed 10:00', 'xp' => 200],
+    // Pokrycie kategorii
+    'full_coverage_1' => ['name' => 'Wszechstronny', 'icon' => '🎨', 'desc' => 'Pierwszy dzień z 6 kategoriami', 'xp' => 50],
+    'full_coverage_7' => ['name' => 'Żongler', 'icon' => '🎪', 'desc' => '7 dni pełnego pokrycia', 'xp' => 150],
+    'full_coverage_14' => ['name' => 'Mistrz Równowagi', 'icon' => '⚖️', 'desc' => '14 dni pełnego pokrycia', 'xp' => 300],
+    // Cele
+    'first_goal' => ['name' => 'Snajper', 'icon' => '🎯', 'desc' => 'Pierwszy osiągnięty cel', 'xp' => 25],
+    'goals_10' => ['name' => 'Łucznik', 'icon' => '🏹', 'desc' => '10 osiągniętych celów', 'xp' => 100],
+    'goals_25' => ['name' => 'Strzelec Wyborowy', 'icon' => '🎖️', 'desc' => '25 osiągniętych celów', 'xp' => 250],
+    'goals_50' => ['name' => 'Komandos', 'icon' => '💪', 'desc' => '50 osiągniętych celów', 'xp' => 500],
+    'goal_x2' => ['name' => 'Podwójne Uderzenie', 'icon' => '🎯🎯', 'desc' => 'Dwa cele w jednej kategorii w okresie', 'xp' => 50],
+    'goal_x3' => ['name' => 'Hat-trick', 'icon' => '🎩', 'desc' => 'Trzy cele w jednej kategorii w okresie', 'xp' => 100],
+    'perfect_period' => ['name' => 'Perfekcyjny Okres', 'icon' => '🏆', 'desc' => 'Wszystkie cele okresu osiągnięte', 'xp' => 200],
+    'perfect_year' => ['name' => 'Perfekcyjny Rok', 'icon' => '👑', 'desc' => 'Wszystkie cele roku osiągnięte', 'xp' => 500],
+    // Zadania
+    'tasks_100' => ['name' => 'Pracuś', 'icon' => '📝', 'desc' => '100 ukończonych zadań', 'xp' => 100],
+    'tasks_500' => ['name' => 'Pracoholik', 'icon' => '💼', 'desc' => '500 ukończonych zadań', 'xp' => 300],
+    'tasks_1000' => ['name' => 'Maszyna', 'icon' => '⚙️', 'desc' => '1000 ukończonych zadań', 'xp' => 600],
+    'cyclic_50' => ['name' => 'Nawyk', 'icon' => '🔄', 'desc' => '50 zadań cyklicznych', 'xp' => 75],
+    'cyclic_200' => ['name' => 'Rutyna', 'icon' => '🔁', 'desc' => '200 zadań cyklicznych', 'xp' => 200],
+    // Czas pracy
+    'hours_100' => ['name' => 'Stażysta', 'icon' => '⏰', 'desc' => '100h przepracowanych', 'xp' => 100],
+    'hours_500' => ['name' => 'Weteran', 'icon' => '🎖️', 'desc' => '500h przepracowanych', 'xp' => 300],
+    'hours_1000' => ['name' => 'Legenda', 'icon' => '🏛️', 'desc' => '1000h przepracowanych', 'xp' => 600],
+    // Combo
+    'combo_5' => ['name' => 'Kombinator', 'icon' => '⚡', 'desc' => 'Osiągnij combo x5', 'xp' => 30],
+    'combo_5_10times' => ['name' => 'Mistrz Combo', 'icon' => '💥', 'desc' => 'Osiągnij combo x5 dziesięć razy', 'xp' => 100],
+    // Specjalne
+    'first_day' => ['name' => 'Początek Drogi', 'icon' => '🚀', 'desc' => 'Ukończ pierwszy dzień', 'xp' => 10],
+    'level_5' => ['name' => 'Awans', 'icon' => '⬆️', 'desc' => 'Osiągnij level 5', 'xp' => 50],
+    'level_10' => ['name' => 'Szczyt', 'icon' => '🗻', 'desc' => 'Osiągnij level 10', 'xp' => 200],
+    'prestige_1' => ['name' => 'Odrodzenie', 'icon' => '🔮', 'desc' => 'Pierwszy prestige', 'xp' => 100],
+]);
+
+// Definicje wyzwań dnia
+define('ZADANIOMAT_DAILY_CHALLENGES', [
+    'complete_5_tasks' => ['desc' => 'Ukończ 5 zadań', 'xp' => 25, 'difficulty' => 'easy'],
+    'complete_8_tasks' => ['desc' => 'Ukończ 8 zadań', 'xp' => 40, 'difficulty' => 'medium'],
+    'work_6_hours' => ['desc' => 'Przepracuj 6 godzin', 'xp' => 35, 'difficulty' => 'medium'],
+    'work_8_hours' => ['desc' => 'Przepracuj 8 godzin', 'xp' => 50, 'difficulty' => 'hard'],
+    '4_categories' => ['desc' => 'Zadania w 4 kategoriach', 'xp' => 30, 'difficulty' => 'easy'],
+    'all_categories' => ['desc' => 'Zadania we wszystkich kategoriach', 'xp' => 60, 'difficulty' => 'hard'],
+    'all_cyclic' => ['desc' => 'Wykonaj wszystkie zadania cykliczne', 'xp' => 35, 'difficulty' => 'medium'],
+    'start_before_8' => ['desc' => 'Zacznij przed 8:00', 'xp' => 25, 'difficulty' => 'medium'],
+    'start_before_9' => ['desc' => 'Zacznij przed 9:00', 'xp' => 15, 'difficulty' => 'easy'],
+    'plan_before_10' => ['desc' => 'Zaplanuj dzień przed 10:00', 'xp' => 20, 'difficulty' => 'easy'],
+    'no_breaks' => ['desc' => 'Bez przerwy > 1h', 'xp' => 30, 'difficulty' => 'hard'],
+    'combo_3' => ['desc' => 'Osiągnij combo x3', 'xp' => 20, 'difficulty' => 'easy'],
+    'combo_5' => ['desc' => 'Osiągnij combo x5', 'xp' => 35, 'difficulty' => 'medium'],
+    'finish_all' => ['desc' => 'Ukończ wszystkie zaplanowane', 'xp' => 40, 'difficulty' => 'medium'],
+    'category_focus' => ['desc' => '3h w jednej kategorii', 'xp' => 25, 'difficulty' => 'medium'],
+]);
+
+// Streak milestones i bonus XP
+define('ZADANIOMAT_STREAK_MILESTONES', [
+    'work_days' => [3 => 25, 7 => 75, 14 => 150, 30 => 300, 60 => 600, 90 => 1000],
+    'early_start' => [7 => 50, 14 => 100, 30 => 250],
+    'early_planning' => [7 => 40, 14 => 80],
+    'full_coverage' => [7 => 100, 14 => 200],
+]);
+
+// =============================================
+// GAMIFICATION HELPER FUNCTIONS
+// =============================================
+
+// Pobierz lub utwórz statystyki gracza
+function zadaniomat_get_gamification_stats($user_id = 1) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_gamification_stats';
+
+    $stats = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = %d", $user_id
+    ));
+
+    if (!$stats) {
+        $wpdb->insert($table, ['user_id' => $user_id]);
+        $stats = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table WHERE user_id = %d", $user_id
+        ));
+    }
+
+    return $stats;
+}
+
+// Oblicz poziom na podstawie XP
+function zadaniomat_calculate_level($xp) {
+    $thresholds = ZADANIOMAT_LEVEL_THRESHOLDS;
+    for ($i = 10; $i >= 1; $i--) {
+        if ($xp >= $thresholds[$i]) {
+            return $i;
+        }
+    }
+    return 1;
+}
+
+// Pobierz informacje o poziomie
+function zadaniomat_get_level_info($level) {
+    return [
+        'level' => $level,
+        'name' => ZADANIOMAT_LEVEL_NAMES[$level] ?? 'Unknown',
+        'icon' => ZADANIOMAT_LEVEL_ICONS[$level] ?? '❓',
+        'xp_required' => ZADANIOMAT_LEVEL_THRESHOLDS[$level] ?? 0,
+        'xp_next' => isset(ZADANIOMAT_LEVEL_THRESHOLDS[$level + 1]) ? ZADANIOMAT_LEVEL_THRESHOLDS[$level + 1] : null,
+    ];
+}
+
+// Pobierz mnożnik od streaka
+function zadaniomat_get_streak_multiplier($streak_count) {
+    if ($streak_count < 3) return 1.0;
+    if ($streak_count < 7) return 1.2;
+    if ($streak_count < 14) return 1.4;
+    if ($streak_count < 30) return 1.6;
+    if ($streak_count < 60) return 1.8;
+    return 2.0;
+}
+
+// Pobierz mnożnik od combo
+function zadaniomat_get_combo_multiplier($combo) {
+    if ($combo < 2) return 1.0;
+    if ($combo == 2) return 1.1;
+    if ($combo == 3) return 1.2;
+    if ($combo == 4) return 1.3;
+    return 1.5;
+}
+
+// Pobierz streak użytkownika
+function zadaniomat_get_streak($user_id, $streak_type) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_streaks';
+
+    $streak = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = %d AND streak_type = %s",
+        $user_id, $streak_type
+    ));
+
+    if (!$streak) {
+        $wpdb->insert($table, [
+            'user_id' => $user_id,
+            'streak_type' => $streak_type,
+            'current_count' => 0,
+            'best_count' => 0
+        ]);
+        $streak = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table WHERE user_id = %d AND streak_type = %s",
+            $user_id, $streak_type
+        ));
+    }
+
+    return $streak;
+}
+
+// Pobierz lub utwórz stan combo dla dnia
+function zadaniomat_get_combo_state($user_id, $date) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_combo_state';
+
+    $combo = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = %d AND combo_date = %s",
+        $user_id, $date
+    ));
+
+    if (!$combo) {
+        $wpdb->insert($table, [
+            'user_id' => $user_id,
+            'combo_date' => $date,
+            'current_combo' => 0,
+            'max_combo_today' => 0
+        ]);
+        $combo = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table WHERE user_id = %d AND combo_date = %s",
+            $user_id, $date
+        ));
+    }
+
+    return $combo;
+}
+
+// Dodaj XP graczowi
+function zadaniomat_add_xp($user_id, $xp_amount, $xp_type, $description = '', $reference_id = null, $reference_type = null, $multiplier = 1.0) {
+    global $wpdb;
+
+    if ($xp_amount <= 0) return ['xp_added' => 0, 'level_up' => false];
+
+    $stats_table = $wpdb->prefix . 'zadaniomat_gamification_stats';
+    $log_table = $wpdb->prefix . 'zadaniomat_xp_log';
+
+    // Pobierz aktualne statystyki
+    $stats = zadaniomat_get_gamification_stats($user_id);
+    $old_level = $stats->current_level;
+    $old_xp = $stats->total_xp;
+
+    // Zastosuj bonus prestige
+    if ($stats->prestige > 0) {
+        $prestige_bonus = 1 + ($stats->prestige * 0.05);
+        $xp_amount = round($xp_amount * $prestige_bonus);
+    }
+
+    // Finalna kwota XP z mnożnikiem
+    $final_xp = round($xp_amount * $multiplier);
+
+    // Dodaj XP
+    $new_xp = $old_xp + $final_xp;
+    $new_level = zadaniomat_calculate_level($new_xp);
+
+    // Aktualizuj statystyki
+    $wpdb->update($stats_table, [
+        'total_xp' => $new_xp,
+        'current_level' => $new_level
+    ], ['user_id' => $user_id]);
+
+    // Zapisz log
+    $wpdb->insert($log_table, [
+        'user_id' => $user_id,
+        'xp_amount' => $final_xp,
+        'xp_type' => $xp_type,
+        'multiplier' => $multiplier,
+        'description' => $description,
+        'reference_id' => $reference_id,
+        'reference_type' => $reference_type
+    ]);
+
+    // Sprawdź level up
+    $level_up = $new_level > $old_level;
+
+    // Sprawdź odznaki poziomów
+    if ($new_level >= 5 && $old_level < 5) {
+        zadaniomat_award_achievement($user_id, 'level_5');
+    }
+    if ($new_level >= 10 && $old_level < 10) {
+        zadaniomat_award_achievement($user_id, 'level_10');
+    }
+
+    return [
+        'xp_added' => $final_xp,
+        'total_xp' => $new_xp,
+        'old_level' => $old_level,
+        'new_level' => $new_level,
+        'level_up' => $level_up,
+        'level_info' => zadaniomat_get_level_info($new_level)
+    ];
+}
+
+// Aktualizuj combo przy ukończeniu zadania
+function zadaniomat_update_combo($user_id, $task_time = null) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_combo_state';
+    $today = date('Y-m-d');
+    $now = $task_time ?: current_time('mysql');
+
+    $combo = zadaniomat_get_combo_state($user_id, $today);
+    $new_combo = 1;
+
+    // Sprawdź czy przerwa < 2 godziny
+    if ($combo->last_task_time) {
+        $last_time = strtotime($combo->last_task_time);
+        $current_time = strtotime($now);
+        $diff_hours = ($current_time - $last_time) / 3600;
+
+        if ($diff_hours < 2) {
+            $new_combo = $combo->current_combo + 1;
+        }
+    }
+
+    $max_combo = max($combo->max_combo_today, $new_combo);
+
+    $wpdb->update($table, [
+        'current_combo' => $new_combo,
+        'max_combo_today' => $max_combo,
+        'last_task_time' => $now
+    ], ['id' => $combo->id]);
+
+    // Sprawdź odznaki combo
+    if ($new_combo >= 5) {
+        zadaniomat_award_achievement($user_id, 'combo_5');
+    }
+
+    return [
+        'combo' => $new_combo,
+        'max_combo' => $max_combo,
+        'multiplier' => zadaniomat_get_combo_multiplier($new_combo)
+    ];
+}
+
+// Przyznaj odznakę
+function zadaniomat_award_achievement($user_id, $achievement_key) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_achievements';
+
+    // Sprawdź czy już nie ma
+    $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM $table WHERE user_id = %d AND achievement_key = %s",
+        $user_id, $achievement_key
+    ));
+
+    if ($existing) return null;
+
+    // Dodaj odznakę
+    $wpdb->insert($table, [
+        'user_id' => $user_id,
+        'achievement_key' => $achievement_key,
+        'notified' => 0
+    ]);
+
+    // Pobierz dane odznaki
+    $achievement = ZADANIOMAT_ACHIEVEMENTS[$achievement_key] ?? null;
+    if ($achievement && $achievement['xp'] > 0) {
+        zadaniomat_add_xp($user_id, $achievement['xp'], 'achievement', "Odznaka: " . $achievement['name']);
+    }
+
+    return $achievement;
+}
+
+// Sprawdź czy dzień jest roboczy (helper dla streaków)
+function zadaniomat_is_work_day($date) {
+    global $wpdb;
+    $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
+
+    $day_of_week = date('w', strtotime($date));
+    $is_weekend = ($day_of_week == 0 || $day_of_week == 6);
+
+    $is_marked = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_dni_wolne WHERE dzien = %s", $date
+    )) > 0;
+
+    if ($is_weekend) {
+        return $is_marked; // Weekend roboczy jeśli oznaczony
+    } else {
+        return !$is_marked; // Dzień roboczy jeśli NIE oznaczony jako wolny
+    }
+}
+
+// Aktualizuj streak
+function zadaniomat_update_streak($user_id, $streak_type, $date = null) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_streaks';
+    $date = $date ?: date('Y-m-d');
+
+    $streak = zadaniomat_get_streak($user_id, $streak_type);
+    $last_date = $streak->last_date;
+
+    // Jeśli już dziś zaliczone - nic nie rób
+    if ($last_date === $date) {
+        return ['updated' => false, 'streak' => $streak];
+    }
+
+    $new_count = 1;
+    $milestone_reached = null;
+
+    if ($last_date) {
+        $last_timestamp = strtotime($last_date);
+        $today_timestamp = strtotime($date);
+        $days_diff = ($today_timestamp - $last_timestamp) / 86400;
+
+        if ($days_diff == 1) {
+            // Kontynuacja streaka
+            $new_count = $streak->current_count + 1;
+        } else if ($days_diff > 1) {
+            // Sprawdź dni robocze w przerwie
+            $work_days_between = 0;
+            $check_date = date('Y-m-d', $last_timestamp + 86400);
+            while (strtotime($check_date) < $today_timestamp) {
+                if (zadaniomat_is_work_day($check_date)) {
+                    $work_days_between++;
+                }
+                $check_date = date('Y-m-d', strtotime($check_date) + 86400);
+            }
+
+            if ($work_days_between == 0) {
+                // Same dni wolne - kontynuuj
+                $new_count = $streak->current_count + 1;
+            } else {
+                // Reset streaka
+                $new_count = 1;
+            }
+        }
+    }
+
+    // Aktualizuj best
+    $new_best = max($streak->best_count, $new_count);
+
+    $wpdb->update($table, [
+        'current_count' => $new_count,
+        'best_count' => $new_best,
+        'last_date' => $date,
+        'frozen_today' => 0
+    ], ['id' => $streak->id]);
+
+    // Sprawdź milestones
+    $milestones = ZADANIOMAT_STREAK_MILESTONES[$streak_type] ?? [];
+    foreach ($milestones as $milestone => $xp) {
+        if ($new_count >= $milestone && $streak->current_count < $milestone) {
+            zadaniomat_add_xp($user_id, $xp, 'streak_milestone', "Streak $streak_type: $milestone dni");
+            $milestone_reached = $milestone;
+        }
+    }
+
+    // Sprawdź odznaki streaka
+    zadaniomat_check_streak_achievements($user_id, $streak_type, $new_count);
+
+    return [
+        'updated' => true,
+        'new_count' => $new_count,
+        'best_count' => $new_best,
+        'milestone_reached' => $milestone_reached,
+        'multiplier' => $streak_type === 'work_days' ? zadaniomat_get_streak_multiplier($new_count) : 1.0
+    ];
+}
+
+// Sprawdź odznaki streaka
+function zadaniomat_check_streak_achievements($user_id, $streak_type, $streak_count) {
+    $achievements_map = [
+        'work_days' => [3 => 'streak_3', 7 => 'streak_7', 14 => 'streak_14', 30 => 'streak_30', 60 => 'streak_60', 90 => 'streak_90'],
+        'early_start' => [7 => 'early_start_7', 14 => 'early_start_14', 30 => 'early_start_30'],
+        'early_planning' => [7 => 'early_plan_7', 14 => 'early_plan_14', 30 => 'early_plan_30'],
+        'full_coverage' => [1 => 'full_coverage_1', 7 => 'full_coverage_7', 14 => 'full_coverage_14'],
+    ];
+
+    if (!isset($achievements_map[$streak_type])) return;
+
+    foreach ($achievements_map[$streak_type] as $threshold => $achievement_key) {
+        if ($streak_count >= $threshold) {
+            zadaniomat_award_achievement($user_id, $achievement_key);
+        }
+    }
+}
+
+// Sprawdź czy zadanie jest cykliczne
+function zadaniomat_is_cyclic_task($task_name) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
+
+    return $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table WHERE nazwa = %s AND aktywne = 1",
+        $task_name
+    )) > 0;
+}
+
+// Sprawdź czy kategoria jest kategorią celów
+function zadaniomat_is_goal_category($kategoria) {
+    $goal_categories = array_keys(ZADANIOMAT_KATEGORIE);
+    return in_array($kategoria, $goal_categories);
+}
+
+// Główna funkcja przetwarzająca ukończenie zadania
+function zadaniomat_process_task_completion($task_id, $user_id = 1) {
+    global $wpdb;
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+
+    // Pobierz dane zadania
+    $task = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table_zadania WHERE id = %d", $task_id
+    ));
+
+    if (!$task || $task->status !== 'zakonczone') {
+        return null;
+    }
+
+    $result = [
+        'task_id' => $task_id,
+        'xp_earned' => 0,
+        'xp_breakdown' => [],
+        'combo' => null,
+        'level_up' => false,
+        'achievements' => []
+    ];
+
+    // Pobierz streak multiplier
+    $work_streak = zadaniomat_get_streak($user_id, 'work_days');
+    $streak_multiplier = zadaniomat_get_streak_multiplier($work_streak->current_count);
+
+    // Aktualizuj combo
+    $combo_result = zadaniomat_update_combo($user_id);
+    $combo_multiplier = $combo_result['multiplier'];
+    $result['combo'] = $combo_result;
+
+    // Łączny mnożnik
+    $total_multiplier = $streak_multiplier * $combo_multiplier;
+
+    // Oblicz bazowe XP
+    $is_cyclic = zadaniomat_is_cyclic_task($task->zadanie);
+    $is_goal_category = zadaniomat_is_goal_category($task->kategoria);
+
+    $base_xp = $is_cyclic ? 15 : 10;
+    if ($is_goal_category) {
+        $base_xp += 2;
+    }
+
+    // Dodaj XP
+    $xp_result = zadaniomat_add_xp(
+        $user_id,
+        $base_xp,
+        $is_cyclic ? 'cyclic_task_complete' : 'task_complete',
+        "Ukończono: " . $task->zadanie,
+        $task_id,
+        'task',
+        $total_multiplier
+    );
+
+    $result['xp_earned'] = $xp_result['xp_added'];
+    $result['xp_breakdown'] = [
+        'base' => $base_xp,
+        'streak_multiplier' => $streak_multiplier,
+        'combo_multiplier' => $combo_multiplier,
+        'total_multiplier' => $total_multiplier
+    ];
+    $result['level_up'] = $xp_result['level_up'];
+    $result['level_info'] = $xp_result['level_info'];
+    $result['total_xp'] = $xp_result['total_xp'];
+
+    // Sprawdź odznaki zadań
+    zadaniomat_check_task_achievements($user_id);
+
+    // Sprawdź wyzwania dnia
+    zadaniomat_check_daily_challenges($user_id);
+
+    return $result;
+}
+
+// Sprawdź odznaki związane z zadaniami
+function zadaniomat_check_task_achievements($user_id) {
+    global $wpdb;
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+
+    // Policz ukończone zadania
+    $completed_tasks = $wpdb->get_var(
+        "SELECT COUNT(*) FROM $table_zadania WHERE status = 'zakonczone'"
+    );
+
+    if ($completed_tasks >= 100) zadaniomat_award_achievement($user_id, 'tasks_100');
+    if ($completed_tasks >= 500) zadaniomat_award_achievement($user_id, 'tasks_500');
+    if ($completed_tasks >= 1000) zadaniomat_award_achievement($user_id, 'tasks_1000');
+
+    // Policz zadania cykliczne (te które mają odpowiednik w stale_zadania)
+    $cyclic_count = $wpdb->get_var(
+        "SELECT COUNT(*) FROM $table_zadania z
+         INNER JOIN $table_stale s ON z.zadanie = s.nazwa
+         WHERE z.status = 'zakonczone'"
+    );
+
+    if ($cyclic_count >= 50) zadaniomat_award_achievement($user_id, 'cyclic_50');
+    if ($cyclic_count >= 200) zadaniomat_award_achievement($user_id, 'cyclic_200');
+
+    // Policz przepracowane godziny
+    $total_minutes = $wpdb->get_var(
+        "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE status = 'zakonczone' AND faktyczny_czas > 0"
+    );
+    $total_hours = ($total_minutes ?: 0) / 60;
+
+    if ($total_hours >= 100) zadaniomat_award_achievement($user_id, 'hours_100');
+    if ($total_hours >= 500) zadaniomat_award_achievement($user_id, 'hours_500');
+    if ($total_hours >= 1000) zadaniomat_award_achievement($user_id, 'hours_1000');
+
+    // Pierwszy dzień
+    if ($completed_tasks >= 1) {
+        zadaniomat_award_achievement($user_id, 'first_day');
+    }
+}
+
+// Wygeneruj wyzwania dnia
+function zadaniomat_generate_daily_challenges($user_id, $date) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_daily_challenges';
+
+    // Sprawdź czy już są wyzwania na dziś
+    $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table WHERE user_id = %d AND challenge_date = %s",
+        $user_id, $date
+    ));
+
+    if ($existing > 0) return;
+
+    // Pobierz wczorajsze wyzwania
+    $yesterday = date('Y-m-d', strtotime($date) - 86400);
+    $yesterday_challenges = $wpdb->get_col($wpdb->prepare(
+        "SELECT challenge_key FROM $table WHERE user_id = %d AND challenge_date = %s",
+        $user_id, $yesterday
+    ));
+
+    // Pula wyzwań
+    $all_challenges = ZADANIOMAT_DAILY_CHALLENGES;
+    $available = array_diff(array_keys($all_challenges), $yesterday_challenges);
+
+    if (count($available) < 3) {
+        $available = array_keys($all_challenges);
+    }
+
+    // Wybierz po jednym z każdej trudności
+    $by_difficulty = ['easy' => [], 'medium' => [], 'hard' => []];
+    foreach ($available as $key) {
+        $diff = $all_challenges[$key]['difficulty'];
+        $by_difficulty[$diff][] = $key;
+    }
+
+    $selected = [];
+    foreach (['easy', 'medium', 'hard'] as $diff) {
+        if (!empty($by_difficulty[$diff])) {
+            shuffle($by_difficulty[$diff]);
+            $selected[] = $by_difficulty[$diff][0];
+        }
+    }
+
+    // Dodaj wyzwania
+    foreach ($selected as $challenge_key) {
+        $challenge = $all_challenges[$challenge_key];
+        $wpdb->insert($table, [
+            'user_id' => $user_id,
+            'challenge_date' => $date,
+            'challenge_key' => $challenge_key,
+            'xp_reward' => $challenge['xp']
+        ]);
+    }
+}
+
+// Sprawdź i ukończ wyzwania dnia
+function zadaniomat_check_daily_challenges($user_id, $date = null) {
+    global $wpdb;
+    $date = $date ?: date('Y-m-d');
+    $table = $wpdb->prefix . 'zadaniomat_daily_challenges';
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $table_combo = $wpdb->prefix . 'zadaniomat_combo_state';
+
+    // Pobierz nieukończone wyzwania
+    $challenges = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = %d AND challenge_date = %s AND completed = 0",
+        $user_id, $date
+    ));
+
+    $completed = [];
+
+    foreach ($challenges as $challenge) {
+        $is_completed = false;
+
+        switch ($challenge->challenge_key) {
+            case 'complete_5_tasks':
+                $count = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                ));
+                $is_completed = $count >= 5;
+                break;
+
+            case 'complete_8_tasks':
+                $count = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                ));
+                $is_completed = $count >= 8;
+                break;
+
+            case 'work_6_hours':
+                $minutes = $wpdb->get_var($wpdb->prepare(
+                    "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                ));
+                $is_completed = ($minutes ?: 0) >= 360;
+                break;
+
+            case 'work_8_hours':
+                $minutes = $wpdb->get_var($wpdb->prepare(
+                    "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                ));
+                $is_completed = ($minutes ?: 0) >= 480;
+                break;
+
+            case '4_categories':
+                $categories = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(DISTINCT kategoria) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                ));
+                $is_completed = $categories >= 4;
+                break;
+
+            case 'all_categories':
+                $categories = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(DISTINCT kategoria) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                ));
+                $is_completed = $categories >= 6;
+                break;
+
+            case 'combo_3':
+                $combo = $wpdb->get_var($wpdb->prepare(
+                    "SELECT max_combo_today FROM $table_combo WHERE user_id = %d AND combo_date = %s",
+                    $user_id, $date
+                ));
+                $is_completed = ($combo ?: 0) >= 3;
+                break;
+
+            case 'combo_5':
+                $combo = $wpdb->get_var($wpdb->prepare(
+                    "SELECT max_combo_today FROM $table_combo WHERE user_id = %d AND combo_date = %s",
+                    $user_id, $date
+                ));
+                $is_completed = ($combo ?: 0) >= 5;
+                break;
+
+            case 'finish_all':
+                $total = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s", $date
+                ));
+                $completed_count = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                ));
+                $is_completed = $total > 0 && $total == $completed_count;
+                break;
+
+            case 'start_before_8':
+                $start_time = get_option("zadaniomat_start_dnia_$date");
+                $is_completed = $start_time && strtotime($start_time) < strtotime('08:00:00');
+                break;
+
+            case 'start_before_9':
+                $start_time = get_option("zadaniomat_start_dnia_$date");
+                $is_completed = $start_time && strtotime($start_time) < strtotime('09:00:00');
+                break;
+
+            case 'plan_before_10':
+                $first_task = $wpdb->get_var($wpdb->prepare(
+                    "SELECT created_at FROM $table_zadania WHERE dzien = %s ORDER BY created_at ASC LIMIT 1", $date
+                ));
+                if ($first_task) {
+                    $task_date = date('Y-m-d', strtotime($first_task));
+                    $task_time = date('H:i:s', strtotime($first_task));
+                    $is_completed = $task_date == $date && strtotime($task_time) < strtotime('10:00:00');
+                }
+                break;
+
+            case 'category_focus':
+                $max_time = $wpdb->get_var($wpdb->prepare(
+                    "SELECT MAX(cat_time) FROM (
+                        SELECT SUM(faktyczny_czas) as cat_time FROM $table_zadania
+                        WHERE dzien = %s AND status = 'zakonczone' GROUP BY kategoria
+                    ) as subquery", $date
+                ));
+                $is_completed = ($max_time ?: 0) >= 180;
+                break;
+        }
+
+        if ($is_completed) {
+            $wpdb->update($table, [
+                'completed' => 1,
+                'completed_at' => current_time('mysql')
+            ], ['id' => $challenge->id]);
+
+            zadaniomat_add_xp($user_id, $challenge->xp_reward, 'daily_challenge',
+                "Wyzwanie: " . (ZADANIOMAT_DAILY_CHALLENGES[$challenge->challenge_key]['desc'] ?? $challenge->challenge_key));
+
+            $completed[] = $challenge->challenge_key;
+        }
+    }
+
+    return $completed;
+}
+
+// Przetwórz osiągnięcie celu
+function zadaniomat_process_goal_completion($cel_id, $user_id = 1) {
+    global $wpdb;
+    $table_cele = $wpdb->prefix . 'zadaniomat_cele_okres';
+
+    $cel = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $table_cele WHERE id = %d", $cel_id
+    ));
+
+    if (!$cel || $cel->osiagniety != 1) return null;
+
+    $result = [
+        'cel_id' => $cel_id,
+        'xp_earned' => 0,
+        'achievements' => []
+    ];
+
+    // Policz pozycję celu (x1, x2, x3...)
+    $position = $cel->pozycja ?: 1;
+    $base_xp = 100 + (($position - 1) * 20); // x1 = 100, x2 = 120, x3 = 140...
+
+    $xp_result = zadaniomat_add_xp($user_id, $base_xp, 'goal_achieved',
+        "Cel osiągnięty: " . mb_substr($cel->cel, 0, 50), $cel_id, 'goal');
+
+    $result['xp_earned'] = $xp_result['xp_added'];
+    $result['level_up'] = $xp_result['level_up'];
+    $result['total_xp'] = $xp_result['total_xp'];
+
+    // Sprawdź odznaki celów
+    $total_goals = $wpdb->get_var(
+        "SELECT COUNT(*) FROM $table_cele WHERE osiagniety = 1"
+    );
+
+    if ($total_goals == 1) zadaniomat_award_achievement($user_id, 'first_goal');
+    if ($total_goals >= 10) zadaniomat_award_achievement($user_id, 'goals_10');
+    if ($total_goals >= 25) zadaniomat_award_achievement($user_id, 'goals_25');
+    if ($total_goals >= 50) zadaniomat_award_achievement($user_id, 'goals_50');
+
+    // Sprawdź odznaki wielokrotnych celów
+    if ($position >= 2) zadaniomat_award_achievement($user_id, 'goal_x2');
+    if ($position >= 3) zadaniomat_award_achievement($user_id, 'goal_x3');
+
+    // Sprawdź czy wszystkie cele okresu osiągnięte
+    $okres_cele = $wpdb->get_row($wpdb->prepare(
+        "SELECT COUNT(*) as total, SUM(CASE WHEN osiagniety = 1 THEN 1 ELSE 0 END) as completed
+         FROM $table_cele WHERE okres_id = %d AND cel IS NOT NULL AND cel != ''",
+        $cel->okres_id
+    ));
+
+    if ($okres_cele && $okres_cele->total > 0 && $okres_cele->total == $okres_cele->completed) {
+        // Wszystkie cele okresu osiągnięte!
+        zadaniomat_add_xp($user_id, 300, 'all_goals_period', "Wszystkie cele okresu osiągnięte!");
+        zadaniomat_award_achievement($user_id, 'perfect_period');
+        $result['all_goals_completed'] = true;
+    }
+
+    return $result;
+}
+
+// Przetwórz bonusy na koniec dnia
+function zadaniomat_process_end_of_day($user_id, $date) {
+    global $wpdb;
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $result = ['bonuses' => [], 'total_xp' => 0];
+
+    // Sprawdź czy dzień roboczy
+    if (!zadaniomat_is_work_day($date)) {
+        return $result;
+    }
+
+    // Wszystkie zadania dnia ukończone
+    $total = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s", $date
+    ));
+    $completed = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+    ));
+
+    if ($total > 0 && $total == $completed) {
+        zadaniomat_add_xp($user_id, 30, 'all_tasks_day', "Wszystkie zadania dnia ukończone");
+        $result['bonuses'][] = ['type' => 'all_tasks', 'xp' => 30];
+        $result['total_xp'] += 30;
+    }
+
+    // Wczesny start (przed 8:00)
+    $start_time = get_option("zadaniomat_start_dnia_$date");
+    if ($start_time && strtotime($start_time) < strtotime('08:00:00')) {
+        zadaniomat_add_xp($user_id, 20, 'early_start_bonus', "Wczesny start dnia");
+        $result['bonuses'][] = ['type' => 'early_start', 'xp' => 20];
+        $result['total_xp'] += 20;
+
+        // Aktualizuj streak wczesnego startu
+        zadaniomat_update_streak($user_id, 'early_start', $date);
+    }
+
+    // Wczesne planowanie (przed 10:00)
+    $first_task = $wpdb->get_row($wpdb->prepare(
+        "SELECT created_at FROM $table_zadania WHERE dzien = %s ORDER BY created_at ASC LIMIT 1", $date
+    ));
+    if ($first_task) {
+        $task_date = date('Y-m-d', strtotime($first_task->created_at));
+        $task_time = date('H:i:s', strtotime($first_task->created_at));
+        if ($task_date == $date && strtotime($task_time) < strtotime('10:00:00')) {
+            zadaniomat_add_xp($user_id, 15, 'early_planning_bonus', "Wczesne planowanie dnia");
+            $result['bonuses'][] = ['type' => 'early_planning', 'xp' => 15];
+            $result['total_xp'] += 15;
+
+            // Aktualizuj streak wczesnego planowania
+            zadaniomat_update_streak($user_id, 'early_planning', $date);
+        }
+    }
+
+    // Pokrycie kategorii
+    $goal_categories = array_keys(ZADANIOMAT_KATEGORIE);
+    $covered = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(DISTINCT kategoria) FROM $table_zadania
+         WHERE dzien = %s AND status = 'zakonczone' AND kategoria IN ('" . implode("','", $goal_categories) . "')",
+        $date
+    ));
+
+    $coverage_bonus = 0;
+    if ($covered >= 6) {
+        $coverage_bonus = 80;
+        zadaniomat_update_streak($user_id, 'full_coverage', $date);
+    } else if ($covered >= 5) {
+        $coverage_bonus = 50;
+    } else if ($covered >= 4) {
+        $coverage_bonus = 30;
+    } else if ($covered >= 3) {
+        $coverage_bonus = 15;
+    }
+
+    if ($coverage_bonus > 0) {
+        zadaniomat_add_xp($user_id, $coverage_bonus, 'category_coverage', "Pokrycie $covered kategorii");
+        $result['bonuses'][] = ['type' => 'coverage', 'categories' => $covered, 'xp' => $coverage_bonus];
+        $result['total_xp'] += $coverage_bonus;
+    }
+
+    // Godziny w kategoriach celów
+    $hours_in_goal_categories = $wpdb->get_var($wpdb->prepare(
+        "SELECT SUM(faktyczny_czas) FROM $table_zadania
+         WHERE dzien = %s AND status = 'zakonczone' AND kategoria IN ('" . implode("','", $goal_categories) . "')",
+        $date
+    ));
+    $full_hours = floor(($hours_in_goal_categories ?: 0) / 60);
+
+    if ($full_hours > 0) {
+        $hours_xp = $full_hours * 5;
+        zadaniomat_add_xp($user_id, $hours_xp, 'category_hour', "$full_hours godzin w kategoriach celów");
+        $result['bonuses'][] = ['type' => 'hours', 'hours' => $full_hours, 'xp' => $hours_xp];
+        $result['total_xp'] += $hours_xp;
+    }
+
+    // Aktualizuj główny streak (work_days)
+    // Warunki: min 3 ukończone zadania LUB min 4h pracy LUB 100% zadań
+    $work_minutes = $wpdb->get_var($wpdb->prepare(
+        "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+    ));
+    $work_hours = ($work_minutes ?: 0) / 60;
+
+    $qualifies_for_streak = ($completed >= 3) || ($work_hours >= 4) || ($total > 0 && $completed == $total);
+
+    if ($qualifies_for_streak) {
+        zadaniomat_update_streak($user_id, 'work_days', $date);
+    }
+
+    return $result;
+}
+
+// Pobierz wszystkie niewyświetlone odznaki
+function zadaniomat_get_unnotified_achievements($user_id) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_achievements';
+
+    $achievements = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = %d AND notified = 0 ORDER BY earned_at DESC",
+        $user_id
+    ));
+
+    $result = [];
+    foreach ($achievements as $a) {
+        $data = ZADANIOMAT_ACHIEVEMENTS[$a->achievement_key] ?? null;
+        if ($data) {
+            $result[] = [
+                'key' => $a->achievement_key,
+                'name' => $data['name'],
+                'icon' => $data['icon'],
+                'desc' => $data['desc'],
+                'xp' => $data['xp'],
+                'earned_at' => $a->earned_at
+            ];
+        }
+    }
+
+    return $result;
+}
+
+// Oznacz odznaki jako wyświetlone
+function zadaniomat_mark_achievements_notified($user_id, $achievement_keys = null) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_achievements';
+
+    if ($achievement_keys) {
+        $placeholders = implode(',', array_fill(0, count($achievement_keys), '%s'));
+        $wpdb->query($wpdb->prepare(
+            "UPDATE $table SET notified = 1 WHERE user_id = %d AND achievement_key IN ($placeholders)",
+            array_merge([$user_id], $achievement_keys)
+        ));
+    } else {
+        $wpdb->update($table, ['notified' => 1], ['user_id' => $user_id, 'notified' => 0]);
+    }
+}
+
+// Pobierz pełne dane gamifikacji dla UI
+function zadaniomat_get_gamification_data($user_id = 1) {
+    global $wpdb;
+    $today = date('Y-m-d');
+
+    // Wygeneruj wyzwania dnia jeśli nie istnieją
+    zadaniomat_generate_daily_challenges($user_id, $today);
+
+    // Statystyki gracza
+    $stats = zadaniomat_get_gamification_stats($user_id);
+    $level_info = zadaniomat_get_level_info($stats->current_level);
+
+    // Oblicz progress do następnego poziomu
+    $current_level_xp = ZADANIOMAT_LEVEL_THRESHOLDS[$stats->current_level];
+    $next_level_xp = isset(ZADANIOMAT_LEVEL_THRESHOLDS[$stats->current_level + 1])
+        ? ZADANIOMAT_LEVEL_THRESHOLDS[$stats->current_level + 1]
+        : $current_level_xp;
+    $xp_in_level = $stats->total_xp - $current_level_xp;
+    $xp_needed = $next_level_xp - $current_level_xp;
+    $progress_percent = $xp_needed > 0 ? min(100, round(($xp_in_level / $xp_needed) * 100)) : 100;
+
+    // Streaki
+    $streaks = [];
+    $streak_types = ['work_days', 'early_start', 'early_planning', 'full_coverage', 'all_tasks_done', 'cyclic_tasks'];
+    foreach ($streak_types as $type) {
+        $s = zadaniomat_get_streak($user_id, $type);
+        $streaks[$type] = [
+            'current' => $s->current_count,
+            'best' => $s->best_count,
+            'last_date' => $s->last_date
+        ];
+    }
+
+    // Combo dzisiejsze
+    $combo = zadaniomat_get_combo_state($user_id, $today);
+
+    // Wyzwania dnia
+    $table_challenges = $wpdb->prefix . 'zadaniomat_daily_challenges';
+    $challenges = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table_challenges WHERE user_id = %d AND challenge_date = %s",
+        $user_id, $today
+    ));
+
+    $challenges_data = [];
+    foreach ($challenges as $c) {
+        $def = ZADANIOMAT_DAILY_CHALLENGES[$c->challenge_key] ?? null;
+        $challenges_data[] = [
+            'key' => $c->challenge_key,
+            'desc' => $def['desc'] ?? $c->challenge_key,
+            'xp' => $c->xp_reward,
+            'completed' => (bool)$c->completed,
+            'difficulty' => $def['difficulty'] ?? 'medium'
+        ];
+    }
+
+    // Niewyświetlone odznaki
+    $new_achievements = zadaniomat_get_unnotified_achievements($user_id);
+
+    // Dzisiejsze XP
+    $table_xp = $wpdb->prefix . 'zadaniomat_xp_log';
+    $today_xp = $wpdb->get_var($wpdb->prepare(
+        "SELECT SUM(xp_amount) FROM $table_xp WHERE user_id = %d AND DATE(earned_at) = %s",
+        $user_id, $today
+    ));
+
+    // Mnożniki
+    $streak_multiplier = zadaniomat_get_streak_multiplier($streaks['work_days']['current']);
+    $combo_multiplier = zadaniomat_get_combo_multiplier($combo->current_combo);
+
+    return [
+        'stats' => [
+            'total_xp' => $stats->total_xp,
+            'current_level' => $stats->current_level,
+            'prestige' => $stats->prestige,
+            'freeze_days' => $stats->freeze_days_available
+        ],
+        'level' => [
+            'level' => $level_info['level'],
+            'name' => $level_info['name'],
+            'icon' => $level_info['icon'],
+            'current_xp' => $stats->total_xp,
+            'level_start_xp' => $current_level_xp,
+            'next_level_xp' => $next_level_xp,
+            'progress_percent' => $progress_percent,
+            'xp_in_level' => $xp_in_level,
+            'xp_needed' => $xp_needed
+        ],
+        'streaks' => $streaks,
+        'combo' => [
+            'current' => $combo->current_combo,
+            'max_today' => $combo->max_combo_today,
+            'multiplier' => $combo_multiplier
+        ],
+        'multipliers' => [
+            'streak' => $streak_multiplier,
+            'combo' => $combo_multiplier,
+            'total' => $streak_multiplier * $combo_multiplier
+        ],
+        'challenges' => $challenges_data,
+        'new_achievements' => $new_achievements,
+        'today_xp' => (int)($today_xp ?: 0)
+    ];
+}
+
+// Prestige - reset z bonusem
+function zadaniomat_do_prestige($user_id = 1) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_gamification_stats';
+
+    $stats = zadaniomat_get_gamification_stats($user_id);
+
+    // Wymagania: level 10 i 7000+ XP
+    if ($stats->current_level < 10 || $stats->total_xp < 7000) {
+        return ['success' => false, 'error' => 'Wymagany level 10 i 7000 XP'];
+    }
+
+    $new_prestige = $stats->prestige + 1;
+
+    $wpdb->update($table, [
+        'total_xp' => 0,
+        'current_level' => 1,
+        'prestige' => $new_prestige,
+        'freeze_days_available' => $stats->freeze_days_available + 1
+    ], ['user_id' => $user_id]);
+
+    // Odznaka prestige
+    if ($new_prestige == 1) {
+        zadaniomat_award_achievement($user_id, 'prestige_1');
+    }
+
+    return [
+        'success' => true,
+        'new_prestige' => $new_prestige,
+        'freeze_days' => $stats->freeze_days_available + 1
+    ];
 }
 
 // =============================================
@@ -412,17 +1667,31 @@ add_action('wp_ajax_zadaniomat_bulk_copy', function() {
 add_action('wp_ajax_zadaniomat_quick_update', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $id = intval($_POST['id']);
     $field = sanitize_text_field($_POST['field']);
     $value = $_POST['value'] === '' ? null : sanitize_text_field($_POST['value']);
-    
+
+    // Pobierz poprzedni status przed aktualizacją
+    $old_status = null;
+    if ($field === 'status') {
+        $old_status = $wpdb->get_var($wpdb->prepare(
+            "SELECT status FROM $table WHERE id = %d", $id
+        ));
+    }
+
     if (in_array($field, ['faktyczny_czas', 'status'])) {
         $wpdb->update($table, [$field => $value], ['id' => $id]);
     }
-    
-    wp_send_json_success();
+
+    // Jeśli zmieniono status na 'zakonczone' - przyznaj XP
+    $gamification_result = null;
+    if ($field === 'status' && $value === 'zakonczone' && $old_status !== 'zakonczone') {
+        $gamification_result = zadaniomat_process_task_completion($id, 1);
+    }
+
+    wp_send_json_success(['gamification' => $gamification_result]);
 });
 
 // Przenieś zadanie
@@ -1006,7 +2275,13 @@ add_action('wp_ajax_zadaniomat_complete_goal', function() {
         'osiagniety' => 1
     ], ['id' => $cel_id]);
 
-    wp_send_json_success(['cel_id' => $cel_id]);
+    // Przyznaj XP za osiągnięcie celu
+    $gamification_result = zadaniomat_process_goal_completion($cel_id, 1);
+
+    wp_send_json_success([
+        'cel_id' => $cel_id,
+        'gamification' => $gamification_result
+    ]);
 });
 
 // Dodaj kolejny cel w tej samej kategorii i okresie
@@ -1326,6 +2601,109 @@ add_action('wp_ajax_zadaniomat_get_unmarked_goals', function() {
     }
 
     wp_send_json_success(['unmarked' => $unmarked]);
+});
+
+// =============================================
+// GAMIFICATION - AJAX HANDLERS
+// =============================================
+
+// Pobierz dane gamifikacji
+add_action('wp_ajax_zadaniomat_get_gamification', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    $data = zadaniomat_get_gamification_data(1);
+    wp_send_json_success($data);
+});
+
+// Oznacz odznaki jako wyświetlone
+add_action('wp_ajax_zadaniomat_mark_achievements_notified', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    $keys = isset($_POST['keys']) ? array_map('sanitize_text_field', $_POST['keys']) : null;
+    zadaniomat_mark_achievements_notified(1, $keys);
+    wp_send_json_success();
+});
+
+// Wykonaj prestige
+add_action('wp_ajax_zadaniomat_do_prestige', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    $result = zadaniomat_do_prestige(1);
+    if ($result['success']) {
+        wp_send_json_success($result);
+    } else {
+        wp_send_json_error($result);
+    }
+});
+
+// Przetwórz bonusy końca dnia (wywoływane przy pierwszym wejściu następnego dnia)
+add_action('wp_ajax_zadaniomat_process_end_of_day', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    $date = sanitize_text_field($_POST['date'] ?? date('Y-m-d', strtotime('-1 day')));
+    $result = zadaniomat_process_end_of_day(1, $date);
+    wp_send_json_success($result);
+});
+
+// Pobierz historię XP
+add_action('wp_ajax_zadaniomat_get_xp_history', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_xp_log';
+    $limit = intval($_POST['limit'] ?? 50);
+    $offset = intval($_POST['offset'] ?? 0);
+
+    $history = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = 1 ORDER BY earned_at DESC LIMIT %d OFFSET %d",
+        $limit, $offset
+    ));
+
+    wp_send_json_success(['history' => $history]);
+});
+
+// Pobierz wszystkie zdobyte odznaki
+add_action('wp_ajax_zadaniomat_get_achievements', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_achievements';
+    $earned = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = %d ORDER BY earned_at DESC", 1
+    ));
+
+    $result = [];
+    foreach ($earned as $a) {
+        $data = ZADANIOMAT_ACHIEVEMENTS[$a->achievement_key] ?? null;
+        if ($data) {
+            $result[] = [
+                'key' => $a->achievement_key,
+                'name' => $data['name'],
+                'icon' => $data['icon'],
+                'desc' => $data['desc'],
+                'xp' => $data['xp'],
+                'earned_at' => $a->earned_at
+            ];
+        }
+    }
+
+    // Dodaj nieodblokowane odznaki
+    $all_achievements = ZADANIOMAT_ACHIEVEMENTS;
+    $earned_keys = array_column($earned, 'achievement_key');
+    $locked = [];
+    foreach ($all_achievements as $key => $data) {
+        if (!in_array($key, $earned_keys)) {
+            $locked[] = [
+                'key' => $key,
+                'name' => $data['name'],
+                'icon' => $data['icon'],
+                'desc' => $data['desc'],
+                'xp' => $data['xp'],
+                'earned_at' => null
+            ];
+        }
+    }
+
+    wp_send_json_success([
+        'earned' => $result,
+        'locked' => $locked
+    ]);
 });
 
 // =============================================
@@ -3453,6 +4831,317 @@ add_action('admin_head', function() {
             .stats-content.visible {
                 display: block;
             }
+
+            /* =============================================
+               GAMIFICATION STYLES
+               ============================================= */
+            .gamification-panel {
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                border-radius: 16px;
+                padding: 20px;
+                margin-bottom: 20px;
+                color: #fff;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            }
+            .gamification-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 15px;
+            }
+            .gamification-level {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+            .level-icon {
+                font-size: 36px;
+                filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+            }
+            .level-info h3 {
+                margin: 0;
+                font-size: 18px;
+                color: #fff;
+            }
+            .level-info .level-name {
+                color: #a0aec0;
+                font-size: 13px;
+            }
+            .xp-bar-container {
+                flex: 1;
+                max-width: 300px;
+                margin: 0 20px;
+            }
+            .xp-bar {
+                background: rgba(255,255,255,0.1);
+                border-radius: 10px;
+                height: 20px;
+                overflow: hidden;
+                position: relative;
+            }
+            .xp-bar-fill {
+                background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+                height: 100%;
+                border-radius: 10px;
+                transition: width 0.5s ease;
+            }
+            .xp-bar-text {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                font-size: 11px;
+                font-weight: 600;
+                color: #fff;
+                text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+            }
+            .xp-today {
+                text-align: right;
+                font-size: 14px;
+                color: #a0aec0;
+            }
+            .xp-today .xp-value {
+                font-size: 24px;
+                font-weight: 700;
+                color: #48bb78;
+            }
+            .gamification-stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+                gap: 12px;
+                margin-top: 15px;
+            }
+            .gam-stat-box {
+                background: rgba(255,255,255,0.05);
+                border-radius: 10px;
+                padding: 12px;
+                text-align: center;
+            }
+            .gam-stat-box .stat-icon {
+                font-size: 20px;
+                margin-bottom: 4px;
+            }
+            .gam-stat-box .stat-value {
+                font-size: 20px;
+                font-weight: 700;
+                color: #fff;
+            }
+            .gam-stat-box .stat-label {
+                font-size: 11px;
+                color: #a0aec0;
+                margin-top: 2px;
+            }
+            .gam-stat-box .stat-multiplier {
+                font-size: 10px;
+                color: #48bb78;
+                margin-top: 2px;
+            }
+            .gam-stat-box.streak .stat-value { color: #f6ad55; }
+            .gam-stat-box.combo .stat-value { color: #63b3ed; }
+
+            /* Wyzwania dnia */
+            .challenges-section {
+                margin-top: 15px;
+                padding-top: 15px;
+                border-top: 1px solid rgba(255,255,255,0.1);
+            }
+            .challenges-title {
+                font-size: 14px;
+                color: #a0aec0;
+                margin-bottom: 10px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .challenges-list {
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .challenge-item {
+                background: rgba(255,255,255,0.05);
+                border-radius: 8px;
+                padding: 10px 14px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-size: 13px;
+            }
+            .challenge-item.completed {
+                background: rgba(72, 187, 120, 0.2);
+            }
+            .challenge-item .check {
+                width: 18px;
+                height: 18px;
+                border: 2px solid #a0aec0;
+                border-radius: 4px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .challenge-item.completed .check {
+                background: #48bb78;
+                border-color: #48bb78;
+            }
+            .challenge-item .xp-reward {
+                color: #48bb78;
+                font-weight: 600;
+                margin-left: auto;
+            }
+            .challenge-item.completed .xp-reward {
+                text-decoration: line-through;
+                opacity: 0.5;
+            }
+
+            /* XP Popup */
+            .xp-popup {
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%) scale(0.8);
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                border-radius: 16px;
+                padding: 30px 40px;
+                color: #fff;
+                text-align: center;
+                z-index: 100000;
+                box-shadow: 0 10px 50px rgba(0,0,0,0.5);
+                opacity: 0;
+                transition: all 0.3s ease;
+                pointer-events: none;
+            }
+            .xp-popup.show {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+            .xp-popup .xp-amount {
+                font-size: 48px;
+                font-weight: 700;
+                color: #48bb78;
+                text-shadow: 0 2px 10px rgba(72,187,120,0.5);
+            }
+            .xp-popup .xp-label {
+                font-size: 14px;
+                color: #a0aec0;
+                margin-top: 5px;
+            }
+            .xp-popup .xp-breakdown {
+                margin-top: 15px;
+                padding-top: 15px;
+                border-top: 1px solid rgba(255,255,255,0.1);
+                font-size: 12px;
+                color: #a0aec0;
+            }
+            .xp-popup .xp-breakdown div {
+                margin: 4px 0;
+            }
+            .xp-popup .combo-info {
+                margin-top: 10px;
+                font-size: 16px;
+                color: #f6ad55;
+            }
+
+            /* Level Up Popup */
+            .level-up-popup {
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%) scale(0.8);
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                border-radius: 20px;
+                padding: 40px 50px;
+                color: #fff;
+                text-align: center;
+                z-index: 100001;
+                box-shadow: 0 10px 50px rgba(102,126,234,0.5);
+                opacity: 0;
+                transition: all 0.3s ease;
+                pointer-events: none;
+            }
+            .level-up-popup.show {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+            .level-up-popup .level-up-title {
+                font-size: 28px;
+                font-weight: 700;
+                margin-bottom: 20px;
+            }
+            .level-up-popup .level-change {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 20px;
+                font-size: 24px;
+            }
+            .level-up-popup .level-icon-big {
+                font-size: 48px;
+            }
+            .level-up-popup .arrow {
+                font-size: 32px;
+            }
+            .level-up-popup .new-level-name {
+                font-size: 18px;
+                margin-top: 15px;
+                opacity: 0.9;
+            }
+
+            /* Achievement Popup */
+            .achievement-popup {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                border-radius: 12px;
+                padding: 15px 20px;
+                color: #fff;
+                z-index: 100002;
+                box-shadow: 0 5px 30px rgba(0,0,0,0.4);
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                transform: translateX(120%);
+                transition: transform 0.4s ease;
+                border-left: 4px solid #f6ad55;
+            }
+            .achievement-popup.show {
+                transform: translateX(0);
+            }
+            .achievement-popup .ach-icon {
+                font-size: 36px;
+            }
+            .achievement-popup .ach-info h4 {
+                margin: 0;
+                font-size: 16px;
+                color: #f6ad55;
+            }
+            .achievement-popup .ach-info p {
+                margin: 4px 0 0 0;
+                font-size: 12px;
+                color: #a0aec0;
+            }
+            .achievement-popup .ach-xp {
+                font-size: 14px;
+                color: #48bb78;
+                font-weight: 600;
+            }
+
+            /* Overlay for popups */
+            .popup-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.5);
+                z-index: 99999;
+                opacity: 0;
+                pointer-events: none;
+                transition: opacity 0.3s ease;
+            }
+            .popup-overlay.show {
+                opacity: 1;
+            }
         </style>
         <?php
     }
@@ -3494,7 +5183,91 @@ function zadaniomat_page_main() {
     ?>
     <div class="wrap zadaniomat-wrap">
         <h1 style="margin-bottom: 20px;">📋 Zadaniomat</h1>
-        
+
+        <!-- Gamification Panel -->
+        <div class="gamification-panel" id="gamification-panel">
+            <div class="gamification-header">
+                <div class="gamification-level">
+                    <span class="level-icon" id="gam-level-icon">🌱</span>
+                    <div class="level-info">
+                        <h3>Level <span id="gam-level-num">1</span></h3>
+                        <div class="level-name" id="gam-level-name">Świeżak</div>
+                    </div>
+                </div>
+                <div class="xp-bar-container">
+                    <div class="xp-bar">
+                        <div class="xp-bar-fill" id="gam-xp-bar" style="width: 0%"></div>
+                        <div class="xp-bar-text" id="gam-xp-text">0 / 150 XP</div>
+                    </div>
+                </div>
+                <div class="xp-today">
+                    <div>Dziś</div>
+                    <div class="xp-value">+<span id="gam-today-xp">0</span> XP</div>
+                </div>
+            </div>
+            <div class="gamification-stats">
+                <div class="gam-stat-box streak">
+                    <div class="stat-icon">🔥</div>
+                    <div class="stat-value" id="gam-streak">0</div>
+                    <div class="stat-label">Dni streak</div>
+                    <div class="stat-multiplier" id="gam-streak-mult">1.0x</div>
+                </div>
+                <div class="gam-stat-box combo">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-value" id="gam-combo">0</div>
+                    <div class="stat-label">Combo</div>
+                    <div class="stat-multiplier" id="gam-combo-mult">1.0x</div>
+                </div>
+                <div class="gam-stat-box">
+                    <div class="stat-icon">🌅</div>
+                    <div class="stat-value" id="gam-early-start">0</div>
+                    <div class="stat-label">Wczesny start</div>
+                </div>
+                <div class="gam-stat-box">
+                    <div class="stat-icon">🎨</div>
+                    <div class="stat-value" id="gam-coverage">0</div>
+                    <div class="stat-label">Pełne pokrycie</div>
+                </div>
+                <div class="gam-stat-box">
+                    <div class="stat-icon">❄️</div>
+                    <div class="stat-value" id="gam-freeze">0</div>
+                    <div class="stat-label">Freeze days</div>
+                </div>
+            </div>
+            <div class="challenges-section">
+                <div class="challenges-title">🎲 Wyzwania dnia</div>
+                <div class="challenges-list" id="gam-challenges">
+                    <!-- Challenges will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Popup elements -->
+        <div class="popup-overlay" id="popup-overlay"></div>
+        <div class="xp-popup" id="xp-popup">
+            <div class="xp-amount" id="xp-popup-amount">+0 XP</div>
+            <div class="xp-label">Zdobyte doświadczenie</div>
+            <div class="xp-breakdown" id="xp-popup-breakdown"></div>
+            <div class="combo-info" id="xp-popup-combo"></div>
+        </div>
+        <div class="level-up-popup" id="level-up-popup">
+            <div class="level-up-title">🎉 LEVEL UP! 🎉</div>
+            <div class="level-change">
+                <span class="level-icon-big" id="level-up-old-icon">🌱</span>
+                <span class="arrow">→</span>
+                <span class="level-icon-big" id="level-up-new-icon">📝</span>
+            </div>
+            <div class="new-level-name" id="level-up-new-name">Level 2 - Planista</div>
+        </div>
+        <div class="achievement-popup" id="achievement-popup">
+            <div class="ach-icon" id="ach-popup-icon">🏆</div>
+            <div class="ach-info">
+                <h4 id="ach-popup-name">Nowa odznaka!</h4>
+                <p id="ach-popup-desc">Opis odznaki</p>
+            </div>
+            <div class="ach-xp" id="ach-popup-xp">+0 XP</div>
+        </div>
+
         <!-- Overdue alerts container -->
         <div id="overdue-container"></div>
 
@@ -3941,7 +5714,167 @@ function zadaniomat_page_main() {
             loadAllGoalsSummaries(); // Załaduj podsumowania celów
             checkUnmarkedGoals(); // Sprawdź nieoznaczone cele
             restoreTimerFromStorage(); // Przywróć timer jeśli był aktywny
+            loadGamificationData(); // Załaduj dane gamifikacji
         });
+
+        // ==================== GAMIFICATION ====================
+        var gamificationData = null;
+        var levelIcons = {1:'🌱',2:'📝',3:'🎯',4:'⚡',5:'🔧',6:'💼',7:'🏆',8:'🎖️',9:'👑',10:'🌟'};
+
+        function loadGamificationData() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_gamification',
+                nonce: nonce
+            }, function(response) {
+                if (response.success) {
+                    gamificationData = response.data;
+                    updateGamificationUI();
+                    showNewAchievements();
+                }
+            });
+        }
+
+        function updateGamificationUI() {
+            if (!gamificationData) return;
+            var d = gamificationData;
+
+            // Level info
+            $('#gam-level-icon').text(d.level.icon);
+            $('#gam-level-num').text(d.level.level);
+            $('#gam-level-name').text(d.level.name);
+
+            // XP bar
+            $('#gam-xp-bar').css('width', d.level.progress_percent + '%');
+            $('#gam-xp-text').text(d.level.current_xp + ' / ' + d.level.next_level_xp + ' XP');
+
+            // Today XP
+            $('#gam-today-xp').text(d.today_xp);
+
+            // Streaks
+            $('#gam-streak').text(d.streaks.work_days.current);
+            $('#gam-streak-mult').text(d.multipliers.streak.toFixed(1) + 'x');
+            $('#gam-combo').text(d.combo.current);
+            $('#gam-combo-mult').text(d.multipliers.combo.toFixed(1) + 'x');
+            $('#gam-early-start').text(d.streaks.early_start.current);
+            $('#gam-coverage').text(d.streaks.full_coverage.current);
+            $('#gam-freeze').text(d.stats.freeze_days);
+
+            // Challenges
+            var challengesHtml = '';
+            d.challenges.forEach(function(c) {
+                var completed = c.completed ? 'completed' : '';
+                var check = c.completed ? '✓' : '';
+                challengesHtml += '<div class="challenge-item ' + completed + '">' +
+                    '<div class="check">' + check + '</div>' +
+                    '<span>' + c.desc + '</span>' +
+                    '<span class="xp-reward">+' + c.xp + ' XP</span>' +
+                    '</div>';
+            });
+            $('#gam-challenges').html(challengesHtml);
+        }
+
+        function showNewAchievements() {
+            if (!gamificationData || !gamificationData.new_achievements.length) return;
+
+            var achievements = gamificationData.new_achievements;
+            var delay = 0;
+
+            achievements.forEach(function(ach) {
+                setTimeout(function() {
+                    showAchievementPopup(ach);
+                }, delay);
+                delay += 3500;
+            });
+
+            // Mark as notified
+            var keys = achievements.map(function(a) { return a.key; });
+            $.post(ajaxurl, {
+                action: 'zadaniomat_mark_achievements_notified',
+                nonce: nonce,
+                keys: keys
+            });
+        }
+
+        function showAchievementPopup(ach) {
+            $('#ach-popup-icon').text(ach.icon);
+            $('#ach-popup-name').text(ach.name);
+            $('#ach-popup-desc').text(ach.desc);
+            $('#ach-popup-xp').text('+' + ach.xp + ' XP');
+
+            var $popup = $('#achievement-popup');
+            $popup.addClass('show');
+
+            setTimeout(function() {
+                $popup.removeClass('show');
+            }, 3000);
+        }
+
+        function showXpPopup(result) {
+            if (!result || !result.xp_earned) return;
+
+            var $overlay = $('#popup-overlay');
+            var $popup = $('#xp-popup');
+
+            $('#xp-popup-amount').text('+' + result.xp_earned + ' XP');
+
+            var breakdown = '';
+            if (result.xp_breakdown) {
+                breakdown += '<div>Bazowe: ' + result.xp_breakdown.base + ' XP</div>';
+                if (result.xp_breakdown.streak_multiplier > 1) {
+                    breakdown += '<div>Streak ' + result.xp_breakdown.streak_multiplier.toFixed(1) + 'x</div>';
+                }
+                if (result.xp_breakdown.combo_multiplier > 1) {
+                    breakdown += '<div>Combo ' + result.xp_breakdown.combo_multiplier.toFixed(1) + 'x</div>';
+                }
+            }
+            $('#xp-popup-breakdown').html(breakdown);
+
+            if (result.combo && result.combo.combo > 1) {
+                $('#xp-popup-combo').text('Combo: ' + result.combo.combo + ' 🔥');
+            } else {
+                $('#xp-popup-combo').text('');
+            }
+
+            $overlay.addClass('show');
+            $popup.addClass('show');
+
+            setTimeout(function() {
+                $popup.removeClass('show');
+                $overlay.removeClass('show');
+
+                // Check for level up
+                if (result.level_up) {
+                    setTimeout(function() {
+                        showLevelUpPopup(result);
+                    }, 200);
+                }
+            }, 1500);
+
+            // Refresh gamification data
+            loadGamificationData();
+        }
+
+        function showLevelUpPopup(result) {
+            if (!result.level_info) return;
+
+            var oldLevel = result.level_info.level - 1;
+            var newLevel = result.level_info.level;
+
+            $('#level-up-old-icon').text(levelIcons[oldLevel] || '❓');
+            $('#level-up-new-icon').text(result.level_info.icon);
+            $('#level-up-new-name').text('Level ' + newLevel + ' - ' + result.level_info.name);
+
+            var $overlay = $('#popup-overlay');
+            var $popup = $('#level-up-popup');
+
+            $overlay.addClass('show');
+            $popup.addClass('show');
+
+            setTimeout(function() {
+                $popup.removeClass('show');
+                $overlay.removeClass('show');
+            }, 2500);
+        }
 
         // ==================== STATYSTYKI ====================
         window.toggleStatsSection = function() {
@@ -4891,6 +6824,11 @@ function zadaniomat_page_main() {
                     };
                     showToast('Status: ' + statusLabels[status], 'success');
                     loadTasks();
+
+                    // Gamification - pokaż XP popup jeśli zadanie ukończone
+                    if (status === 'zakonczone' && response.data && response.data.gamification) {
+                        showXpPopup(response.data.gamification);
+                    }
                 }
             });
         };
@@ -4939,17 +6877,24 @@ function zadaniomat_page_main() {
             $(document).on('change', '.quick-update', function() {
                 var $this = $(this);
                 var $row = $this.closest('tr');
-                
+                var field = $this.data('field');
+                var value = $this.val();
+
                 $.post(ajaxurl, {
                     action: 'zadaniomat_quick_update',
                     nonce: nonce,
                     id: $this.data('id'),
-                    field: $this.data('field'),
-                    value: $this.val()
+                    field: field,
+                    value: value
                 }, function(response) {
                     if (response.success) {
                         $this.addClass('saved-flash');
                         setTimeout(function() { $this.removeClass('saved-flash'); }, 500);
+
+                        // Gamification - pokaż XP popup jeśli zadanie ukończone
+                        if (field === 'status' && value === 'zakonczone' && response.data && response.data.gamification) {
+                            showXpPopup(response.data.gamification);
+                        }
                     }
                 });
             });
@@ -5110,6 +7055,11 @@ function zadaniomat_page_main() {
                     loadGoalsSummary(okresId, kategoria);
 
                     showToast('Cel ukończony! Dodaj kolejny.', 'success');
+
+                    // Gamification - pokaż XP popup za osiągnięcie celu
+                    if (response.data && response.data.gamification) {
+                        showXpPopup(response.data.gamification);
+                    }
                 }
             });
         };
@@ -5901,6 +7851,11 @@ function zadaniomat_page_main() {
                         'anulowane': 'Anulowane'
                     };
                     showToast('Status: ' + statusLabels[newStatus], 'success');
+
+                    // Gamification - pokaż XP popup jeśli zadanie ukończone
+                    if (newStatus === 'zakonczone' && response.data && response.data.gamification) {
+                        showXpPopup(response.data.gamification);
+                    }
                 }
             });
         };
@@ -6762,6 +8717,10 @@ function zadaniomat_page_main() {
                     id: taskId,
                     field: 'status',
                     value: 'zakonczone'
+                }, function(response) {
+                    if (response.success && response.data && response.data.gamification) {
+                        showXpPopup(response.data.gamification);
+                    }
                 });
             }
 
