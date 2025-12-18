@@ -1971,23 +1971,27 @@ add_action('wp_ajax_zadaniomat_add_task', function() {
 add_action('wp_ajax_zadaniomat_edit_task', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $task_date = sanitize_text_field($_POST['dzien']);
     $auto_okres = zadaniomat_get_current_okres($task_date);
     $id = intval($_POST['id']);
-    
+
+    // Ensure jest_cykliczne column exists
+    zadaniomat_ensure_zadania_columns();
+
     $wpdb->update($table, [
         'okres_id' => $auto_okres ? $auto_okres->id : null,
         'kategoria' => sanitize_text_field($_POST['kategoria']),
         'dzien' => $task_date,
         'zadanie' => sanitize_text_field($_POST['zadanie']),
         'cel_todo' => sanitize_textarea_field($_POST['cel_todo']),
-        'planowany_czas' => intval($_POST['planowany_czas'])
+        'planowany_czas' => intval($_POST['planowany_czas']),
+        'jest_cykliczne' => !empty($_POST['jest_cykliczne']) ? 1 : 0
     ], ['id' => $id]);
-    
+
     $task = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
-    
+
     wp_send_json_success([
         'task' => $task,
         'kategoria_label' => zadaniomat_get_kategoria_label($task->kategoria)
@@ -5175,6 +5179,17 @@ add_action('admin_head', function() {
                 font-weight: 600;
             }
 
+            /* Cykliczne zadania badge */
+            .cykliczne-badge {
+                display: inline-block;
+                margin-left: 5px;
+                font-size: 12px;
+                opacity: 0.7;
+            }
+            .task-cykliczne {
+                background: linear-gradient(90deg, rgba(102, 126, 234, 0.05), transparent) !important;
+            }
+
             .stale-task-row {
                 background: #f8f9fa;
                 border-left: 3px solid #6c757d;
@@ -6618,6 +6633,12 @@ function zadaniomat_page_main() {
                                 <label>⏱️ Planowany czas (min)</label>
                                 <input type="number" id="task-czas" min="0" placeholder="np. 30">
                             </div>
+                            <div class="form-group" style="display: flex; align-items: flex-end;">
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 0;">
+                                    <input type="checkbox" id="task-cykliczne" style="width: auto; margin: 0;">
+                                    <span>🔄 Cykliczne</span>
+                                </label>
+                            </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group wide">
@@ -7739,15 +7760,16 @@ function zadaniomat_page_main() {
         window.renderTaskRow = function(t, day) {
             var taskStatus = t.status || 'nowe';
             var statusClass = 'status-' + taskStatus;
+            var isCykliczne = t.jest_cykliczne == 1;
 
             var planowany = parseInt(t.planowany_czas) || 0;
             var faktyczny = parseInt(t.faktyczny_czas) || 0;
             var isActiveTimer = activeTimer && activeTimer.taskId == t.id;
 
-            var html = '<tr class="' + statusClass + '" data-task-id="' + t.id + '">';
+            var html = '<tr class="' + statusClass + (isCykliczne ? ' task-cykliczne' : '') + '" data-task-id="' + t.id + '" data-cykliczne="' + (isCykliczne ? '1' : '0') + '">';
             html += '<td><input type="checkbox" class="task-checkbox" data-task-id="' + t.id + '" data-day="' + day + '"></td>';
             html += '<td><span class="kategoria-badge ' + t.kategoria + '">' + t.kategoria_label + '</span></td>';
-            html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong></td>';
+            html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong>' + (isCykliczne ? ' <span class="cykliczne-badge">🔄</span>' : '') + '</td>';
             html += '<td style="font-size:12px;color:#666;">' + escapeHtml(t.cel_todo || '') + '</td>';
 
             // Kolumna czasu z timerem
@@ -8276,7 +8298,8 @@ function zadaniomat_page_main() {
                     kategoria: $('#task-kategoria').val(),
                     zadanie: $('#task-nazwa').val(),
                     cel_todo: $('#task-cel').val(),
-                    planowany_czas: $('#task-czas').val() || 0
+                    planowany_czas: $('#task-czas').val() || 0,
+                    jest_cykliczne: $('#task-cykliczne').is(':checked') ? 1 : 0
                 };
                 
                 if (editId) data.id = editId;
@@ -8684,25 +8707,27 @@ function zadaniomat_page_main() {
         window.editTask = function(id, btn) {
             var $row = $(btn).closest('tr');
             var $daySection = $row.closest('.day-section');
-            
+
             // Get task data from row
             var kategoria = $row.find('.kategoria-badge').attr('class').replace('kategoria-badge ', '').trim();
             var zadanie = $row.find('strong').text();
             var cel = $row.find('td:eq(2)').text();
             var plan = $row.find('td:eq(3)').text();
             var dzien = $daySection.data('day');
-            
+            var isCykliczne = $row.data('cykliczne') == 1;
+
             $('#edit-task-id').val(id);
             $('#task-date').val(dzien);
             $('#task-kategoria').val(kategoria);
             $('#task-nazwa').val(zadanie);
             $('#task-cel').val(cel);
             $('#task-czas').val(plan);
-            
+            $('#task-cykliczne').prop('checked', isCykliczne);
+
             $('#form-title').text('✏️ Edytuj zadanie');
             $('#submit-btn').text('💾 Zapisz zmiany');
             $('#cancel-edit-btn').show();
-            
+
             $('html, body').animate({ scrollTop: $('.task-form').offset().top - 50 }, 300);
         };
         
@@ -8715,6 +8740,7 @@ function zadaniomat_page_main() {
             $('#task-nazwa').val('');
             $('#task-cel').val('');
             $('#task-czas').val('');
+            $('#task-cykliczne').prop('checked', false);
             $('#form-title').text('➕ Dodaj zadanie');
             $('#submit-btn').text('➕ Dodaj zadanie');
             $('#cancel-edit-btn').hide();
@@ -11909,7 +11935,7 @@ function zadaniomat_page_gamification() {
             var filter = $('#xp-history-filter').val();
             var date = $('#xp-history-date').val();
 
-            $('#xp-history-body').html('<tr><td colspan="7" style="text-align:center;padding:20px;">Ładowanie...</td></tr>');
+            $('#xp-history-body').html('<tr><td colspan="8" style="text-align:center;padding:20px;">Ładowanie...</td></tr>');
 
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_xp_history_advanced',
@@ -11921,7 +11947,11 @@ function zadaniomat_page_gamification() {
             }, function(response) {
                 if (response.success) {
                     renderXPHistory(response.data);
+                } else {
+                    $('#xp-history-body').html('<tr><td colspan="8" style="text-align:center;padding:20px;color:#dc3545;">Błąd: ' + (response.data || 'Nieznany błąd') + '</td></tr>');
                 }
+            }).fail(function(xhr, status, error) {
+                $('#xp-history-body').html('<tr><td colspan="8" style="text-align:center;padding:20px;color:#dc3545;">Błąd połączenia: ' + error + '</td></tr>');
             });
         };
 
