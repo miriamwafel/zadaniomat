@@ -191,6 +191,7 @@ function zadaniomat_create_tables() {
         xp_type VARCHAR(50) NOT NULL,
         multiplier DECIMAL(4,2) NOT NULL DEFAULT 1.00,
         description VARCHAR(255) DEFAULT NULL,
+        condition_text VARCHAR(255) DEFAULT NULL,
         reference_id INT DEFAULT NULL,
         reference_type VARCHAR(50) DEFAULT NULL,
         earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -366,6 +367,15 @@ add_action('admin_init', function() {
     $table_gamification_stats = $wpdb->prefix . 'zadaniomat_gamification_stats';
     if($wpdb->get_var("SHOW TABLES LIKE '$table_gamification_stats'") != $table_gamification_stats) {
         zadaniomat_create_tables();
+    }
+
+    // Migracja - dodaj kolumnę condition_text do xp_log
+    $table_xp_log = $wpdb->prefix . 'zadaniomat_xp_log';
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table_xp_log'") == $table_xp_log) {
+        $xp_log_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_xp_log");
+        if (!in_array('condition_text', $xp_log_columns)) {
+            $wpdb->query("ALTER TABLE $table_xp_log ADD COLUMN condition_text VARCHAR(255) DEFAULT NULL AFTER description");
+        }
     }
 });
 
@@ -827,7 +837,7 @@ function zadaniomat_get_combo_state($user_id, $date) {
 }
 
 // Dodaj XP graczowi
-function zadaniomat_add_xp($user_id, $xp_amount, $xp_type, $description = '', $reference_id = null, $reference_type = null, $multiplier = 1.0) {
+function zadaniomat_add_xp($user_id, $xp_amount, $xp_type, $description = '', $reference_id = null, $reference_type = null, $multiplier = 1.0, $condition_text = '') {
     global $wpdb;
 
     if ($xp_amount <= 0) return ['xp_added' => 0, 'level_up' => false];
@@ -859,8 +869,8 @@ function zadaniomat_add_xp($user_id, $xp_amount, $xp_type, $description = '', $r
         'current_level' => $new_level
     ], ['user_id' => $user_id]);
 
-    // Zapisz log
-    $wpdb->insert($log_table, [
+    // Zapisz log - najpierw sprawdź czy kolumna condition_text istnieje
+    $log_data = [
         'user_id' => $user_id,
         'xp_amount' => $final_xp,
         'xp_type' => $xp_type,
@@ -868,7 +878,15 @@ function zadaniomat_add_xp($user_id, $xp_amount, $xp_type, $description = '', $r
         'description' => $description,
         'reference_id' => $reference_id,
         'reference_type' => $reference_type
-    ]);
+    ];
+
+    // Dodaj condition_text tylko jeśli kolumna istnieje
+    $columns = $wpdb->get_col("SHOW COLUMNS FROM $log_table");
+    if (in_array('condition_text', $columns)) {
+        $log_data['condition_text'] = $condition_text;
+    }
+
+    $wpdb->insert($log_table, $log_data);
 
     // Sprawdź level up
     $level_up = $new_level > $old_level;
@@ -1963,23 +1981,27 @@ add_action('wp_ajax_zadaniomat_add_task', function() {
 add_action('wp_ajax_zadaniomat_edit_task', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
-    
+
     $table = $wpdb->prefix . 'zadaniomat_zadania';
     $task_date = sanitize_text_field($_POST['dzien']);
     $auto_okres = zadaniomat_get_current_okres($task_date);
     $id = intval($_POST['id']);
-    
+
+    // Ensure jest_cykliczne column exists
+    zadaniomat_ensure_zadania_columns();
+
     $wpdb->update($table, [
         'okres_id' => $auto_okres ? $auto_okres->id : null,
         'kategoria' => sanitize_text_field($_POST['kategoria']),
         'dzien' => $task_date,
         'zadanie' => sanitize_text_field($_POST['zadanie']),
         'cel_todo' => sanitize_textarea_field($_POST['cel_todo']),
-        'planowany_czas' => intval($_POST['planowany_czas'])
+        'planowany_czas' => intval($_POST['planowany_czas']),
+        'jest_cykliczne' => !empty($_POST['jest_cykliczne']) ? 1 : 0
     ], ['id' => $id]);
-    
+
     $task = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
-    
+
     wp_send_json_success([
         'task' => $task,
         'kategoria_label' => zadaniomat_get_kategoria_label($task->kategoria)
@@ -2192,6 +2214,60 @@ add_action('wp_ajax_zadaniomat_get_calendar_dots', function() {
     ));
     
     wp_send_json_success(['days' => $days]);
+});
+
+// Pobierz statystyki dnia (AJAX refresh)
+add_action('wp_ajax_zadaniomat_get_daily_stats', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $date = sanitize_text_field($_POST['date'] ?? date('Y-m-d'));
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+
+    // Kategorie celów
+    $kategorie_celow = ['zapianowany', 'klejpan', 'fjo'];
+
+    // Statystyki dla kategorii celów
+    $cele_stats = $wpdb->get_row($wpdb->prepare(
+        "SELECT SUM(faktyczny_czas) as faktyczny_min, SUM(planowany_czas) as planowany_min
+         FROM $table_zadania
+         WHERE dzien = %s AND kategoria IN ('zapianowany', 'klejpan', 'fjo')",
+        $date
+    ));
+
+    // Statystyki dla innych kategorii
+    $inne_stats = $wpdb->get_row($wpdb->prepare(
+        "SELECT SUM(faktyczny_czas) as faktyczny_min
+         FROM $table_zadania
+         WHERE dzien = %s AND kategoria NOT IN ('zapianowany', 'klejpan', 'fjo')",
+        $date
+    ));
+
+    // Statystyki wszystkich zadań
+    $total_stats = $wpdb->get_row($wpdb->prepare(
+        "SELECT COUNT(*) as liczba_zadan,
+                SUM(faktyczny_czas) as faktyczny_min,
+                SUM(CASE WHEN status = 'zakonczone' THEN 1 ELSE 0 END) as ukonczone
+         FROM $table_zadania
+         WHERE dzien = %s",
+        $date
+    ));
+
+    $faktyczny_cele_h = ($cele_stats->faktyczny_min ?: 0) / 60;
+    $planowany_cele_h = ($cele_stats->planowany_min ?: 0) / 60;
+    $faktyczny_inne_h = ($inne_stats->faktyczny_min ?: 0) / 60;
+    $faktyczny_total_h = ($total_stats->faktyczny_min ?: 0) / 60;
+    $procent = $planowany_cele_h > 0 ? min(100, round(($faktyczny_cele_h / $planowany_cele_h) * 100)) : 0;
+
+    wp_send_json_success([
+        'cele_hours' => number_format($faktyczny_cele_h, 1),
+        'planned_hours' => number_format($planowany_cele_h, 1),
+        'inne_hours' => number_format($faktyczny_inne_h, 1),
+        'razem_hours' => number_format($faktyczny_total_h, 1),
+        'procent' => $procent,
+        'tasks_count' => $total_stats->liczba_zadan ?: 0,
+        'tasks_done' => $total_stats->ukonczone ?: 0
+    ]);
 });
 
 // Zapisz cel okresu
@@ -3331,17 +3407,22 @@ add_action('wp_ajax_zadaniomat_delete_xp_entry', function() {
     $xp_log_table = $wpdb->prefix . 'zadaniomat_xp_log';
     $stats_table = $wpdb->prefix . 'zadaniomat_gamification_stats';
 
-    // Get the entry to find XP amount
-    $entry = $wpdb->get_row($wpdb->prepare("SELECT * FROM $xp_log_table WHERE id = %d", $entry_id));
+    // Get the entry to find XP amount (calculate xp_final from xp_amount * multiplier)
+    $entry = $wpdb->get_row($wpdb->prepare(
+        "SELECT *, ROUND(xp_amount * multiplier) as xp_final FROM $xp_log_table WHERE id = %d",
+        $entry_id
+    ));
     if (!$entry) {
         wp_send_json_error('Wpis nie istnieje');
         return;
     }
 
+    $xp_to_deduct = $entry->xp_final ?: $entry->xp_amount;
+
     // Deduct XP from total
     $wpdb->query($wpdb->prepare(
         "UPDATE $stats_table SET total_xp = GREATEST(0, total_xp - %d) WHERE user_id = %d",
-        $entry->xp_final, $entry->user_id
+        $xp_to_deduct, $entry->user_id
     ));
 
     // Delete the entry
@@ -3354,7 +3435,7 @@ add_action('wp_ajax_zadaniomat_delete_xp_entry', function() {
         $wpdb->update($stats_table, ['level' => $new_level], ['user_id' => $entry->user_id]);
     }
 
-    wp_send_json_success(['deleted_xp' => $entry->xp_final]);
+    wp_send_json_success(['deleted_xp' => $xp_to_deduct]);
 });
 
 // Zapisz konfigurację gamifikacji
@@ -5108,6 +5189,17 @@ add_action('admin_head', function() {
                 font-weight: 600;
             }
 
+            /* Cykliczne zadania badge */
+            .cykliczne-badge {
+                display: inline-block;
+                margin-left: 5px;
+                font-size: 12px;
+                opacity: 0.7;
+            }
+            .task-cykliczne {
+                background: linear-gradient(90deg, rgba(102, 126, 234, 0.05), transparent) !important;
+            }
+
             .stale-task-row {
                 background: #f8f9fa;
                 border-left: 3px solid #6c757d;
@@ -6630,25 +6722,25 @@ function zadaniomat_page_main() {
                         ?>
 
                         <!-- Dzisiejszy progres -->
-                        <div class="daily-progress-section">
+                        <div class="daily-progress-section" id="daily-progress-section">
                             <h4>📊 Dziś: <?php echo date('d.m'); ?></h4>
 
                             <!-- Progres celów -->
                             <div class="daily-progress-label">🎯 Cele:</div>
                             <div class="daily-progress-bar-container">
-                                <div class="daily-progress-bar" style="width: <?php echo $procent_dnia; ?>%"></div>
-                                <span class="daily-progress-text"><?php echo number_format($faktyczny_cele_h, 1); ?>h / <?php echo number_format($total_planowane, 1); ?>h (<?php echo $procent_dnia; ?>%)</span>
+                                <div class="daily-progress-bar" id="daily-progress-bar" style="width: <?php echo $procent_dnia; ?>%"></div>
+                                <span class="daily-progress-text" id="daily-progress-text"><?php echo number_format($faktyczny_cele_h, 1); ?>h / <?php echo number_format($total_planowane, 1); ?>h (<?php echo $procent_dnia; ?>%)</span>
                             </div>
 
                             <!-- Czas na inne zadania -->
                             <div class="daily-other-stats">
-                                <span>📁 Inne: <?php echo number_format($faktyczny_inne_h, 1); ?>h</span>
-                                <span>⏱️ Razem: <?php echo number_format($faktyczny_total_h, 1); ?>h</span>
+                                <span>📁 Inne: <span id="daily-inne-hours"><?php echo number_format($faktyczny_inne_h, 1); ?></span>h</span>
+                                <span>⏱️ Razem: <span id="daily-razem-hours"><?php echo number_format($faktyczny_total_h, 1); ?></span>h</span>
                             </div>
 
                             <div class="daily-stats-mini">
-                                <span>📋 <?php echo $dzis_stats_total->liczba_zadan ?: 0; ?> zadań</span>
-                                <span>✅ <?php echo $dzis_stats_total->ukonczone ?: 0; ?> ukończ.</span>
+                                <span>📋 <span id="daily-tasks-count"><?php echo $dzis_stats_total->liczba_zadan ?: 0; ?></span> zadań</span>
+                                <span>✅ <span id="daily-tasks-done"><?php echo $dzis_stats_total->ukonczone ?: 0; ?></span> ukończ.</span>
                             </div>
                         </div>
 
@@ -7644,8 +7736,31 @@ function zadaniomat_page_main() {
             $('#hours-worked').text(hoursWorked + 'h ' + minsWorked + 'min');
             $('#hours-planned').text(hoursPlanned + 'h ' + minsPlanned + 'min');
             $('#tasks-completed-count').text(completed + '/' + total);
+
+            // Odśwież też panel dzienny po lewej
+            refreshDailyProgressPanel();
         };
-        
+
+        // Odśwież panel progresu dziennego (lewy panel)
+        window.refreshDailyProgressPanel = function() {
+            var today = '<?php echo date('Y-m-d'); ?>';
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_daily_stats',
+                nonce: nonce,
+                date: today
+            }, function(response) {
+                if (response.success) {
+                    var d = response.data;
+                    $('#daily-progress-bar').css('width', d.procent + '%');
+                    $('#daily-progress-text').text(d.cele_hours + 'h / ' + d.planned_hours + 'h (' + d.procent + '%)');
+                    $('#daily-inne-hours').text(d.inne_hours);
+                    $('#daily-razem-hours').text(d.razem_hours);
+                    $('#daily-tasks-count').text(d.tasks_count);
+                    $('#daily-tasks-done').text(d.tasks_done);
+                }
+            });
+        };
+
         window.renderTaskRow = function(t, day) {
             var taskStatus = t.status || 'nowe';
             var statusClass = 'status-' + taskStatus;
@@ -8594,25 +8709,25 @@ function zadaniomat_page_main() {
         window.editTask = function(id, btn) {
             var $row = $(btn).closest('tr');
             var $daySection = $row.closest('.day-section');
-            
+
             // Get task data from row
             var kategoria = $row.find('.kategoria-badge').attr('class').replace('kategoria-badge ', '').trim();
             var zadanie = $row.find('strong').text();
             var cel = $row.find('td:eq(2)').text();
             var plan = $row.find('td:eq(3)').text();
             var dzien = $daySection.data('day');
-            
+
             $('#edit-task-id').val(id);
             $('#task-date').val(dzien);
             $('#task-kategoria').val(kategoria);
             $('#task-nazwa').val(zadanie);
             $('#task-cel').val(cel);
             $('#task-czas').val(plan);
-            
+
             $('#form-title').text('✏️ Edytuj zadanie');
             $('#submit-btn').text('💾 Zapisz zmiany');
             $('#cancel-edit-btn').show();
-            
+
             $('html, body').animate({ scrollTop: $('.task-form').offset().top - 50 }, 300);
         };
         
@@ -10364,11 +10479,6 @@ function zadaniomat_page_settings() {
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Minuty po starcie dnia</label>
-                        <input type="number" id="stale-minuty-po-starcie" min="0" max="480" placeholder="np. 30" style="width: 80px;">
-                        <span style="font-size:11px;color:#888;">(0 = domyślnie godzina start)</span>
-                    </div>
-                    <div class="form-group">
                         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                             <input type="checkbox" id="stale-dodaj-do-listy" style="width:auto;">
                             <span>Dodaj też do listy zadań</span>
@@ -10932,9 +11042,6 @@ function zadaniomat_page_settings() {
 
                     // Dodatkowe info
                     var extraInfo = [];
-                    if (zadanie.minuty_po_starcie) {
-                        extraInfo.push('⏰ +' + zadanie.minuty_po_starcie + ' min po starcie');
-                    }
                     if (zadanie.dodaj_do_listy == 1) {
                         extraInfo.push('📋 Lista');
                     }
@@ -10990,7 +11097,6 @@ function zadaniomat_page_settings() {
             $('#stale-dzien-miesiaca').val(zadanie.dzien_miesiaca || '');
             $('#stale-dni-przed-koncem').val(zadanie.dni_przed_koncem_roku || '');
             $('#stale-dni-przed-okresu').val(zadanie.dni_przed_koncem_okresu || '');
-            $('#stale-minuty-po-starcie').val(zadanie.minuty_po_starcie || '');
             $('#stale-dodaj-do-listy').prop('checked', zadanie.dodaj_do_listy == 1);
 
             // Zaznacz dni tygodnia
@@ -11033,7 +11139,6 @@ function zadaniomat_page_settings() {
             $('#stale-dzien-miesiaca').val('');
             $('#stale-dni-przed-koncem').val('');
             $('#stale-dni-przed-okresu').val('');
-            $('#stale-minuty-po-starcie').val('');
             $('#stale-dodaj-do-listy').prop('checked', false);
 
             // Przywróć tytuł i przyciski
@@ -11061,20 +11166,34 @@ function zadaniomat_page_settings() {
                 dniTygodnia = selected.join(',');
             }
 
+            // Oblicz godzinę końca z godziny startu + czas trwania
+            var godzinaStart = $('#stale-godzina-start').val();
+            var czasTrwania = parseInt($('#stale-czas').val()) || 0;
+            var godzinaKoniec = $('#stale-godzina-koniec').val();
+
+            // Auto-oblicz godzinę końca jeśli mamy start i czas
+            if (godzinaStart && czasTrwania > 0 && !godzinaKoniec) {
+                var startParts = godzinaStart.split(':');
+                var startMinutes = parseInt(startParts[0]) * 60 + parseInt(startParts[1]);
+                var endMinutes = startMinutes + czasTrwania;
+                var endHours = Math.floor(endMinutes / 60) % 24;
+                var endMins = endMinutes % 60;
+                godzinaKoniec = String(endHours).padStart(2, '0') + ':' + String(endMins).padStart(2, '0');
+            }
+
             var data = {
                 nonce: nonce,
                 nazwa: nazwa,
                 kategoria: $('#stale-kategoria').val(),
-                planowany_czas: $('#stale-czas').val() || 0,
+                planowany_czas: czasTrwania,
                 typ_powtarzania: typ,
                 dni_tygodnia: dniTygodnia,
                 dzien_miesiaca: $('#stale-dzien-miesiaca').val(),
-                dni_przed_koncem_roku: $('#stale-dni-przed-koncem').val(),
+                dni_przed_koncem_roku: $('#stale-dni-przed-koniec').val(),
                 dni_przed_koncem_okresu: $('#stale-dni-przed-okresu').val(),
-                minuty_po_starcie: $('#stale-minuty-po-starcie').val(),
                 dodaj_do_listy: $('#stale-dodaj-do-listy').is(':checked') ? 1 : 0,
-                godzina_start: $('#stale-godzina-start').val(),
-                godzina_koniec: $('#stale-godzina-koniec').val()
+                godzina_start: godzinaStart,
+                godzina_koniec: godzinaKoniec
             };
 
             if (editId) {
@@ -11208,6 +11327,7 @@ function zadaniomat_page_gamification() {
                             <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Data</th>
                             <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Typ</th>
                             <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Opis</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Warunek</th>
                             <th style="padding: 10px; border: 1px solid #ddd; text-align: right;">XP Bazowe</th>
                             <th style="padding: 10px; border: 1px solid #ddd; text-align: center;">Mnożnik</th>
                             <th style="padding: 10px; border: 1px solid #ddd; text-align: right;">XP Końcowe</th>
@@ -11215,7 +11335,7 @@ function zadaniomat_page_gamification() {
                         </tr>
                     </thead>
                     <tbody id="xp-history-body">
-                        <tr><td colspan="7" style="text-align: center; padding: 20px;">Ładowanie...</td></tr>
+                        <tr><td colspan="8" style="text-align: center; padding: 20px;">Ładowanie...</td></tr>
                     </tbody>
                 </table>
 
@@ -11814,7 +11934,7 @@ function zadaniomat_page_gamification() {
             var filter = $('#xp-history-filter').val();
             var date = $('#xp-history-date').val();
 
-            $('#xp-history-body').html('<tr><td colspan="7" style="text-align:center;padding:20px;">Ładowanie...</td></tr>');
+            $('#xp-history-body').html('<tr><td colspan="8" style="text-align:center;padding:20px;">Ładowanie...</td></tr>');
 
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_xp_history_advanced',
@@ -11826,14 +11946,18 @@ function zadaniomat_page_gamification() {
             }, function(response) {
                 if (response.success) {
                     renderXPHistory(response.data);
+                } else {
+                    $('#xp-history-body').html('<tr><td colspan="8" style="text-align:center;padding:20px;color:#dc3545;">Błąd: ' + (response.data || 'Nieznany błąd') + '</td></tr>');
                 }
+            }).fail(function(xhr, status, error) {
+                $('#xp-history-body').html('<tr><td colspan="8" style="text-align:center;padding:20px;color:#dc3545;">Błąd połączenia: ' + error + '</td></tr>');
             });
         };
 
         function renderXPHistory(data) {
             var html = '';
             if (data.entries.length === 0) {
-                html = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#666;">Brak wpisów do wyświetlenia</td></tr>';
+                html = '<tr><td colspan="8" style="text-align:center;padding:20px;color:#666;">Brak wpisów do wyświetlenia</td></tr>';
             } else {
                 data.entries.forEach(function(entry) {
                     var dateStr = new Date(entry.earned_at).toLocaleString('pl-PL');
@@ -11841,6 +11965,7 @@ function zadaniomat_page_gamification() {
                     html += '<td style="padding:8px;border:1px solid #ddd;">' + dateStr + '</td>';
                     html += '<td style="padding:8px;border:1px solid #ddd;"><span class="xp-type-badge type-' + entry.xp_type + '">' + escapeHtml(entry.xp_type) + '</span></td>';
                     html += '<td style="padding:8px;border:1px solid #ddd;">' + escapeHtml(entry.description || '-') + '</td>';
+                    html += '<td style="padding:8px;border:1px solid #ddd;font-size:11px;color:#666;">' + escapeHtml(entry.condition_text || '-') + '</td>';
                     html += '<td style="padding:8px;border:1px solid #ddd;text-align:right;">' + entry.xp_amount + '</td>';
                     html += '<td style="padding:8px;border:1px solid #ddd;text-align:center;">' + (parseFloat(entry.multiplier) || 1).toFixed(1) + 'x</td>';
                     html += '<td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:bold;color:#28a745;">+' + entry.xp_final + '</td>';
