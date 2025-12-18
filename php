@@ -5,6 +5,9 @@
  * Author: Ty
  */
 
+// Ustaw strefę czasową na Warszawę
+date_default_timezone_set('Europe/Warsaw');
+
 // =============================================
 // KATEGORIE - DOMYŚLNE WARTOŚCI
 // =============================================
@@ -230,6 +233,20 @@ function zadaniomat_create_tables() {
         UNIQUE KEY user_combo_date (user_id, combo_date)
     ) $charset_collate;";
 
+    // Abstrakcyjne cele użytkownika
+    $table_abstract_goals = $wpdb->prefix . 'zadaniomat_abstract_goals';
+    $sql14 = "CREATE TABLE IF NOT EXISTS $table_abstract_goals (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL DEFAULT 1,
+        nazwa VARCHAR(255) NOT NULL,
+        opis TEXT,
+        xp_reward INT NOT NULL DEFAULT 100,
+        completed TINYINT(1) NOT NULL DEFAULT 0,
+        completed_at TIMESTAMP NULL DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        aktywne TINYINT(1) NOT NULL DEFAULT 1
+    ) $charset_collate;";
+
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql1);
     dbDelta($sql2);
@@ -244,6 +261,7 @@ function zadaniomat_create_tables() {
     dbDelta($sql11);
     dbDelta($sql12);
     dbDelta($sql13);
+    dbDelta($sql14);
 }
 
 add_action('admin_init', function() {
@@ -1571,8 +1589,7 @@ function zadaniomat_process_goal_completion($cel_id, $user_id = 1) {
     ));
 
     if ($okres_cele && $okres_cele->total > 0 && $okres_cele->total == $okres_cele->completed) {
-        // Wszystkie cele okresu osiągnięte!
-        zadaniomat_add_xp($user_id, 300, 'all_goals_period', "Wszystkie cele okresu osiągnięte!");
+        // Wszystkie cele okresu osiągnięte! Przyznaj tylko odznakę (która sama doda XP)
         zadaniomat_award_achievement($user_id, 'perfect_period');
         $result['all_goals_completed'] = true;
     }
@@ -1889,6 +1906,18 @@ add_action('admin_menu', function() {
 // ALL AJAX HANDLERS
 // =============================================
 
+// Helper to ensure zadania table has all columns
+function zadaniomat_ensure_zadania_columns() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_zadania';
+
+    // Check for jest_cykliczne column
+    $column_check = $wpdb->get_results("SHOW COLUMNS FROM $table LIKE 'jest_cykliczne'");
+    if (empty($column_check)) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN jest_cykliczne TINYINT(1) DEFAULT 0");
+    }
+}
+
 // Dodaj zadanie
 add_action('wp_ajax_zadaniomat_add_task', function() {
     global $wpdb;
@@ -1898,7 +1927,10 @@ add_action('wp_ajax_zadaniomat_add_task', function() {
     $task_date = sanitize_text_field($_POST['dzien']);
     $auto_okres = zadaniomat_get_current_okres($task_date);
 
-    $wpdb->insert($table, [
+    // Ensure all columns exist
+    zadaniomat_ensure_zadania_columns();
+
+    $result = $wpdb->insert($table, [
         'okres_id' => $auto_okres ? $auto_okres->id : null,
         'kategoria' => sanitize_text_field($_POST['kategoria']),
         'dzien' => $task_date,
@@ -1907,10 +1939,20 @@ add_action('wp_ajax_zadaniomat_add_task', function() {
         'planowany_czas' => intval($_POST['planowany_czas']),
         'jest_cykliczne' => !empty($_POST['jest_cykliczne']) ? 1 : 0
     ]);
-    
+
+    if ($result === false) {
+        wp_send_json_error('Błąd bazy danych: ' . $wpdb->last_error);
+        return;
+    }
+
     $task_id = $wpdb->insert_id;
     $task = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $task_id));
-    
+
+    if (!$task) {
+        wp_send_json_error('Nie udało się pobrać zadania po dodaniu');
+        return;
+    }
+
     wp_send_json_success([
         'task' => $task,
         'kategoria_label' => zadaniomat_get_kategoria_label($task->kategoria)
@@ -3049,6 +3091,170 @@ add_action('wp_ajax_zadaniomat_get_achievements', function() {
         'earned' => $result,
         'locked' => $locked
     ]);
+});
+
+// =============================================
+// ABSTRACT GOALS AJAX HANDLERS
+// =============================================
+
+// Helper function to ensure abstract goals table exists
+function zadaniomat_ensure_abstract_goals_table() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_abstract_goals';
+
+    // Check if table exists
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table'") != $table) {
+        $charset_collate = $wpdb->get_charset_collate();
+        $sql = "CREATE TABLE IF NOT EXISTS $table (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL DEFAULT 1,
+            nazwa VARCHAR(255) NOT NULL,
+            opis TEXT,
+            xp_reward INT NOT NULL DEFAULT 100,
+            completed TINYINT(1) NOT NULL DEFAULT 0,
+            completed_at TIMESTAMP NULL DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            aktywne TINYINT(1) NOT NULL DEFAULT 1
+        ) $charset_collate;";
+
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+    }
+
+    return $table;
+}
+
+// Pobierz listę abstrakcyjnych celów
+add_action('wp_ajax_zadaniomat_get_abstract_goals', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = zadaniomat_ensure_abstract_goals_table();
+    $include_completed = !empty($_POST['include_completed']);
+
+    if ($include_completed) {
+        // For settings page - show all goals
+        $goals = $wpdb->get_results(
+            "SELECT * FROM $table WHERE user_id = 1 AND aktywne = 1 ORDER BY completed ASC, created_at DESC"
+        );
+    } else {
+        // For dashboard - show only active (not completed) goals
+        $goals = $wpdb->get_results(
+            "SELECT * FROM $table WHERE user_id = 1 AND aktywne = 1 AND completed = 0 ORDER BY created_at DESC"
+        );
+    }
+
+    wp_send_json_success(['goals' => $goals ?: []]);
+});
+
+// Dodaj abstrakcyjny cel
+add_action('wp_ajax_zadaniomat_add_abstract_goal', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = zadaniomat_ensure_abstract_goals_table();
+    $nazwa = sanitize_text_field($_POST['nazwa'] ?? '');
+    $opis = sanitize_textarea_field($_POST['opis'] ?? '');
+    $xp_reward = intval($_POST['xp_reward'] ?? 100);
+
+    if (empty($nazwa)) {
+        wp_send_json_error('Podaj nazwę celu');
+        return;
+    }
+
+    $result = $wpdb->insert($table, [
+        'user_id' => 1,
+        'nazwa' => $nazwa,
+        'opis' => $opis,
+        'xp_reward' => $xp_reward
+    ]);
+
+    if ($result === false) {
+        wp_send_json_error('Błąd bazy danych: ' . $wpdb->last_error);
+        return;
+    }
+
+    wp_send_json_success(['id' => $wpdb->insert_id]);
+});
+
+// Ukończ abstrakcyjny cel
+add_action('wp_ajax_zadaniomat_complete_abstract_goal', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = zadaniomat_ensure_abstract_goals_table();
+    $id = intval($_POST['id'] ?? 0);
+
+    if (!$id) {
+        wp_send_json_error('Brak ID celu');
+        return;
+    }
+
+    $goal = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
+
+    if (!$goal || $goal->completed) {
+        wp_send_json_error('Cel nie istnieje lub już ukończony');
+        return;
+    }
+
+    // Oznacz jako ukończony
+    $wpdb->update($table, [
+        'completed' => 1,
+        'completed_at' => current_time('mysql')
+    ], ['id' => $id]);
+
+    // Dodaj XP
+    $xp_result = zadaniomat_add_xp(1, $goal->xp_reward, 'abstract_goal', "Cel abstrakcyjny: " . $goal->nazwa);
+
+    wp_send_json_success([
+        'xp_earned' => $xp_result['xp_added'],
+        'total_xp' => $xp_result['total_xp'],
+        'level_up' => $xp_result['level_up'],
+        'level_info' => $xp_result['level_info']
+    ]);
+});
+
+// Usuń abstrakcyjny cel
+add_action('wp_ajax_zadaniomat_delete_abstract_goal', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = zadaniomat_ensure_abstract_goals_table();
+    $id = intval($_POST['id'] ?? 0);
+
+    if (!$id) {
+        wp_send_json_error('Brak ID celu');
+        return;
+    }
+
+    $wpdb->delete($table, ['id' => $id]);
+
+    wp_send_json_success();
+});
+
+// Edytuj abstrakcyjny cel
+add_action('wp_ajax_zadaniomat_edit_abstract_goal', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = zadaniomat_ensure_abstract_goals_table();
+    $id = intval($_POST['id'] ?? 0);
+    $nazwa = sanitize_text_field($_POST['nazwa'] ?? '');
+    $opis = sanitize_textarea_field($_POST['opis'] ?? '');
+    $xp_reward = intval($_POST['xp_reward'] ?? 100);
+
+    if (!$id || empty($nazwa)) {
+        wp_send_json_error('Brak wymaganych danych');
+        return;
+    }
+
+    $wpdb->update($table, [
+        'nazwa' => $nazwa,
+        'opis' => $opis,
+        'xp_reward' => $xp_reward
+    ], ['id' => $id]);
+
+    wp_send_json_success();
 });
 
 // =============================================
@@ -5763,6 +5969,84 @@ add_action('admin_head', function() {
                 font-weight: 600;
                 margin-left: auto;
             }
+            /* Abstrakcyjne cele */
+            .abstract-goals-section {
+                margin-top: 15px;
+                padding-top: 15px;
+                border-top: 1px solid rgba(255,255,255,0.1);
+            }
+            .btn-toggle-abstract {
+                background: rgba(255,255,255,0.1);
+                border: none;
+                color: #fff;
+                padding: 4px 10px;
+                border-radius: 4px;
+                font-size: 11px;
+                cursor: pointer;
+                margin-left: 10px;
+            }
+            .btn-toggle-abstract:hover {
+                background: rgba(255,255,255,0.2);
+            }
+            .abstract-goals-list {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .abstract-goal-item {
+                background: rgba(255,255,255,0.05);
+                border-radius: 8px;
+                padding: 12px 16px;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                transition: all 0.2s;
+            }
+            .abstract-goal-item:hover {
+                background: rgba(255,255,255,0.1);
+            }
+            .abstract-goal-item.completed {
+                background: rgba(72, 187, 120, 0.2);
+                opacity: 0.7;
+            }
+            .abstract-goal-item .goal-check {
+                width: 24px;
+                height: 24px;
+                border: 2px solid #667eea;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            .abstract-goal-item .goal-check:hover {
+                background: rgba(102, 126, 234, 0.3);
+            }
+            .abstract-goal-item.completed .goal-check {
+                background: #48bb78;
+                border-color: #48bb78;
+            }
+            .abstract-goal-item .goal-info {
+                flex: 1;
+            }
+            .abstract-goal-item .goal-name {
+                font-weight: 600;
+                color: #fff;
+            }
+            .abstract-goal-item .goal-desc {
+                font-size: 12px;
+                color: #a0aec0;
+                margin-top: 2px;
+            }
+            .abstract-goal-item .goal-xp {
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                color: #fff;
+                padding: 4px 10px;
+                border-radius: 20px;
+                font-weight: 600;
+                font-size: 12px;
+            }
             .challenge-item.completed .xp-reward {
                 text-decoration: line-through;
                 opacity: 0.5;
@@ -6046,6 +6330,12 @@ function zadaniomat_page_main() {
                 <div class="challenges-title">🎲 Wyzwania dnia</div>
                 <div class="challenges-list" id="gam-challenges">
                     <!-- Challenges will be loaded here -->
+                </div>
+            </div>
+            <div class="abstract-goals-section" id="abstract-goals-section" style="display:none;">
+                <div class="challenges-title">🎯 Cele abstrakcyjne <button class="btn-toggle-abstract" onclick="toggleAbstractGoals()">Pokaż/Ukryj</button></div>
+                <div class="abstract-goals-list" id="abstract-goals-list">
+                    <!-- Abstract goals will be loaded here -->
                 </div>
             </div>
         </div>
@@ -6551,6 +6841,7 @@ function zadaniomat_page_main() {
                     gamificationData = response.data;
                     updateGamificationUI();
                     showNewAchievements();
+                    loadAbstractGoals();
                 }
             });
         }
@@ -6658,6 +6949,70 @@ function zadaniomat_page_main() {
                 }
             });
         });
+
+        // ==================== ABSTRACT GOALS ====================
+        var abstractGoalsVisible = false;
+
+        function loadAbstractGoals() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_abstract_goals',
+                nonce: nonce
+            }, function(response) {
+                if (response.success && response.data.goals.length > 0) {
+                    $('#abstract-goals-section').show();
+                    renderAbstractGoals(response.data.goals);
+                } else {
+                    $('#abstract-goals-section').hide();
+                }
+            });
+        }
+
+        function renderAbstractGoals(goals) {
+            var html = '';
+            goals.forEach(function(g) {
+                var completed = g.completed == 1 ? 'completed' : '';
+                var check = g.completed == 1 ? '✓' : '';
+                var onclick = g.completed == 1 ? '' : 'onclick="completeAbstractGoal(' + g.id + ')"';
+                html += '<div class="abstract-goal-item ' + completed + '" data-id="' + g.id + '">';
+                html += '<div class="goal-check" ' + onclick + '>' + check + '</div>';
+                html += '<div class="goal-info">';
+                html += '<div class="goal-name">' + escapeHtml(g.nazwa) + '</div>';
+                if (g.opis) {
+                    html += '<div class="goal-desc">' + escapeHtml(g.opis) + '</div>';
+                }
+                html += '</div>';
+                html += '<div class="goal-xp">+' + g.xp_reward + ' XP</div>';
+                html += '</div>';
+            });
+            $('#abstract-goals-list').html(html || '<p style="color:#a0aec0;font-size:12px;">Brak celów abstrakcyjnych. Dodaj je w ustawieniach gamifikacji.</p>');
+        }
+
+        window.toggleAbstractGoals = function() {
+            abstractGoalsVisible = !abstractGoalsVisible;
+            $('#abstract-goals-list').slideToggle(200);
+        };
+
+        window.completeAbstractGoal = function(id) {
+            if (!confirm('Czy na pewno chcesz oznaczyć ten cel jako ukończony i odebrać XP?')) return;
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_complete_abstract_goal',
+                nonce: nonce,
+                id: id
+            }, function(response) {
+                if (response.success) {
+                    showToast('🎯 Cel osiągnięty! +' + response.data.xp_earned + ' XP', 'success');
+                    loadAbstractGoals();
+                    loadGamificationData();
+
+                    if (response.data.level_up) {
+                        showLevelUpPopup(response.data.level_info);
+                    }
+                } else {
+                    showToast('Błąd: ' + (response.data || 'Nieznany błąd'), 'error');
+                }
+            });
+        };
 
         function showNewAchievements() {
             if (!gamificationData || !gamificationData.new_achievements.length) return;
@@ -7534,8 +7889,10 @@ function zadaniomat_page_main() {
             var $row = $(btn).closest('tr');
             var day = $row.data('day');
             var kategoria = $row.data('kategoria');
-            var zadanie = $row.find('.slot-zadanie').val().trim();
-            var cel = $row.find('.slot-cel').val().trim();
+            var zadanieVal = $row.find('.slot-zadanie').val();
+            var celVal = $row.find('.slot-cel').val();
+            var zadanie = zadanieVal ? zadanieVal.trim() : '';
+            var cel = celVal ? celVal.trim() : '';
             var czas = $row.find('.slot-czas').val() || 0;
             
             if (!zadanie) {
@@ -7801,6 +8158,11 @@ function zadaniomat_page_main() {
                     if (response.success) {
                         $this.addClass('saved-flash');
                         setTimeout(function() { $this.removeClass('saved-flash'); }, 500);
+
+                        // Odśwież dane jeśli zmieniono czas lub status
+                        if (field === 'faktyczny_czas' || field === 'planowany_czas' || field === 'status') {
+                            loadTasks();
+                        }
 
                         // Gamification - pokaż XP popup jeśli zadanie ukończone
                         if (field === 'status' && value === 'zakonczone' && response.data && response.data.gamification) {
@@ -10815,6 +11177,7 @@ function zadaniomat_page_gamification() {
             <button class="gam-tab" data-tab="multipliers">✖️ Mnożniki</button>
             <button class="gam-tab" data-tab="challenges">🎯 Wyzwania</button>
             <button class="gam-tab" data-tab="achievements">🏆 Osiągnięcia</button>
+            <button class="gam-tab" data-tab="abstract-goals">🎯 Cele abstrakcyjne</button>
             <button class="gam-tab" data-tab="settings">⚙️ Inne ustawienia</button>
         </div>
 
@@ -11182,6 +11545,65 @@ function zadaniomat_page_gamification() {
                     <button class="button button-primary" onclick="saveAchievements()">💾 Zapisz osiągnięcia</button>
                     <button class="button" onclick="resetAchievements()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
                     <span id="achievements-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Abstract Goals Tab -->
+        <div class="gam-tab-content" id="tab-abstract-goals">
+            <div class="zadaniomat-card">
+                <h2>🎯 Cele abstrakcyjne</h2>
+                <p style="color: #666; margin-bottom: 15px;">
+                    Twórz własne cele z niestandardową nagrodą XP. Te cele możesz później oznaczyć jako ukończone w głównym dashboardzie.
+                </p>
+
+                <!-- Form to add new abstract goal -->
+                <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                    <h4 style="margin-top: 0;">➕ Dodaj nowy cel abstrakcyjny</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 2fr 100px 120px; gap: 10px; align-items: end;">
+                        <div>
+                            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px;">Nazwa celu:</label>
+                            <input type="text" id="abstract-goal-name" placeholder="np. Napisać raport" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px;">Opis (opcjonalnie):</label>
+                            <input type="text" id="abstract-goal-desc" placeholder="Dodatkowy opis..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px;">XP:</label>
+                            <input type="number" id="abstract-goal-xp" value="100" min="1" max="1000" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <div>
+                            <button class="button button-primary" onclick="addAbstractGoal()" style="width: 100%; height: 36px;">➕ Dodaj</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- List of abstract goals -->
+                <h4>📋 Twoje cele abstrakcyjne</h4>
+                <table class="abstract-goals-table" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Nazwa</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Opis</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: center; width: 80px;">XP</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: center; width: 100px;">Status</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: center; width: 120px;">Akcje</th>
+                        </tr>
+                    </thead>
+                    <tbody id="abstract-goals-body">
+                        <tr><td colspan="5" style="text-align: center; padding: 20px; color: #888;">Ładowanie...</td></tr>
+                    </tbody>
+                </table>
+
+                <div style="margin-top: 15px; color: #666; font-size: 12px;">
+                    <p><strong>Jak to działa:</strong></p>
+                    <ul style="margin: 5px 0 0 20px;">
+                        <li>Dodaj cel abstrakcyjny z własną nazwą i wartością XP</li>
+                        <li>Cel pojawi się w głównym dashboardzie w sekcji "Cele abstrakcyjne"</li>
+                        <li>Kliknij "Wykonano" w dashboardzie aby odebrać XP</li>
+                        <li>Ukończone cele są oznaczone jako zrealizowane</li>
+                    </ul>
                 </div>
             </div>
         </div>
@@ -11718,6 +12140,137 @@ function zadaniomat_page_gamification() {
             });
         };
 
+        // =============================================
+        // ABSTRACT GOALS MANAGEMENT
+        // =============================================
+
+        window.loadSettingsAbstractGoals = function() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_abstract_goals',
+                nonce: nonce,
+                include_completed: 'true'
+            }, function(response) {
+                if (response.success) {
+                    renderSettingsAbstractGoals(response.data.goals || []);
+                } else {
+                    console.error('Error loading abstract goals:', response);
+                    $('#abstract-goals-body').html('<tr><td colspan="5" style="text-align:center;padding:20px;color:#dc3545;">Błąd ładowania celów: ' + (response.data || 'Nieznany błąd') + '</td></tr>');
+                }
+            }).fail(function(xhr, status, error) {
+                console.error('AJAX failed:', status, error);
+                $('#abstract-goals-body').html('<tr><td colspan="5" style="text-align:center;padding:20px;color:#dc3545;">Błąd połączenia: ' + error + '</td></tr>');
+            });
+        };
+
+        function renderSettingsAbstractGoals(goals) {
+            var html = '';
+            if (goals.length === 0) {
+                html = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: #888;">Brak celów abstrakcyjnych. Dodaj pierwszy cel powyżej.</td></tr>';
+            } else {
+                goals.forEach(function(g) {
+                    var isCompleted = g.completed == 1;
+                    var statusBadge = isCompleted
+                        ? '<span style="background: #d4edda; color: #155724; padding: 3px 8px; border-radius: 4px; font-size: 11px;">✓ Ukończony</span>'
+                        : '<span style="background: #fff3cd; color: #856404; padding: 3px 8px; border-radius: 4px; font-size: 11px;">Aktywny</span>';
+
+                    html += '<tr data-goal-id="' + g.id + '"' + (isCompleted ? ' style="opacity: 0.6;"' : '') + '>';
+                    html += '<td style="padding: 10px; border: 1px solid #ddd;">';
+                    html += '<input type="text" class="goal-edit-name" value="' + escapeHtml(g.nazwa) + '" style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 4px;"' + (isCompleted ? ' disabled' : '') + '>';
+                    html += '</td>';
+                    html += '<td style="padding: 10px; border: 1px solid #ddd;">';
+                    html += '<input type="text" class="goal-edit-desc" value="' + escapeHtml(g.opis || '') + '" placeholder="-" style="width: 100%; padding: 5px; border: 1px solid #ddd; border-radius: 4px;"' + (isCompleted ? ' disabled' : '') + '>';
+                    html += '</td>';
+                    html += '<td style="padding: 10px; border: 1px solid #ddd; text-align: center;">';
+                    html += '<input type="number" class="goal-edit-xp" value="' + g.xp_reward + '" min="1" max="1000" style="width: 60px; padding: 5px; border: 1px solid #ddd; border-radius: 4px; text-align: center;"' + (isCompleted ? ' disabled' : '') + '>';
+                    html += '</td>';
+                    html += '<td style="padding: 10px; border: 1px solid #ddd; text-align: center;">' + statusBadge + '</td>';
+                    html += '<td style="padding: 10px; border: 1px solid #ddd; text-align: center;">';
+                    if (!isCompleted) {
+                        html += '<button class="button" onclick="saveAbstractGoalEdit(' + g.id + ', this)" style="margin-right: 5px;" title="Zapisz zmiany">💾</button>';
+                    }
+                    html += '<button class="button" onclick="deleteAbstractGoalFromSettings(' + g.id + ')" style="color: #dc3545;" title="Usuń cel">🗑️</button>';
+                    html += '</td>';
+                    html += '</tr>';
+                });
+            }
+            $('#abstract-goals-body').html(html);
+        }
+
+        window.addAbstractGoal = function() {
+            var nazwa = $('#abstract-goal-name').val().trim();
+            var opis = $('#abstract-goal-desc').val().trim();
+            var xp = parseInt($('#abstract-goal-xp').val()) || 100;
+
+            if (!nazwa) {
+                alert('Podaj nazwę celu!');
+                $('#abstract-goal-name').focus();
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_add_abstract_goal',
+                nonce: nonce,
+                nazwa: nazwa,
+                opis: opis,
+                xp_reward: xp
+            }, function(response) {
+                if (response.success) {
+                    showToast('Cel abstrakcyjny dodany!', 'success');
+                    $('#abstract-goal-name').val('');
+                    $('#abstract-goal-desc').val('');
+                    $('#abstract-goal-xp').val('100');
+                    loadSettingsAbstractGoals();
+                } else {
+                    alert('Błąd: ' + (response.data || 'Nieznany błąd'));
+                }
+            });
+        };
+
+        window.saveAbstractGoalEdit = function(id, btn) {
+            var $row = $(btn).closest('tr');
+            var nazwa = $row.find('.goal-edit-name').val().trim();
+            var opis = $row.find('.goal-edit-desc').val().trim();
+            var xp = parseInt($row.find('.goal-edit-xp').val()) || 100;
+
+            if (!nazwa) {
+                alert('Podaj nazwę celu!');
+                return;
+            }
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_edit_abstract_goal',
+                nonce: nonce,
+                id: id,
+                nazwa: nazwa,
+                opis: opis,
+                xp_reward: xp
+            }, function(response) {
+                if (response.success) {
+                    showToast('Cel zaktualizowany!', 'success');
+                    loadSettingsAbstractGoals();
+                } else {
+                    alert('Błąd: ' + (response.data || 'Nieznany błąd'));
+                }
+            });
+        };
+
+        window.deleteAbstractGoalFromSettings = function(id) {
+            if (!confirm('Czy na pewno chcesz usunąć ten cel abstrakcyjny?')) return;
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_delete_abstract_goal',
+                nonce: nonce,
+                id: id
+            }, function(response) {
+                if (response.success) {
+                    showToast('Cel usunięty!', 'success');
+                    loadSettingsAbstractGoals();
+                } else {
+                    alert('Błąd: ' + (response.data || 'Nieznany błąd'));
+                }
+            });
+        };
+
         // Search achievements
         $('#achievements-search').on('input', function() {
             var query = $(this).val().toLowerCase();
@@ -11747,6 +12300,7 @@ function zadaniomat_page_gamification() {
 
         // Initial load
         loadXPHistory();
+        loadSettingsAbstractGoals();
     });
     </script>
     <?php
