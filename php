@@ -10454,11 +10454,6 @@ function zadaniomat_page_settings() {
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>Minuty po starcie dnia</label>
-                        <input type="number" id="stale-minuty-po-starcie" min="0" max="480" placeholder="np. 30" style="width: 80px;">
-                        <span style="font-size:11px;color:#888;">(0 = domyślnie godzina start)</span>
-                    </div>
-                    <div class="form-group">
                         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                             <input type="checkbox" id="stale-dodaj-do-listy" style="width:auto;">
                             <span>Dodaj też do listy zadań</span>
@@ -11022,9 +11017,6 @@ function zadaniomat_page_settings() {
 
                     // Dodatkowe info
                     var extraInfo = [];
-                    if (zadanie.minuty_po_starcie) {
-                        extraInfo.push('⏰ +' + zadanie.minuty_po_starcie + ' min po starcie');
-                    }
                     if (zadanie.dodaj_do_listy == 1) {
                         extraInfo.push('📋 Lista');
                     }
@@ -11080,7 +11072,6 @@ function zadaniomat_page_settings() {
             $('#stale-dzien-miesiaca').val(zadanie.dzien_miesiaca || '');
             $('#stale-dni-przed-koncem').val(zadanie.dni_przed_koncem_roku || '');
             $('#stale-dni-przed-okresu').val(zadanie.dni_przed_koncem_okresu || '');
-            $('#stale-minuty-po-starcie').val(zadanie.minuty_po_starcie || '');
             $('#stale-dodaj-do-listy').prop('checked', zadanie.dodaj_do_listy == 1);
 
             // Zaznacz dni tygodnia
@@ -11123,7 +11114,6 @@ function zadaniomat_page_settings() {
             $('#stale-dzien-miesiaca').val('');
             $('#stale-dni-przed-koncem').val('');
             $('#stale-dni-przed-okresu').val('');
-            $('#stale-minuty-po-starcie').val('');
             $('#stale-dodaj-do-listy').prop('checked', false);
 
             // Przywróć tytuł i przyciski
@@ -11151,20 +11141,34 @@ function zadaniomat_page_settings() {
                 dniTygodnia = selected.join(',');
             }
 
+            // Oblicz godzinę końca z godziny startu + czas trwania
+            var godzinaStart = $('#stale-godzina-start').val();
+            var czasTrwania = parseInt($('#stale-czas').val()) || 0;
+            var godzinaKoniec = $('#stale-godzina-koniec').val();
+
+            // Auto-oblicz godzinę końca jeśli mamy start i czas
+            if (godzinaStart && czasTrwania > 0 && !godzinaKoniec) {
+                var startParts = godzinaStart.split(':');
+                var startMinutes = parseInt(startParts[0]) * 60 + parseInt(startParts[1]);
+                var endMinutes = startMinutes + czasTrwania;
+                var endHours = Math.floor(endMinutes / 60) % 24;
+                var endMins = endMinutes % 60;
+                godzinaKoniec = String(endHours).padStart(2, '0') + ':' + String(endMins).padStart(2, '0');
+            }
+
             var data = {
                 nonce: nonce,
                 nazwa: nazwa,
                 kategoria: $('#stale-kategoria').val(),
-                planowany_czas: $('#stale-czas').val() || 0,
+                planowany_czas: czasTrwania,
                 typ_powtarzania: typ,
                 dni_tygodnia: dniTygodnia,
                 dzien_miesiaca: $('#stale-dzien-miesiaca').val(),
-                dni_przed_koncem_roku: $('#stale-dni-przed-koncem').val(),
+                dni_przed_koncem_roku: $('#stale-dni-przed-koniec').val(),
                 dni_przed_koncem_okresu: $('#stale-dni-przed-okresu').val(),
-                minuty_po_starcie: $('#stale-minuty-po-starcie').val(),
                 dodaj_do_listy: $('#stale-dodaj-do-listy').is(':checked') ? 1 : 0,
-                godzina_start: $('#stale-godzina-start').val(),
-                godzina_koniec: $('#stale-godzina-koniec').val()
+                godzina_start: godzinaStart,
+                godzina_koniec: godzinaKoniec
             };
 
             if (editId) {
