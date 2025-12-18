@@ -374,125 +374,308 @@ function zadaniomat_get_kategoria_label($key) {
 }
 
 // =============================================
-// GAMIFICATION SYSTEM
+// GAMIFICATION SYSTEM - CONFIGURABLE
 // =============================================
 
-// Definicje poziomów
-define('ZADANIOMAT_LEVEL_THRESHOLDS', [
-    1 => 0,
-    2 => 150,
-    3 => 400,
-    4 => 750,
-    5 => 1200,
-    6 => 1800,
-    7 => 2600,
-    8 => 3600,
-    9 => 5000,
-    10 => 7000
-]);
+// Domyślne ustawienia gamifikacji
+function zadaniomat_get_default_gam_config() {
+    return [
+        // Poziomy
+        'levels' => [
+            1 => ['xp' => 0, 'name' => 'Świeżak', 'icon' => '🌱'],
+            2 => ['xp' => 150, 'name' => 'Planista', 'icon' => '📝'],
+            3 => ['xp' => 400, 'name' => 'Celownik', 'icon' => '🎯'],
+            4 => ['xp' => 750, 'name' => 'Wykonawca', 'icon' => '⚡'],
+            5 => ['xp' => 1200, 'name' => 'Rzemieślnik', 'icon' => '🔧'],
+            6 => ['xp' => 1800, 'name' => 'Profesjonalista', 'icon' => '💼'],
+            7 => ['xp' => 2600, 'name' => 'Ekspert', 'icon' => '🏆'],
+            8 => ['xp' => 3600, 'name' => 'Mistrz', 'icon' => '🎖️'],
+            9 => ['xp' => 5000, 'name' => 'Guru', 'icon' => '👑'],
+            10 => ['xp' => 7000, 'name' => 'Legenda', 'icon' => '🌟'],
+        ],
+        // XP za akcje
+        'xp_values' => [
+            'task_complete' => 10,
+            'cyclic_task_complete' => 15,
+            'goal_category_bonus' => 2,
+            'goal_achieved_base' => 100,
+            'goal_chain_increment' => 20,
+            'all_goals_period' => 300,
+            'all_tasks_day' => 30,
+            'early_start_bonus' => 20,
+            'early_planning_bonus' => 15,
+            'category_hour' => 5,
+            'coverage_3_categories' => 15,
+            'coverage_4_categories' => 30,
+            'coverage_5_categories' => 50,
+            'coverage_6_categories' => 80,
+        ],
+        // Mnożniki streaka
+        'streak_multipliers' => [
+            ['min_days' => 0, 'multiplier' => 1.0],
+            ['min_days' => 3, 'multiplier' => 1.2],
+            ['min_days' => 7, 'multiplier' => 1.4],
+            ['min_days' => 14, 'multiplier' => 1.6],
+            ['min_days' => 30, 'multiplier' => 1.8],
+            ['min_days' => 60, 'multiplier' => 2.0],
+        ],
+        // Mnożniki combo
+        'combo_multipliers' => [
+            ['min_combo' => 0, 'multiplier' => 1.0],
+            ['min_combo' => 2, 'multiplier' => 1.1],
+            ['min_combo' => 3, 'multiplier' => 1.2],
+            ['min_combo' => 4, 'multiplier' => 1.3],
+            ['min_combo' => 5, 'multiplier' => 1.5],
+        ],
+        // Warunki streaka work_days
+        'streak_conditions' => [
+            'min_tasks' => 3,
+            'min_hours' => 4,
+            'or_all_tasks_done' => true,
+        ],
+        // Ustawienia czasowe
+        'time_settings' => [
+            'early_start_before' => '08:00',
+            'early_planning_before' => '10:00',
+            'combo_timeout_hours' => 2,
+            'morning_work_hours' => 3,
+            'morning_work_deadline' => '12:00',
+        ],
+        // Streak milestones
+        'streak_milestones' => [
+            'work_days' => [3 => 25, 7 => 75, 14 => 150, 30 => 300, 60 => 600, 90 => 1000],
+            'early_start' => [7 => 50, 14 => 100, 30 => 250],
+            'early_planning' => [7 => 40, 14 => 80],
+            'full_coverage' => [7 => 100, 14 => 200],
+        ],
+        // Wymagaj potwierdzenia XP
+        'require_xp_confirmation' => false,
+    ];
+}
 
-define('ZADANIOMAT_LEVEL_NAMES', [
-    1 => 'Świeżak',
-    2 => 'Planista',
-    3 => 'Celownik',
-    4 => 'Wykonawca',
-    5 => 'Rzemieślnik',
-    6 => 'Profesjonalista',
-    7 => 'Ekspert',
-    8 => 'Mistrz',
-    9 => 'Guru',
-    10 => 'Legenda'
-]);
+// Pobierz konfigurację gamifikacji
+function zadaniomat_get_gam_config($key = null) {
+    $saved = get_option('zadaniomat_gam_config', []);
+    $defaults = zadaniomat_get_default_gam_config();
+    $config = array_replace_recursive($defaults, $saved);
 
-define('ZADANIOMAT_LEVEL_ICONS', [
-    1 => '🌱',
-    2 => '📝',
-    3 => '🎯',
-    4 => '⚡',
-    5 => '🔧',
-    6 => '💼',
-    7 => '🏆',
-    8 => '🎖️',
-    9 => '👑',
-    10 => '🌟'
-]);
+    if ($key !== null) {
+        return $config[$key] ?? null;
+    }
+    return $config;
+}
 
-// Definicje odznak
-define('ZADANIOMAT_ACHIEVEMENTS', [
-    // Streak - Główny
-    'streak_3' => ['name' => 'Zapałka', 'icon' => '🔥', 'desc' => '3 dni streak', 'xp' => 25],
-    'streak_7' => ['name' => 'Ognisko', 'icon' => '🔥🔥', 'desc' => '7 dni streak', 'xp' => 75],
-    'streak_14' => ['name' => 'Pożar', 'icon' => '🔥🔥🔥', 'desc' => '14 dni streak', 'xp' => 150],
-    'streak_30' => ['name' => 'Wulkan', 'icon' => '🌋', 'desc' => '30 dni streak', 'xp' => 300],
-    'streak_60' => ['name' => 'Słońce', 'icon' => '☀️', 'desc' => '60 dni streak', 'xp' => 600],
-    'streak_90' => ['name' => 'Supernowa', 'icon' => '🌟', 'desc' => '90 dni streak', 'xp' => 1000],
-    // Streak - Wczesny start
-    'early_start_7' => ['name' => 'Ranny Ptaszek', 'icon' => '🐦', 'desc' => '7 dni startu przed 8:00', 'xp' => 50],
-    'early_start_14' => ['name' => 'Świt', 'icon' => '🌅', 'desc' => '14 dni startu przed 8:00', 'xp' => 100],
-    'early_start_30' => ['name' => 'Mistrz Poranka', 'icon' => '🌄', 'desc' => '30 dni startu przed 8:00', 'xp' => 250],
-    // Streak - Wczesne planowanie
-    'early_plan_7' => ['name' => 'Planista', 'icon' => '📋', 'desc' => '7 dni planowania przed 10:00', 'xp' => 40],
-    'early_plan_14' => ['name' => 'Strateg', 'icon' => '🗺️', 'desc' => '14 dni planowania przed 10:00', 'xp' => 80],
-    'early_plan_30' => ['name' => 'Architekt Dnia', 'icon' => '🏛️', 'desc' => '30 dni planowania przed 10:00', 'xp' => 200],
-    // Pokrycie kategorii
-    'full_coverage_1' => ['name' => 'Wszechstronny', 'icon' => '🎨', 'desc' => 'Pierwszy dzień z 6 kategoriami', 'xp' => 50],
-    'full_coverage_7' => ['name' => 'Żongler', 'icon' => '🎪', 'desc' => '7 dni pełnego pokrycia', 'xp' => 150],
-    'full_coverage_14' => ['name' => 'Mistrz Równowagi', 'icon' => '⚖️', 'desc' => '14 dni pełnego pokrycia', 'xp' => 300],
-    // Cele
-    'first_goal' => ['name' => 'Snajper', 'icon' => '🎯', 'desc' => 'Pierwszy osiągnięty cel', 'xp' => 25],
-    'goals_10' => ['name' => 'Łucznik', 'icon' => '🏹', 'desc' => '10 osiągniętych celów', 'xp' => 100],
-    'goals_25' => ['name' => 'Strzelec Wyborowy', 'icon' => '🎖️', 'desc' => '25 osiągniętych celów', 'xp' => 250],
-    'goals_50' => ['name' => 'Komandos', 'icon' => '💪', 'desc' => '50 osiągniętych celów', 'xp' => 500],
-    'goal_x2' => ['name' => 'Podwójne Uderzenie', 'icon' => '🎯🎯', 'desc' => 'Dwa cele w jednej kategorii w okresie', 'xp' => 50],
-    'goal_x3' => ['name' => 'Hat-trick', 'icon' => '🎩', 'desc' => 'Trzy cele w jednej kategorii w okresie', 'xp' => 100],
-    'perfect_period' => ['name' => 'Perfekcyjny Okres', 'icon' => '🏆', 'desc' => 'Wszystkie cele okresu osiągnięte', 'xp' => 200],
-    'perfect_year' => ['name' => 'Perfekcyjny Rok', 'icon' => '👑', 'desc' => 'Wszystkie cele roku osiągnięte', 'xp' => 500],
-    // Zadania
-    'tasks_100' => ['name' => 'Pracuś', 'icon' => '📝', 'desc' => '100 ukończonych zadań', 'xp' => 100],
-    'tasks_500' => ['name' => 'Pracoholik', 'icon' => '💼', 'desc' => '500 ukończonych zadań', 'xp' => 300],
-    'tasks_1000' => ['name' => 'Maszyna', 'icon' => '⚙️', 'desc' => '1000 ukończonych zadań', 'xp' => 600],
-    'cyclic_50' => ['name' => 'Nawyk', 'icon' => '🔄', 'desc' => '50 zadań cyklicznych', 'xp' => 75],
-    'cyclic_200' => ['name' => 'Rutyna', 'icon' => '🔁', 'desc' => '200 zadań cyklicznych', 'xp' => 200],
-    // Czas pracy
-    'hours_100' => ['name' => 'Stażysta', 'icon' => '⏰', 'desc' => '100h przepracowanych', 'xp' => 100],
-    'hours_500' => ['name' => 'Weteran', 'icon' => '🎖️', 'desc' => '500h przepracowanych', 'xp' => 300],
-    'hours_1000' => ['name' => 'Legenda', 'icon' => '🏛️', 'desc' => '1000h przepracowanych', 'xp' => 600],
-    // Combo
-    'combo_5' => ['name' => 'Kombinator', 'icon' => '⚡', 'desc' => 'Osiągnij combo x5', 'xp' => 30],
-    'combo_5_10times' => ['name' => 'Mistrz Combo', 'icon' => '💥', 'desc' => 'Osiągnij combo x5 dziesięć razy', 'xp' => 100],
-    // Specjalne
-    'first_day' => ['name' => 'Początek Drogi', 'icon' => '🚀', 'desc' => 'Ukończ pierwszy dzień', 'xp' => 10],
-    'level_5' => ['name' => 'Awans', 'icon' => '⬆️', 'desc' => 'Osiągnij level 5', 'xp' => 50],
-    'level_10' => ['name' => 'Szczyt', 'icon' => '🗻', 'desc' => 'Osiągnij level 10', 'xp' => 200],
-    'prestige_1' => ['name' => 'Odrodzenie', 'icon' => '🔮', 'desc' => 'Pierwszy prestige', 'xp' => 100],
-]);
+// Zapisz konfigurację gamifikacji
+function zadaniomat_save_gam_config($config) {
+    update_option('zadaniomat_gam_config', $config);
+}
 
-// Definicje wyzwań dnia
-define('ZADANIOMAT_DAILY_CHALLENGES', [
-    'complete_5_tasks' => ['desc' => 'Ukończ 5 zadań', 'xp' => 25, 'difficulty' => 'easy'],
-    'complete_8_tasks' => ['desc' => 'Ukończ 8 zadań', 'xp' => 40, 'difficulty' => 'medium'],
-    'work_6_hours' => ['desc' => 'Przepracuj 6 godzin', 'xp' => 35, 'difficulty' => 'medium'],
-    'work_8_hours' => ['desc' => 'Przepracuj 8 godzin', 'xp' => 50, 'difficulty' => 'hard'],
-    '4_categories' => ['desc' => 'Zadania w 4 kategoriach', 'xp' => 30, 'difficulty' => 'easy'],
-    'all_categories' => ['desc' => 'Zadania we wszystkich kategoriach', 'xp' => 60, 'difficulty' => 'hard'],
-    'all_cyclic' => ['desc' => 'Wykonaj wszystkie zadania cykliczne', 'xp' => 35, 'difficulty' => 'medium'],
-    'start_before_8' => ['desc' => 'Zacznij przed 8:00', 'xp' => 25, 'difficulty' => 'medium'],
-    'start_before_9' => ['desc' => 'Zacznij przed 9:00', 'xp' => 15, 'difficulty' => 'easy'],
-    'plan_before_10' => ['desc' => 'Zaplanuj dzień przed 10:00', 'xp' => 20, 'difficulty' => 'easy'],
-    'no_breaks' => ['desc' => 'Bez przerwy > 1h', 'xp' => 30, 'difficulty' => 'hard'],
-    'combo_3' => ['desc' => 'Osiągnij combo x3', 'xp' => 20, 'difficulty' => 'easy'],
-    'combo_5' => ['desc' => 'Osiągnij combo x5', 'xp' => 35, 'difficulty' => 'medium'],
-    'finish_all' => ['desc' => 'Ukończ wszystkie zaplanowane', 'xp' => 40, 'difficulty' => 'medium'],
-    'category_focus' => ['desc' => '3h w jednej kategorii', 'xp' => 25, 'difficulty' => 'medium'],
-]);
+// Pobierz odznaki (z możliwością edycji)
+function zadaniomat_get_achievements() {
+    $saved = get_option('zadaniomat_achievements_config');
+    if ($saved) return $saved;
 
-// Streak milestones i bonus XP
-define('ZADANIOMAT_STREAK_MILESTONES', [
-    'work_days' => [3 => 25, 7 => 75, 14 => 150, 30 => 300, 60 => 600, 90 => 1000],
-    'early_start' => [7 => 50, 14 => 100, 30 => 250],
-    'early_planning' => [7 => 40, 14 => 80],
-    'full_coverage' => [7 => 100, 14 => 200],
-]);
+    return [
+        // Streak - Główny
+        'streak_3' => ['name' => 'Zapałka', 'icon' => '🔥', 'desc' => '3 dni streak', 'xp' => 25, 'condition' => 'Utrzymaj streak przez 3 dni robocze z rzędu'],
+        'streak_7' => ['name' => 'Ognisko', 'icon' => '🔥🔥', 'desc' => '7 dni streak', 'xp' => 75, 'condition' => 'Utrzymaj streak przez 7 dni roboczych z rzędu'],
+        'streak_14' => ['name' => 'Pożar', 'icon' => '🔥🔥🔥', 'desc' => '14 dni streak', 'xp' => 150, 'condition' => 'Utrzymaj streak przez 14 dni roboczych z rzędu'],
+        'streak_30' => ['name' => 'Wulkan', 'icon' => '🌋', 'desc' => '30 dni streak', 'xp' => 300, 'condition' => 'Utrzymaj streak przez 30 dni roboczych z rzędu'],
+        'streak_60' => ['name' => 'Słońce', 'icon' => '☀️', 'desc' => '60 dni streak', 'xp' => 600, 'condition' => 'Utrzymaj streak przez 60 dni roboczych z rzędu'],
+        'streak_90' => ['name' => 'Supernowa', 'icon' => '🌟', 'desc' => '90 dni streak', 'xp' => 1000, 'condition' => 'Utrzymaj streak przez 90 dni roboczych z rzędu'],
+        // Streak - Wczesny start
+        'early_start_7' => ['name' => 'Ranny Ptaszek', 'icon' => '🐦', 'desc' => '7 dni startu przed 8:00', 'xp' => 50, 'condition' => 'Rozpocznij pracę przed 8:00 przez 7 dni z rzędu'],
+        'early_start_14' => ['name' => 'Świt', 'icon' => '🌅', 'desc' => '14 dni startu przed 8:00', 'xp' => 100, 'condition' => 'Rozpocznij pracę przed 8:00 przez 14 dni z rzędu'],
+        'early_start_30' => ['name' => 'Mistrz Poranka', 'icon' => '🌄', 'desc' => '30 dni startu przed 8:00', 'xp' => 250, 'condition' => 'Rozpocznij pracę przed 8:00 przez 30 dni z rzędu'],
+        // Streak - Wczesne planowanie
+        'early_plan_7' => ['name' => 'Planista', 'icon' => '📋', 'desc' => '7 dni planowania przed 10:00', 'xp' => 40, 'condition' => 'Oznacz listę poranną przed 10:00 przez 7 dni z rzędu'],
+        'early_plan_14' => ['name' => 'Strateg', 'icon' => '🗺️', 'desc' => '14 dni planowania przed 10:00', 'xp' => 80, 'condition' => 'Oznacz listę poranną przed 10:00 przez 14 dni z rzędu'],
+        'early_plan_30' => ['name' => 'Architekt Dnia', 'icon' => '🏛️', 'desc' => '30 dni planowania przed 10:00', 'xp' => 200, 'condition' => 'Oznacz listę poranną przed 10:00 przez 30 dni z rzędu'],
+        // Pokrycie kategorii
+        'full_coverage_1' => ['name' => 'Wszechstronny', 'icon' => '🎨', 'desc' => 'Pierwszy dzień z 6 kategoriami', 'xp' => 50, 'condition' => 'Ukończ min. 1 zadanie w każdej z 6 kategorii celów w jednym dniu'],
+        'full_coverage_7' => ['name' => 'Żongler', 'icon' => '🎪', 'desc' => '7 dni pełnego pokrycia', 'xp' => 150, 'condition' => 'Pełne pokrycie kategorii przez 7 dni z rzędu'],
+        'full_coverage_14' => ['name' => 'Mistrz Równowagi', 'icon' => '⚖️', 'desc' => '14 dni pełnego pokrycia', 'xp' => 300, 'condition' => 'Pełne pokrycie kategorii przez 14 dni z rzędu'],
+        // Cele
+        'first_goal' => ['name' => 'Snajper', 'icon' => '🎯', 'desc' => 'Pierwszy osiągnięty cel', 'xp' => 25, 'condition' => 'Osiągnij swój pierwszy cel okresu'],
+        'goals_10' => ['name' => 'Łucznik', 'icon' => '🏹', 'desc' => '10 osiągniętych celów', 'xp' => 100, 'condition' => 'Osiągnij łącznie 10 celów okresowych'],
+        'goals_25' => ['name' => 'Strzelec Wyborowy', 'icon' => '🎖️', 'desc' => '25 osiągniętych celów', 'xp' => 250, 'condition' => 'Osiągnij łącznie 25 celów okresowych'],
+        'goals_50' => ['name' => 'Komandos', 'icon' => '💪', 'desc' => '50 osiągniętych celów', 'xp' => 500, 'condition' => 'Osiągnij łącznie 50 celów okresowych'],
+        'goal_x2' => ['name' => 'Podwójne Uderzenie', 'icon' => '🎯🎯', 'desc' => 'Dwa cele w jednej kategorii', 'xp' => 50, 'condition' => 'Osiągnij 2 cele w tej samej kategorii w jednym okresie'],
+        'goal_x3' => ['name' => 'Hat-trick', 'icon' => '🎩', 'desc' => 'Trzy cele w jednej kategorii', 'xp' => 100, 'condition' => 'Osiągnij 3 cele w tej samej kategorii w jednym okresie'],
+        'perfect_period' => ['name' => 'Perfekcyjny Okres', 'icon' => '🏆', 'desc' => 'Wszystkie cele okresu osiągnięte', 'xp' => 200, 'condition' => 'Osiągnij wszystkie zaplanowane cele w okresie'],
+        'perfect_year' => ['name' => 'Perfekcyjny Rok', 'icon' => '👑', 'desc' => 'Wszystkie cele roku osiągnięte', 'xp' => 500, 'condition' => 'Osiągnij wszystkie cele roczne'],
+        // Zadania
+        'tasks_100' => ['name' => 'Pracuś', 'icon' => '📝', 'desc' => '100 ukończonych zadań', 'xp' => 100, 'condition' => 'Ukończ łącznie 100 zadań'],
+        'tasks_500' => ['name' => 'Pracoholik', 'icon' => '💼', 'desc' => '500 ukończonych zadań', 'xp' => 300, 'condition' => 'Ukończ łącznie 500 zadań'],
+        'tasks_1000' => ['name' => 'Maszyna', 'icon' => '⚙️', 'desc' => '1000 ukończonych zadań', 'xp' => 600, 'condition' => 'Ukończ łącznie 1000 zadań'],
+        'cyclic_50' => ['name' => 'Nawyk', 'icon' => '🔄', 'desc' => '50 zadań cyklicznych', 'xp' => 75, 'condition' => 'Ukończ łącznie 50 zadań cyklicznych'],
+        'cyclic_200' => ['name' => 'Rutyna', 'icon' => '🔁', 'desc' => '200 zadań cyklicznych', 'xp' => 200, 'condition' => 'Ukończ łącznie 200 zadań cyklicznych'],
+        // Czas pracy
+        'hours_100' => ['name' => 'Stażysta', 'icon' => '⏰', 'desc' => '100h przepracowanych', 'xp' => 100, 'condition' => 'Przepracuj łącznie 100 godzin'],
+        'hours_500' => ['name' => 'Weteran', 'icon' => '🎖️', 'desc' => '500h przepracowanych', 'xp' => 300, 'condition' => 'Przepracuj łącznie 500 godzin'],
+        'hours_1000' => ['name' => 'Legenda', 'icon' => '🏛️', 'desc' => '1000h przepracowanych', 'xp' => 600, 'condition' => 'Przepracuj łącznie 1000 godzin'],
+        // Combo
+        'combo_5' => ['name' => 'Kombinator', 'icon' => '⚡', 'desc' => 'Osiągnij combo x5', 'xp' => 30, 'condition' => 'Ukończ 5 zadań bez przerwy dłuższej niż 2h'],
+        'combo_5_10times' => ['name' => 'Mistrz Combo', 'icon' => '💥', 'desc' => 'Combo x5 dziesięć razy', 'xp' => 100, 'condition' => 'Osiągnij combo x5 w 10 różnych dniach'],
+        // Specjalne
+        'first_day' => ['name' => 'Początek Drogi', 'icon' => '🚀', 'desc' => 'Ukończ pierwszy dzień', 'xp' => 10, 'condition' => 'Ukończ swoje pierwsze zadanie'],
+        'level_5' => ['name' => 'Awans', 'icon' => '⬆️', 'desc' => 'Osiągnij level 5', 'xp' => 50, 'condition' => 'Zdobądź wystarczająco XP by osiągnąć level 5'],
+        'level_10' => ['name' => 'Szczyt', 'icon' => '🗻', 'desc' => 'Osiągnij level 10', 'xp' => 200, 'condition' => 'Zdobądź wystarczająco XP by osiągnąć level 10'],
+        'prestige_1' => ['name' => 'Odrodzenie', 'icon' => '🔮', 'desc' => 'Pierwszy prestige', 'xp' => 100, 'condition' => 'Zresetuj postęp na level 10 by zdobyć prestige'],
+    ];
+}
+
+// Pobierz wyzwania dnia (z możliwością edycji)
+function zadaniomat_get_daily_challenges_config() {
+    $saved = get_option('zadaniomat_challenges_config');
+    if ($saved) return $saved;
+
+    $config = zadaniomat_get_gam_config();
+    $time = $config['time_settings'];
+
+    return [
+        'complete_5_tasks' => [
+            'desc' => 'Ukończ 5 zadań',
+            'xp' => 25,
+            'difficulty' => 'easy',
+            'condition' => 'Ukończ minimum 5 zadań dzisiaj (zmień status na "zakończone")',
+            'param' => 5
+        ],
+        'complete_8_tasks' => [
+            'desc' => 'Ukończ 8 zadań',
+            'xp' => 40,
+            'difficulty' => 'medium',
+            'condition' => 'Ukończ minimum 8 zadań dzisiaj',
+            'param' => 8
+        ],
+        'work_6_hours' => [
+            'desc' => 'Przepracuj 6 godzin',
+            'xp' => 35,
+            'difficulty' => 'medium',
+            'condition' => 'Suma faktycznego czasu zadań musi wynosić min. 6 godzin',
+            'param' => 360
+        ],
+        'work_8_hours' => [
+            'desc' => 'Przepracuj 8 godzin',
+            'xp' => 50,
+            'difficulty' => 'hard',
+            'condition' => 'Suma faktycznego czasu zadań musi wynosić min. 8 godzin',
+            'param' => 480
+        ],
+        '4_categories' => [
+            'desc' => 'Zadania w 4 kategoriach',
+            'xp' => 30,
+            'difficulty' => 'easy',
+            'condition' => 'Ukończ min. 1 zadanie w 4 różnych kategoriach',
+            'param' => 4
+        ],
+        'all_categories' => [
+            'desc' => 'Zadania we wszystkich kategoriach',
+            'xp' => 60,
+            'difficulty' => 'hard',
+            'condition' => 'Ukończ min. 1 zadanie w każdej z 6 kategorii celów',
+            'param' => 6
+        ],
+        'all_cyclic' => [
+            'desc' => 'Wykonaj wszystkie zadania cykliczne',
+            'xp' => 35,
+            'difficulty' => 'medium',
+            'condition' => 'Ukończ wszystkie stałe zadania zaplanowane na dziś'
+        ],
+        'start_before_8' => [
+            'desc' => 'Zacznij przed 8:00',
+            'xp' => 25,
+            'difficulty' => 'medium',
+            'condition' => 'Ustaw godzinę startu dnia przed godziną 8:00',
+            'param' => '08:00'
+        ],
+        'start_before_9' => [
+            'desc' => 'Zacznij przed 9:00',
+            'xp' => 15,
+            'difficulty' => 'easy',
+            'condition' => 'Ustaw godzinę startu dnia przed godziną 9:00',
+            'param' => '09:00'
+        ],
+        'morning_plan' => [
+            'desc' => 'Zaplanuj dzień rano',
+            'xp' => 20,
+            'difficulty' => 'easy',
+            'condition' => 'Zaznacz checkbox "Lista poranna gotowa" przed godziną ' . $time['early_planning_before'],
+            'param' => $time['early_planning_before']
+        ],
+        'morning_work' => [
+            'desc' => $time['morning_work_hours'] . 'h pracy do ' . $time['morning_work_deadline'],
+            'xp' => 30,
+            'difficulty' => 'hard',
+            'condition' => 'Przepracuj min. ' . $time['morning_work_hours'] . ' godziny przed godziną ' . $time['morning_work_deadline'],
+            'param_hours' => $time['morning_work_hours'],
+            'param_deadline' => $time['morning_work_deadline']
+        ],
+        'combo_3' => [
+            'desc' => 'Osiągnij combo x3',
+            'xp' => 20,
+            'difficulty' => 'easy',
+            'condition' => 'Ukończ 3 zadania z rzędu bez przerwy dłuższej niż 2h',
+            'param' => 3
+        ],
+        'combo_5' => [
+            'desc' => 'Osiągnij combo x5',
+            'xp' => 35,
+            'difficulty' => 'medium',
+            'condition' => 'Ukończ 5 zadań z rzędu bez przerwy dłuższej niż 2h',
+            'param' => 5
+        ],
+        'finish_all' => [
+            'desc' => 'Ukończ wszystkie zaplanowane',
+            'xp' => 40,
+            'difficulty' => 'medium',
+            'condition' => 'Wszystkie zadania zaplanowane na dziś muszą mieć status "zakończone"'
+        ],
+        'category_focus' => [
+            'desc' => '3h w jednej kategorii',
+            'xp' => 25,
+            'difficulty' => 'medium',
+            'condition' => 'Przepracuj min. 3 godziny w zadaniach jednej kategorii',
+            'param' => 180
+        ],
+    ];
+}
+
+// Kompatybilność wsteczna - stałe (używane w niektórych miejscach)
+function zadaniomat_get_level_thresholds() {
+    $levels = zadaniomat_get_gam_config('levels');
+    $thresholds = [];
+    foreach ($levels as $level => $data) {
+        $thresholds[$level] = $data['xp'];
+    }
+    return $thresholds;
+}
+
+function zadaniomat_get_level_names() {
+    $levels = zadaniomat_get_gam_config('levels');
+    $names = [];
+    foreach ($levels as $level => $data) {
+        $names[$level] = $data['name'];
+    }
+    return $names;
+}
+
+function zadaniomat_get_level_icons() {
+    $levels = zadaniomat_get_gam_config('levels');
+    $icons = [];
+    foreach ($levels as $level => $data) {
+        $icons[$level] = $data['icon'];
+    }
+    return $icons;
+}
+
+// Aliasy dla kompatybilności
+define('ZADANIOMAT_LEVEL_THRESHOLDS', zadaniomat_get_level_thresholds());
+define('ZADANIOMAT_LEVEL_NAMES', zadaniomat_get_level_names());
+define('ZADANIOMAT_LEVEL_ICONS', zadaniomat_get_level_icons());
+define('ZADANIOMAT_ACHIEVEMENTS', zadaniomat_get_achievements());
+define('ZADANIOMAT_DAILY_CHALLENGES', zadaniomat_get_daily_challenges_config());
+define('ZADANIOMAT_STREAK_MILESTONES', zadaniomat_get_gam_config('streak_milestones'));
 
 // =============================================
 // GAMIFICATION HELPER FUNCTIONS
@@ -1165,6 +1348,63 @@ function zadaniomat_check_daily_challenges($user_id, $date = null) {
                 ));
                 $is_completed = ($max_time ?: 0) >= 180;
                 break;
+
+            case 'morning_plan':
+                // Check if morning checklist was checked before deadline
+                $morning_data = get_option('zadaniomat_morning_checklist', []);
+                if (isset($morning_data[$date]) && $morning_data[$date]['checked']) {
+                    $config = zadaniomat_get_gam_config();
+                    $deadline = $config['time_settings']['early_planning_before'] ?? '10:00';
+                    $check_time = $morning_data[$date]['time'];
+                    $is_completed = $check_time <= $deadline;
+                }
+                break;
+
+            case 'morning_work':
+                // Check if X hours worked before Y deadline
+                $config = zadaniomat_get_gam_config();
+                $required_hours = $config['time_settings']['morning_work_hours'] ?? 3;
+                $deadline = $config['time_settings']['morning_work_deadline'] ?? '12:00';
+
+                // Get tasks completed before deadline with actual time
+                $minutes_before_deadline = $wpdb->get_var($wpdb->prepare(
+                    "SELECT SUM(faktyczny_czas) FROM $table_zadania
+                     WHERE dzien = %s AND status = 'zakonczone'
+                     AND TIME(updated_at) <= %s",
+                    $date, $deadline . ':00'
+                ));
+                $is_completed = ($minutes_before_deadline ?: 0) >= ($required_hours * 60);
+                break;
+
+            case 'all_cyclic':
+                // Check if all cyclic tasks for today are completed
+                $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+
+                // Get cyclic tasks that should appear today
+                $today_weekday = strtolower(date('D', strtotime($date)));
+                $day_map = ['mon' => 'pn', 'tue' => 'wt', 'wed' => 'sr', 'thu' => 'cz', 'fri' => 'pt', 'sat' => 'so', 'sun' => 'nd'];
+                $weekday_pl = $day_map[$today_weekday] ?? 'pn';
+
+                $cyclic_names = $wpdb->get_col($wpdb->prepare(
+                    "SELECT nazwa FROM $table_stale WHERE aktywne = 1 AND (
+                        typ_powtarzania = 'codziennie' OR
+                        (typ_powtarzania = 'dni_tygodnia' AND dni_tygodnia LIKE %s)
+                    )",
+                    '%' . $weekday_pl . '%'
+                ));
+
+                if (!empty($cyclic_names)) {
+                    $completed_cyclic = 0;
+                    foreach ($cyclic_names as $name) {
+                        $exists = $wpdb->get_var($wpdb->prepare(
+                            "SELECT COUNT(*) FROM $table_zadania WHERE dzien = %s AND nazwa = %s AND status = 'zakonczone'",
+                            $date, $name
+                        ));
+                        if ($exists > 0) $completed_cyclic++;
+                    }
+                    $is_completed = $completed_cyclic >= count($cyclic_names);
+                }
+                break;
         }
 
         if ($is_completed) {
@@ -1440,14 +1680,16 @@ function zadaniomat_get_gamification_data($user_id = 1) {
     ));
 
     $challenges_data = [];
+    $challenges_config = zadaniomat_get_daily_challenges_config();
     foreach ($challenges as $c) {
-        $def = ZADANIOMAT_DAILY_CHALLENGES[$c->challenge_key] ?? null;
+        $def = $challenges_config[$c->challenge_key] ?? ZADANIOMAT_DAILY_CHALLENGES[$c->challenge_key] ?? null;
         $challenges_data[] = [
             'key' => $c->challenge_key,
             'desc' => $def['desc'] ?? $c->challenge_key,
             'xp' => $c->xp_reward,
             'completed' => (bool)$c->completed,
-            'difficulty' => $def['difficulty'] ?? 'medium'
+            'difficulty' => $def['difficulty'] ?? 'medium',
+            'condition' => $def['condition'] ?? ''
         ];
     }
 
@@ -1539,6 +1781,7 @@ function zadaniomat_do_prestige($user_id = 1) {
 add_action('admin_menu', function() {
     add_menu_page('Zadaniomat', 'Zadaniomat', 'manage_options', 'zadaniomat', 'zadaniomat_page_main', 'dashicons-list-view', 30);
     add_submenu_page('zadaniomat', 'Dashboard', '📋 Dashboard', 'manage_options', 'zadaniomat', 'zadaniomat_page_main');
+    add_submenu_page('zadaniomat', 'Gamifikacja', '🎮 Gamifikacja', 'manage_options', 'zadaniomat-gamification', 'zadaniomat_page_gamification');
     add_submenu_page('zadaniomat', 'Ustawienia', '⚙️ Ustawienia', 'manage_options', 'zadaniomat-settings', 'zadaniomat_page_settings');
 });
 
@@ -2703,6 +2946,310 @@ add_action('wp_ajax_zadaniomat_get_achievements', function() {
     wp_send_json_success([
         'earned' => $result,
         'locked' => $locked
+    ]);
+});
+
+// =============================================
+// GAMIFICATION SETTINGS AJAX HANDLERS
+// =============================================
+
+// Pobierz historię XP z filtrowaniem i paginacją (zaawansowana wersja)
+add_action('wp_ajax_zadaniomat_get_xp_history_advanced', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table = $wpdb->prefix . 'zadaniomat_xp_log';
+    $page = max(1, intval($_POST['page'] ?? 1));
+    $per_page = min(100, max(10, intval($_POST['per_page'] ?? 50)));
+    $offset = ($page - 1) * $per_page;
+    $filter_type = sanitize_text_field($_POST['filter_type'] ?? '');
+    $filter_date = sanitize_text_field($_POST['filter_date'] ?? '');
+
+    $where = "user_id = 1";
+    $params = [];
+
+    if ($filter_type) {
+        $where .= " AND xp_type LIKE %s";
+        $params[] = '%' . $wpdb->esc_like($filter_type) . '%';
+    }
+    if ($filter_date) {
+        $where .= " AND DATE(created_at) = %s";
+        $params[] = $filter_date;
+    }
+
+    // Get total count
+    if (empty($params)) {
+        $total_count = $wpdb->get_var("SELECT COUNT(*) FROM $table WHERE $where");
+        $total_xp = $wpdb->get_var("SELECT SUM(xp_final) FROM $table WHERE $where") ?: 0;
+    } else {
+        $total_count = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE $where", $params));
+        $total_xp = $wpdb->get_var($wpdb->prepare("SELECT SUM(xp_final) FROM $table WHERE $where", $params)) ?: 0;
+    }
+
+    // Get paginated entries
+    $params[] = $per_page;
+    $params[] = $offset;
+
+    if (count($params) > 2) {
+        $sql = "SELECT * FROM $table WHERE $where ORDER BY created_at DESC LIMIT %d OFFSET %d";
+        $entries = $wpdb->get_results($wpdb->prepare($sql, $params));
+    } else {
+        $entries = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table WHERE $where ORDER BY created_at DESC LIMIT %d OFFSET %d",
+            $per_page, $offset
+        ));
+    }
+
+    wp_send_json_success([
+        'entries' => $entries,
+        'total_count' => intval($total_count),
+        'total_xp' => intval($total_xp),
+        'page' => $page,
+        'per_page' => $per_page
+    ]);
+});
+
+// Usuń wpis XP i odejmij punkty
+add_action('wp_ajax_zadaniomat_delete_xp_entry', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $entry_id = intval($_POST['entry_id'] ?? 0);
+    if (!$entry_id) {
+        wp_send_json_error('Brak ID wpisu');
+        return;
+    }
+
+    $xp_log_table = $wpdb->prefix . 'zadaniomat_xp_log';
+    $stats_table = $wpdb->prefix . 'zadaniomat_gamification_stats';
+
+    // Get the entry to find XP amount
+    $entry = $wpdb->get_row($wpdb->prepare("SELECT * FROM $xp_log_table WHERE id = %d", $entry_id));
+    if (!$entry) {
+        wp_send_json_error('Wpis nie istnieje');
+        return;
+    }
+
+    // Deduct XP from total
+    $wpdb->query($wpdb->prepare(
+        "UPDATE $stats_table SET total_xp = GREATEST(0, total_xp - %d) WHERE user_id = %d",
+        $entry->xp_final, $entry->user_id
+    ));
+
+    // Delete the entry
+    $wpdb->delete($xp_log_table, ['id' => $entry_id]);
+
+    // Recalculate level
+    $stats = $wpdb->get_row($wpdb->prepare("SELECT total_xp FROM $stats_table WHERE user_id = %d", $entry->user_id));
+    if ($stats) {
+        $new_level = zadaniomat_calculate_level($stats->total_xp);
+        $wpdb->update($stats_table, ['level' => $new_level], ['user_id' => $entry->user_id]);
+    }
+
+    wp_send_json_success(['deleted_xp' => $entry->xp_final]);
+});
+
+// Zapisz konfigurację gamifikacji
+add_action('wp_ajax_zadaniomat_save_gam_config', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $config_key = sanitize_text_field($_POST['config_key'] ?? '');
+    $current_config = get_option('zadaniomat_gam_config', []);
+
+    switch ($config_key) {
+        case 'levels':
+            $levels = json_decode(stripslashes($_POST['config_value'] ?? '{}'), true);
+            if ($levels) {
+                $current_config['levels'] = $levels;
+            }
+            break;
+
+        case 'xp_values':
+            $xp_values = json_decode(stripslashes($_POST['config_value'] ?? '{}'), true);
+            if ($xp_values) {
+                $current_config['xp_values'] = $xp_values;
+            }
+            break;
+
+        case 'multipliers':
+            $streak_mults = json_decode(stripslashes($_POST['streak_multipliers'] ?? '[]'), true);
+            $combo_mults = json_decode(stripslashes($_POST['combo_multipliers'] ?? '[]'), true);
+            if ($streak_mults) {
+                $current_config['streak_multipliers'] = $streak_mults;
+            }
+            if ($combo_mults) {
+                $current_config['combo_multipliers'] = $combo_mults;
+            }
+            break;
+
+        case 'other':
+            $time_settings = json_decode(stripslashes($_POST['time_settings'] ?? '{}'), true);
+            $streak_conditions = json_decode(stripslashes($_POST['streak_conditions'] ?? '{}'), true);
+            $require_confirmation = !empty($_POST['require_xp_confirmation']);
+
+            if ($time_settings) {
+                $current_config['time_settings'] = $time_settings;
+            }
+            if ($streak_conditions) {
+                $current_config['streak_conditions'] = $streak_conditions;
+            }
+            $current_config['require_xp_confirmation'] = $require_confirmation;
+            break;
+
+        default:
+            $config_value = json_decode(stripslashes($_POST['config_value'] ?? '{}'), true);
+            if ($config_value && $config_key) {
+                $current_config[$config_key] = $config_value;
+            }
+    }
+
+    update_option('zadaniomat_gam_config', $current_config);
+    wp_send_json_success(['saved' => $config_key]);
+});
+
+// Resetuj konfigurację gamifikacji
+add_action('wp_ajax_zadaniomat_reset_gam_config', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $config_key = sanitize_text_field($_POST['config_key'] ?? '');
+    $defaults = zadaniomat_get_default_gam_config();
+    $current_config = get_option('zadaniomat_gam_config', []);
+
+    switch ($config_key) {
+        case 'levels':
+            $current_config['levels'] = $defaults['levels'];
+            break;
+        case 'xp_values':
+            $current_config['xp_values'] = $defaults['xp_values'];
+            break;
+        case 'multipliers':
+            $current_config['streak_multipliers'] = $defaults['streak_multipliers'];
+            $current_config['combo_multipliers'] = $defaults['combo_multipliers'];
+            break;
+        case 'other':
+            $current_config['time_settings'] = $defaults['time_settings'];
+            $current_config['streak_conditions'] = $defaults['streak_conditions'];
+            $current_config['require_xp_confirmation'] = $defaults['require_xp_confirmation'];
+            break;
+        default:
+            // Reset all
+            delete_option('zadaniomat_gam_config');
+            wp_send_json_success(['reset' => 'all']);
+            return;
+    }
+
+    update_option('zadaniomat_gam_config', $current_config);
+    wp_send_json_success(['reset' => $config_key]);
+});
+
+// Zapisz konfigurację wyzwań
+add_action('wp_ajax_zadaniomat_save_challenges_config', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $challenges = json_decode(stripslashes($_POST['challenges'] ?? '{}'), true);
+    if ($challenges) {
+        // Merge with existing challenges to preserve params
+        $existing = zadaniomat_get_daily_challenges_config();
+        foreach ($challenges as $key => $new_data) {
+            if (isset($existing[$key])) {
+                // Preserve original params but update editable fields
+                $existing[$key]['desc'] = $new_data['desc'] ?? $existing[$key]['desc'];
+                $existing[$key]['xp'] = $new_data['xp'] ?? $existing[$key]['xp'];
+                $existing[$key]['difficulty'] = $new_data['difficulty'] ?? $existing[$key]['difficulty'];
+                $existing[$key]['condition'] = $new_data['condition'] ?? '';
+            }
+        }
+        update_option('zadaniomat_challenges_config', $existing);
+        wp_send_json_success();
+    } else {
+        wp_send_json_error('Invalid data');
+    }
+});
+
+// Resetuj konfigurację wyzwań
+add_action('wp_ajax_zadaniomat_reset_challenges_config', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    delete_option('zadaniomat_challenges_config');
+    wp_send_json_success();
+});
+
+// Zapisz konfigurację osiągnięć
+add_action('wp_ajax_zadaniomat_save_achievements_config', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $achievements = json_decode(stripslashes($_POST['achievements'] ?? '{}'), true);
+    if ($achievements) {
+        update_option('zadaniomat_achievements_config', $achievements);
+        wp_send_json_success();
+    } else {
+        wp_send_json_error('Invalid data');
+    }
+});
+
+// Resetuj konfigurację osiągnięć
+add_action('wp_ajax_zadaniomat_reset_achievements_config', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    delete_option('zadaniomat_achievements_config');
+    wp_send_json_success();
+});
+
+// Pobierz stan listy porannej
+add_action('wp_ajax_zadaniomat_get_morning_checklist', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    $date = sanitize_text_field($_POST['date'] ?? date('Y-m-d'));
+    $data = get_option('zadaniomat_morning_checklist', []);
+
+    $checked = isset($data[$date]) && $data[$date]['checked'];
+    $time = isset($data[$date]) ? $data[$date]['time'] : '';
+
+    wp_send_json_success([
+        'checked' => $checked,
+        'time' => $time
+    ]);
+});
+
+// Ustaw stan listy porannej
+add_action('wp_ajax_zadaniomat_set_morning_checklist', function() {
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+    $date = sanitize_text_field($_POST['date'] ?? date('Y-m-d'));
+    $checked = !empty($_POST['checked']);
+
+    $data = get_option('zadaniomat_morning_checklist', []);
+
+    if ($checked) {
+        $time = date('H:i');
+        $data[$date] = [
+            'checked' => true,
+            'time' => $time
+        ];
+
+        // Award XP if before deadline
+        $config = zadaniomat_get_gam_config();
+        $deadline = $config['time_settings']['early_planning_before'] ?? '10:00';
+        if ($time <= $deadline) {
+            // Check if early planning bonus already awarded today
+            global $wpdb;
+            $xp_log_table = $wpdb->prefix . 'zadaniomat_xp_log';
+            $already_awarded = $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM $xp_log_table WHERE user_id = 1 AND xp_type = 'early_planning' AND DATE(created_at) = %s",
+                $date
+            ));
+
+            if (!$already_awarded) {
+                $xp = $config['xp_values']['early_planning_bonus'] ?? 15;
+                zadaniomat_add_xp(1, $xp, 'early_planning', 'Lista poranna przed ' . $deadline);
+            }
+        }
+    } else {
+        unset($data[$date]);
+        $time = '';
+    }
+
+    update_option('zadaniomat_morning_checklist', $data);
+
+    wp_send_json_success([
+        'checked' => $checked,
+        'time' => $time
     ]);
 });
 
@@ -4939,6 +5486,44 @@ add_action('admin_head', function() {
             .gam-stat-box.streak .stat-value { color: #f6ad55; }
             .gam-stat-box.combo .stat-value { color: #63b3ed; }
 
+            /* Morning checklist */
+            .morning-checklist-section {
+                margin-top: 15px;
+                padding: 12px 15px;
+                background: rgba(72, 187, 120, 0.1);
+                border-radius: 8px;
+                border: 1px dashed rgba(72, 187, 120, 0.3);
+            }
+            .morning-checklist-label {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                cursor: pointer;
+                font-size: 14px;
+            }
+            .morning-checklist-label input[type="checkbox"] {
+                width: 20px;
+                height: 20px;
+                cursor: pointer;
+                accent-color: #48bb78;
+            }
+            .morning-checklist-label .checklist-text {
+                color: #e2e8f0;
+            }
+            .morning-checklist-label .checklist-time {
+                margin-left: auto;
+                font-size: 12px;
+                color: #a0aec0;
+            }
+            .morning-checklist-section.checked {
+                background: rgba(72, 187, 120, 0.25);
+                border-color: #48bb78;
+            }
+            .morning-checklist-section.checked .checklist-text {
+                color: #48bb78;
+                text-decoration: line-through;
+            }
+
             /* Wyzwania dnia */
             .challenges-section {
                 margin-top: 15px;
@@ -4991,6 +5576,39 @@ add_action('admin_head', function() {
             .challenge-item.completed .xp-reward {
                 text-decoration: line-through;
                 opacity: 0.5;
+            }
+            .challenge-item .info-btn {
+                cursor: pointer;
+                opacity: 0.5;
+                font-size: 14px;
+                margin-left: 5px;
+                position: relative;
+            }
+            .challenge-item .info-btn:hover {
+                opacity: 1;
+            }
+            .challenge-item .info-tooltip {
+                position: absolute;
+                bottom: 100%;
+                left: 50%;
+                transform: translateX(-50%);
+                background: #1a1a2e;
+                border: 1px solid #4a5568;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-size: 11px;
+                color: #e2e8f0;
+                white-space: nowrap;
+                z-index: 100;
+                display: none;
+                min-width: 200px;
+                max-width: 300px;
+                white-space: normal;
+                text-align: left;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            }
+            .challenge-item .info-btn:hover .info-tooltip {
+                display: block;
             }
 
             /* XP Popup */
@@ -5233,6 +5851,14 @@ function zadaniomat_page_main() {
                     <div class="stat-value" id="gam-freeze">0</div>
                     <div class="stat-label">Freeze days</div>
                 </div>
+            </div>
+            <div class="morning-checklist-section">
+                <label class="morning-checklist-label">
+                    <input type="checkbox" id="morning-checklist-checkbox" onchange="toggleMorningChecklist()">
+                    <span class="checkmark"></span>
+                    <span class="checklist-text">📋 Lista poranna gotowa</span>
+                    <span class="checklist-time" id="morning-checklist-time"></span>
+                </label>
             </div>
             <div class="challenges-section">
                 <div class="challenges-title">🎲 Wyzwania dnia</div>
@@ -5759,18 +6385,74 @@ function zadaniomat_page_main() {
             $('#gam-coverage').text(d.streaks.full_coverage.current);
             $('#gam-freeze').text(d.stats.freeze_days);
 
-            // Challenges
+            // Challenges with info tooltips
             var challengesHtml = '';
             d.challenges.forEach(function(c) {
                 var completed = c.completed ? 'completed' : '';
                 var check = c.completed ? '✓' : '';
+                var condition = c.condition || '';
+                var tooltipHtml = condition ? '<span class="info-btn">ℹ️<span class="info-tooltip">' + escapeHtml(condition) + '</span></span>' : '';
                 challengesHtml += '<div class="challenge-item ' + completed + '">' +
                     '<div class="check">' + check + '</div>' +
-                    '<span>' + c.desc + '</span>' +
+                    '<span>' + escapeHtml(c.desc) + tooltipHtml + '</span>' +
                     '<span class="xp-reward">+' + c.xp + ' XP</span>' +
                     '</div>';
             });
             $('#gam-challenges').html(challengesHtml);
+
+            // Load morning checklist state
+            loadMorningChecklist();
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Morning checklist functions
+        function loadMorningChecklist() {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_morning_checklist',
+                nonce: nonce,
+                date: currentDate
+            }, function(response) {
+                if (response.success && response.data) {
+                    var checked = response.data.checked;
+                    var time = response.data.time;
+                    $('#morning-checklist-checkbox').prop('checked', checked);
+                    if (checked) {
+                        $('.morning-checklist-section').addClass('checked');
+                        $('#morning-checklist-time').text('✓ ' + time);
+                    } else {
+                        $('.morning-checklist-section').removeClass('checked');
+                        $('#morning-checklist-time').text('');
+                    }
+                }
+            });
+        }
+
+        window.toggleMorningChecklist = function() {
+            var checked = $('#morning-checklist-checkbox').is(':checked');
+            $.post(ajaxurl, {
+                action: 'zadaniomat_set_morning_checklist',
+                nonce: nonce,
+                date: currentDate,
+                checked: checked ? 1 : 0
+            }, function(response) {
+                if (response.success) {
+                    if (checked) {
+                        $('.morning-checklist-section').addClass('checked');
+                        $('#morning-checklist-time').text('✓ ' + response.data.time);
+                        // Refresh gamification data to update challenges
+                        loadGamificationData();
+                    } else {
+                        $('.morning-checklist-section').removeClass('checked');
+                        $('#morning-checklist-time').text('');
+                    }
+                }
+            });
         }
 
         function showNewAchievements() {
@@ -9877,6 +10559,923 @@ function zadaniomat_page_settings() {
         // Inicjalizacja
         renderKategorieList();
         loadStaleZadania();
+    });
+    </script>
+    <?php
+}
+
+// =============================================
+// GAMIFICATION SETTINGS PAGE
+// =============================================
+function zadaniomat_page_gamification() {
+    global $wpdb;
+    $config = zadaniomat_get_gam_config();
+    $achievements = zadaniomat_get_achievements();
+    $challenges = zadaniomat_get_daily_challenges_config();
+    $xp_log_table = $wpdb->prefix . 'zadaniomat_xp_log';
+
+    ?>
+    <div class="wrap zadaniomat-wrap">
+        <h1>🎮 Ustawienia Gamifikacji</h1>
+
+        <div class="gam-settings-tabs">
+            <button class="gam-tab active" data-tab="xp-history">📊 Historia XP</button>
+            <button class="gam-tab" data-tab="levels">📈 Poziomy</button>
+            <button class="gam-tab" data-tab="xp-values">⭐ Wartości XP</button>
+            <button class="gam-tab" data-tab="multipliers">✖️ Mnożniki</button>
+            <button class="gam-tab" data-tab="challenges">🎯 Wyzwania</button>
+            <button class="gam-tab" data-tab="achievements">🏆 Osiągnięcia</button>
+            <button class="gam-tab" data-tab="settings">⚙️ Inne ustawienia</button>
+        </div>
+
+        <!-- XP History Tab -->
+        <div class="gam-tab-content active" id="tab-xp-history">
+            <div class="zadaniomat-card">
+                <h2>📊 Historia przyznanych punktów XP</h2>
+                <p style="color: #666; margin-bottom: 15px;">Tu możesz zobaczyć wszystkie przyznane punkty i usunąć błędne wpisy.</p>
+
+                <div style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
+                    <select id="xp-history-filter" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;">
+                        <option value="">Wszystkie typy</option>
+                        <option value="task">Zadania</option>
+                        <option value="goal">Cele</option>
+                        <option value="streak">Streaki</option>
+                        <option value="achievement">Osiągnięcia</option>
+                        <option value="challenge">Wyzwania</option>
+                        <option value="bonus">Bonusy</option>
+                    </select>
+                    <input type="date" id="xp-history-date" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;">
+                    <button class="button" onclick="loadXPHistory()">🔍 Filtruj</button>
+                    <button class="button" onclick="loadXPHistory(true)">🔄 Odśwież</button>
+                </div>
+
+                <table class="xp-history-table" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Data</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Typ</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Opis</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: right;">XP Bazowe</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: center;">Mnożnik</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: right;">XP Końcowe</th>
+                            <th style="padding: 10px; border: 1px solid #ddd; text-align: center;">Akcje</th>
+                        </tr>
+                    </thead>
+                    <tbody id="xp-history-body">
+                        <tr><td colspan="7" style="text-align: center; padding: 20px;">Ładowanie...</td></tr>
+                    </tbody>
+                </table>
+
+                <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+                    <div id="xp-history-pagination"></div>
+                    <div id="xp-history-summary" style="font-weight: bold;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Levels Tab -->
+        <div class="gam-tab-content" id="tab-levels">
+            <div class="zadaniomat-card">
+                <h2>📈 Konfiguracja poziomów</h2>
+                <p style="color: #666; margin-bottom: 15px;">Ustaw progi XP, nazwy i ikony dla każdego poziomu.</p>
+
+                <table class="levels-table" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 10px; border: 1px solid #ddd;">Poziom</th>
+                            <th style="padding: 10px; border: 1px solid #ddd;">XP (od)</th>
+                            <th style="padding: 10px; border: 1px solid #ddd;">Nazwa</th>
+                            <th style="padding: 10px; border: 1px solid #ddd;">Ikona</th>
+                        </tr>
+                    </thead>
+                    <tbody id="levels-body">
+                        <?php foreach ($config['levels'] as $level => $data): ?>
+                        <tr>
+                            <td style="padding: 10px; border: 1px solid #ddd; text-align: center; font-weight: bold;"><?php echo $level; ?></td>
+                            <td style="padding: 10px; border: 1px solid #ddd;">
+                                <input type="number" class="level-xp" data-level="<?php echo $level; ?>"
+                                       value="<?php echo $data['xp']; ?>" min="0"
+                                       style="width: 100px; padding: 6px; border: 1px solid #ddd; border-radius: 4px;">
+                            </td>
+                            <td style="padding: 10px; border: 1px solid #ddd;">
+                                <input type="text" class="level-name" data-level="<?php echo $level; ?>"
+                                       value="<?php echo esc_attr($data['name']); ?>"
+                                       style="width: 150px; padding: 6px; border: 1px solid #ddd; border-radius: 4px;">
+                            </td>
+                            <td style="padding: 10px; border: 1px solid #ddd;">
+                                <input type="text" class="level-icon" data-level="<?php echo $level; ?>"
+                                       value="<?php echo esc_attr($data['icon']); ?>"
+                                       style="width: 60px; padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center; font-size: 18px;">
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+
+                <div style="margin-top: 15px;">
+                    <button class="button button-primary" onclick="saveLevelsConfig()">💾 Zapisz poziomy</button>
+                    <button class="button" onclick="resetLevelsConfig()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
+                    <span id="levels-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- XP Values Tab -->
+        <div class="gam-tab-content" id="tab-xp-values">
+            <div class="zadaniomat-card">
+                <h2>⭐ Wartości XP za akcje</h2>
+                <p style="color: #666; margin-bottom: 15px;">Ustaw ile punktów XP jest przyznawane za poszczególne akcje.</p>
+
+                <div class="xp-values-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                    <!-- Zadania -->
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+                        <h4 style="margin-top: 0; color: #007bff;">📝 Zadania</h4>
+                        <div class="xp-value-item">
+                            <label>Ukończenie zadania:</label>
+                            <input type="number" class="xp-value" data-key="task_complete" value="<?php echo $config['xp_values']['task_complete']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>Ukończenie zadania cyklicznego:</label>
+                            <input type="number" class="xp-value" data-key="cyclic_task_complete" value="<?php echo $config['xp_values']['cyclic_task_complete']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>Bonus za kategorię celu:</label>
+                            <input type="number" class="xp-value" data-key="goal_category_bonus" value="<?php echo $config['xp_values']['goal_category_bonus']; ?>" min="0">
+                            <span class="xp-hint">XP (dodatkowo)</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>Wszystkie zadania dnia:</label>
+                            <input type="number" class="xp-value" data-key="all_tasks_day" value="<?php echo $config['xp_values']['all_tasks_day']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                    </div>
+
+                    <!-- Cele -->
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+                        <h4 style="margin-top: 0; color: #28a745;">🎯 Cele</h4>
+                        <div class="xp-value-item">
+                            <label>Osiągnięcie celu (bazowe):</label>
+                            <input type="number" class="xp-value" data-key="goal_achieved_base" value="<?php echo $config['xp_values']['goal_achieved_base']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>Bonus za chain (każdy kolejny):</label>
+                            <input type="number" class="xp-value" data-key="goal_chain_increment" value="<?php echo $config['xp_values']['goal_chain_increment']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>Wszystkie cele okresu:</label>
+                            <input type="number" class="xp-value" data-key="all_goals_period" value="<?php echo $config['xp_values']['all_goals_period']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                    </div>
+
+                    <!-- Bonusy czasowe -->
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+                        <h4 style="margin-top: 0; color: #ffc107;">⏰ Bonusy czasowe</h4>
+                        <div class="xp-value-item">
+                            <label>Wczesny start (przed 8:00):</label>
+                            <input type="number" class="xp-value" data-key="early_start_bonus" value="<?php echo $config['xp_values']['early_start_bonus']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>Wczesne planowanie (przed 10:00):</label>
+                            <input type="number" class="xp-value" data-key="early_planning_bonus" value="<?php echo $config['xp_values']['early_planning_bonus']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>Za każdą godzinę w kategorii:</label>
+                            <input type="number" class="xp-value" data-key="category_hour" value="<?php echo $config['xp_values']['category_hour']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                    </div>
+
+                    <!-- Pokrycie kategorii -->
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+                        <h4 style="margin-top: 0; color: #17a2b8;">📁 Pokrycie kategorii</h4>
+                        <div class="xp-value-item">
+                            <label>3 kategorie w dniu:</label>
+                            <input type="number" class="xp-value" data-key="coverage_3_categories" value="<?php echo $config['xp_values']['coverage_3_categories']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>4 kategorie w dniu:</label>
+                            <input type="number" class="xp-value" data-key="coverage_4_categories" value="<?php echo $config['xp_values']['coverage_4_categories']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>5 kategorii w dniu:</label>
+                            <input type="number" class="xp-value" data-key="coverage_5_categories" value="<?php echo $config['xp_values']['coverage_5_categories']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                        <div class="xp-value-item">
+                            <label>6 kategorii w dniu:</label>
+                            <input type="number" class="xp-value" data-key="coverage_6_categories" value="<?php echo $config['xp_values']['coverage_6_categories']; ?>" min="0">
+                            <span class="xp-hint">XP</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <button class="button button-primary" onclick="saveXPValues()">💾 Zapisz wartości XP</button>
+                    <button class="button" onclick="resetXPValues()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
+                    <span id="xp-values-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Multipliers Tab -->
+        <div class="gam-tab-content" id="tab-multipliers">
+            <div class="zadaniomat-card">
+                <h2>✖️ Mnożniki</h2>
+                <p style="color: #666; margin-bottom: 15px;">Ustaw mnożniki XP za streak i combo.</p>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px;">
+                    <!-- Streak Multipliers -->
+                    <div style="background: #fff3cd; padding: 20px; border-radius: 8px;">
+                        <h3 style="margin-top: 0;">🔥 Mnożniki Streak</h3>
+                        <p style="font-size: 12px; color: #856404;">Mnożnik zależy od długości aktualnego streaka (dni roboczych z rzędu).</p>
+
+                        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                            <thead>
+                                <tr style="background: rgba(0,0,0,0.1);">
+                                    <th style="padding: 8px; text-align: left;">Min. dni</th>
+                                    <th style="padding: 8px; text-align: left;">Mnożnik</th>
+                                </tr>
+                            </thead>
+                            <tbody id="streak-multipliers-body">
+                                <?php foreach ($config['streak_multipliers'] as $idx => $mult): ?>
+                                <tr data-idx="<?php echo $idx; ?>">
+                                    <td style="padding: 8px;">
+                                        <input type="number" class="streak-mult-days" value="<?php echo $mult['min_days']; ?>" min="0" style="width: 60px; padding: 4px;">
+                                    </td>
+                                    <td style="padding: 8px;">
+                                        <input type="number" class="streak-mult-value" value="<?php echo $mult['multiplier']; ?>" min="1" step="0.1" style="width: 60px; padding: 4px;"> x
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Combo Multipliers -->
+                    <div style="background: #d4edda; padding: 20px; border-radius: 8px;">
+                        <h3 style="margin-top: 0;">⚡ Mnożniki Combo</h3>
+                        <p style="font-size: 12px; color: #155724;">Mnożnik za zadania ukończone bez długiej przerwy (domyślnie 2h).</p>
+
+                        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                            <thead>
+                                <tr style="background: rgba(0,0,0,0.1);">
+                                    <th style="padding: 8px; text-align: left;">Min. combo</th>
+                                    <th style="padding: 8px; text-align: left;">Mnożnik</th>
+                                </tr>
+                            </thead>
+                            <tbody id="combo-multipliers-body">
+                                <?php foreach ($config['combo_multipliers'] as $idx => $mult): ?>
+                                <tr data-idx="<?php echo $idx; ?>">
+                                    <td style="padding: 8px;">
+                                        <input type="number" class="combo-mult-count" value="<?php echo $mult['min_combo']; ?>" min="0" style="width: 60px; padding: 4px;">
+                                    </td>
+                                    <td style="padding: 8px;">
+                                        <input type="number" class="combo-mult-value" value="<?php echo $mult['multiplier']; ?>" min="1" step="0.1" style="width: 60px; padding: 4px;"> x
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <button class="button button-primary" onclick="saveMultipliers()">💾 Zapisz mnożniki</button>
+                    <button class="button" onclick="resetMultipliers()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
+                    <span id="multipliers-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Challenges Tab -->
+        <div class="gam-tab-content" id="tab-challenges">
+            <div class="zadaniomat-card">
+                <h2>🎯 Wyzwania dnia</h2>
+                <p style="color: #666; margin-bottom: 15px;">Konfiguruj dostępne wyzwania, ich warunki i nagrody XP. Te wyzwania będą losowane każdego dnia.</p>
+
+                <table class="challenges-table" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 10px; border: 1px solid #ddd;">Klucz</th>
+                            <th style="padding: 10px; border: 1px solid #ddd;">Opis (widoczny)</th>
+                            <th style="padding: 10px; border: 1px solid #ddd;">XP</th>
+                            <th style="padding: 10px; border: 1px solid #ddd;">Trudność</th>
+                            <th style="padding: 10px; border: 1px solid #ddd;">ℹ️ Warunek (tooltip)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="challenges-body">
+                        <?php foreach ($challenges as $key => $ch): ?>
+                        <tr data-key="<?php echo esc_attr($key); ?>">
+                            <td style="padding: 8px; border: 1px solid #ddd; font-family: monospace; font-size: 11px;"><?php echo esc_html($key); ?></td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">
+                                <input type="text" class="challenge-desc" value="<?php echo esc_attr($ch['desc']); ?>" style="width: 100%; padding: 4px;">
+                            </td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">
+                                <input type="number" class="challenge-xp" value="<?php echo $ch['xp']; ?>" min="0" style="width: 60px; padding: 4px;">
+                            </td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">
+                                <select class="challenge-difficulty" style="padding: 4px;">
+                                    <option value="easy" <?php echo ($ch['difficulty'] ?? 'easy') === 'easy' ? 'selected' : ''; ?>>🟢 Łatwy</option>
+                                    <option value="medium" <?php echo ($ch['difficulty'] ?? 'easy') === 'medium' ? 'selected' : ''; ?>>🟡 Średni</option>
+                                    <option value="hard" <?php echo ($ch['difficulty'] ?? 'easy') === 'hard' ? 'selected' : ''; ?>>🔴 Trudny</option>
+                                </select>
+                            </td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">
+                                <input type="text" class="challenge-condition" value="<?php echo esc_attr($ch['condition'] ?? ''); ?>" style="width: 100%; padding: 4px;" placeholder="Warunek wyświetlany w tooltip...">
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+
+                <div style="margin-top: 20px;">
+                    <button class="button button-primary" onclick="saveChallenges()">💾 Zapisz wyzwania</button>
+                    <button class="button" onclick="resetChallenges()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
+                    <span id="challenges-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Achievements Tab -->
+        <div class="gam-tab-content" id="tab-achievements">
+            <div class="zadaniomat-card">
+                <h2>🏆 Osiągnięcia / Odznaki</h2>
+                <p style="color: #666; margin-bottom: 15px;">Konfiguruj dostępne osiągnięcia, ich warunki i nagrody XP.</p>
+
+                <div style="margin-bottom: 15px;">
+                    <input type="text" id="achievements-search" placeholder="🔍 Szukaj osiągnięcia..." style="padding: 8px 12px; width: 300px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+
+                <table class="achievements-table" style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                    <thead>
+                        <tr style="background: #f8f9fa;">
+                            <th style="padding: 8px; border: 1px solid #ddd;">Ikona</th>
+                            <th style="padding: 8px; border: 1px solid #ddd;">Nazwa</th>
+                            <th style="padding: 8px; border: 1px solid #ddd;">Opis</th>
+                            <th style="padding: 8px; border: 1px solid #ddd;">XP</th>
+                            <th style="padding: 8px; border: 1px solid #ddd;">ℹ️ Warunek (tooltip)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="achievements-body">
+                        <?php foreach ($achievements as $key => $ach): ?>
+                        <tr data-key="<?php echo esc_attr($key); ?>">
+                            <td style="padding: 6px; border: 1px solid #ddd; text-align: center;">
+                                <input type="text" class="ach-icon" value="<?php echo esc_attr($ach['icon']); ?>" style="width: 40px; padding: 4px; text-align: center; font-size: 16px;">
+                            </td>
+                            <td style="padding: 6px; border: 1px solid #ddd;">
+                                <input type="text" class="ach-name" value="<?php echo esc_attr($ach['name']); ?>" style="width: 100%; padding: 4px;">
+                            </td>
+                            <td style="padding: 6px; border: 1px solid #ddd;">
+                                <input type="text" class="ach-desc" value="<?php echo esc_attr($ach['desc']); ?>" style="width: 100%; padding: 4px;">
+                            </td>
+                            <td style="padding: 6px; border: 1px solid #ddd;">
+                                <input type="number" class="ach-xp" value="<?php echo $ach['xp']; ?>" min="0" style="width: 50px; padding: 4px;">
+                            </td>
+                            <td style="padding: 6px; border: 1px solid #ddd;">
+                                <input type="text" class="ach-condition" value="<?php echo esc_attr($ach['condition'] ?? ''); ?>" style="width: 100%; padding: 4px;" placeholder="Warunek...">
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+
+                <div style="margin-top: 20px;">
+                    <button class="button button-primary" onclick="saveAchievements()">💾 Zapisz osiągnięcia</button>
+                    <button class="button" onclick="resetAchievements()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
+                    <span id="achievements-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Other Settings Tab -->
+        <div class="gam-tab-content" id="tab-settings">
+            <div class="zadaniomat-card">
+                <h2>⚙️ Inne ustawienia gamifikacji</h2>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                    <!-- Time Settings -->
+                    <div style="background: #e3f2fd; padding: 20px; border-radius: 8px;">
+                        <h4 style="margin-top: 0;">⏰ Ustawienia czasowe</h4>
+
+                        <div class="setting-item">
+                            <label>Wczesny start przed:</label>
+                            <input type="time" id="time-early-start" value="<?php echo $config['time_settings']['early_start_before']; ?>">
+                        </div>
+                        <div class="setting-item">
+                            <label>Wczesne planowanie przed:</label>
+                            <input type="time" id="time-early-planning" value="<?php echo $config['time_settings']['early_planning_before']; ?>">
+                        </div>
+                        <div class="setting-item">
+                            <label>Timeout combo (godziny):</label>
+                            <input type="number" id="time-combo-timeout" value="<?php echo $config['time_settings']['combo_timeout_hours']; ?>" min="1" max="24">
+                        </div>
+                        <div class="setting-item">
+                            <label>Poranna praca - godziny:</label>
+                            <input type="number" id="time-morning-hours" value="<?php echo $config['time_settings']['morning_work_hours']; ?>" min="1" max="12">
+                        </div>
+                        <div class="setting-item">
+                            <label>Poranna praca - deadline:</label>
+                            <input type="time" id="time-morning-deadline" value="<?php echo $config['time_settings']['morning_work_deadline']; ?>">
+                        </div>
+                    </div>
+
+                    <!-- Streak Conditions -->
+                    <div style="background: #fff3cd; padding: 20px; border-radius: 8px;">
+                        <h4 style="margin-top: 0;">🔥 Warunki streaka</h4>
+                        <p style="font-size: 12px; color: #856404;">Dzień jest zaliczony do streaka jeśli:</p>
+
+                        <div class="setting-item">
+                            <label>Min. zadań:</label>
+                            <input type="number" id="streak-min-tasks" value="<?php echo $config['streak_conditions']['min_tasks']; ?>" min="1">
+                        </div>
+                        <div class="setting-item">
+                            <label>Min. godzin:</label>
+                            <input type="number" id="streak-min-hours" value="<?php echo $config['streak_conditions']['min_hours']; ?>" min="1">
+                        </div>
+                        <div class="setting-item">
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="streak-or-all" <?php echo $config['streak_conditions']['or_all_tasks_done'] ? 'checked' : ''; ?>>
+                                <span>Lub: wszystkie zadania dnia ukończone</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- XP Confirmation -->
+                    <div style="background: #f8d7da; padding: 20px; border-radius: 8px;">
+                        <h4 style="margin-top: 0;">✅ Potwierdzenie XP</h4>
+                        <p style="font-size: 12px; color: #721c24;">Czy wymagać potwierdzenia przed przyznaniem XP?</p>
+
+                        <div class="setting-item">
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="require-xp-confirmation" <?php echo $config['require_xp_confirmation'] ? 'checked' : ''; ?>>
+                                <span>Wymagaj potwierdzenia XP</span>
+                            </label>
+                            <p style="font-size: 11px; color: #999; margin-top: 5px;">
+                                Jeśli włączone, przed przyznaniem XP pojawi się popup z pytaniem o potwierdzenie.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <button class="button button-primary" onclick="saveOtherSettings()">💾 Zapisz ustawienia</button>
+                    <button class="button" onclick="resetOtherSettings()" style="margin-left: 10px;">🔄 Przywróć domyślne</button>
+                    <span id="other-save-status" style="margin-left: 15px; color: #28a745;"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .gam-settings-tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .gam-tab {
+            padding: 10px 15px;
+            background: #f0f0f1;
+            border: 1px solid #c3c4c7;
+            border-radius: 4px 4px 0 0;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .gam-tab:hover {
+            background: #e5e5e5;
+        }
+        .gam-tab.active {
+            background: #fff;
+            border-bottom-color: #fff;
+            font-weight: bold;
+        }
+        .gam-tab-content {
+            display: none;
+        }
+        .gam-tab-content.active {
+            display: block;
+        }
+        .xp-value-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .xp-value-item label {
+            flex: 1;
+            font-size: 13px;
+        }
+        .xp-value-item input {
+            width: 70px;
+            padding: 6px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            text-align: right;
+        }
+        .xp-hint {
+            font-size: 11px;
+            color: #666;
+            width: 80px;
+        }
+        .setting-item {
+            margin-bottom: 15px;
+        }
+        .setting-item label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 13px;
+        }
+        .setting-item input[type="time"],
+        .setting-item input[type="number"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 120px;
+        }
+        .xp-history-table tr:hover {
+            background: #f8f9fa;
+        }
+        .btn-delete-xp {
+            background: #dc3545;
+            color: #fff;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .btn-delete-xp:hover {
+            background: #c82333;
+        }
+    </style>
+
+    <script>
+    jQuery(document).ready(function($) {
+        var nonce = '<?php echo wp_create_nonce('zadaniomat_ajax'); ?>';
+        var ajaxurl = '<?php echo admin_url('admin-ajax.php'); ?>';
+        var currentPage = 1;
+        var perPage = 50;
+
+        // Tab switching
+        $('.gam-tab').on('click', function() {
+            var tabId = $(this).data('tab');
+            $('.gam-tab').removeClass('active');
+            $(this).addClass('active');
+            $('.gam-tab-content').removeClass('active');
+            $('#tab-' + tabId).addClass('active');
+
+            if (tabId === 'xp-history') {
+                loadXPHistory();
+            }
+        });
+
+        // Load XP History
+        window.loadXPHistory = function(reset) {
+            if (reset) currentPage = 1;
+            var filter = $('#xp-history-filter').val();
+            var date = $('#xp-history-date').val();
+
+            $('#xp-history-body').html('<tr><td colspan="7" style="text-align:center;padding:20px;">Ładowanie...</td></tr>');
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_xp_history_advanced',
+                nonce: nonce,
+                page: currentPage,
+                per_page: perPage,
+                filter_type: filter,
+                filter_date: date
+            }, function(response) {
+                if (response.success) {
+                    renderXPHistory(response.data);
+                }
+            });
+        };
+
+        function renderXPHistory(data) {
+            var html = '';
+            if (data.entries.length === 0) {
+                html = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#666;">Brak wpisów do wyświetlenia</td></tr>';
+            } else {
+                data.entries.forEach(function(entry) {
+                    var dateStr = new Date(entry.created_at).toLocaleString('pl-PL');
+                    html += '<tr data-id="' + entry.id + '">';
+                    html += '<td style="padding:8px;border:1px solid #ddd;">' + dateStr + '</td>';
+                    html += '<td style="padding:8px;border:1px solid #ddd;"><span class="xp-type-badge type-' + entry.xp_type + '">' + escapeHtml(entry.xp_type) + '</span></td>';
+                    html += '<td style="padding:8px;border:1px solid #ddd;">' + escapeHtml(entry.description || '-') + '</td>';
+                    html += '<td style="padding:8px;border:1px solid #ddd;text-align:right;">' + entry.xp_amount + '</td>';
+                    html += '<td style="padding:8px;border:1px solid #ddd;text-align:center;">' + (parseFloat(entry.multiplier) || 1).toFixed(1) + 'x</td>';
+                    html += '<td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:bold;color:#28a745;">+' + entry.xp_final + '</td>';
+                    html += '<td style="padding:8px;border:1px solid #ddd;text-align:center;"><button class="btn-delete-xp" onclick="deleteXPEntry(' + entry.id + ')">🗑️</button></td>';
+                    html += '</tr>';
+                });
+            }
+            $('#xp-history-body').html(html);
+
+            // Summary
+            $('#xp-history-summary').html('Łącznie: <span style="color:#28a745;">+' + data.total_xp + ' XP</span> (wpisów: ' + data.total_count + ')');
+
+            // Pagination
+            var totalPages = Math.ceil(data.total_count / perPage);
+            var pagHtml = '';
+            if (totalPages > 1) {
+                for (var i = 1; i <= totalPages; i++) {
+                    pagHtml += '<button class="button ' + (i === currentPage ? 'button-primary' : '') + '" onclick="goToXPPage(' + i + ')">' + i + '</button> ';
+                }
+            }
+            $('#xp-history-pagination').html(pagHtml);
+        }
+
+        window.goToXPPage = function(page) {
+            currentPage = page;
+            loadXPHistory();
+        };
+
+        window.deleteXPEntry = function(id) {
+            if (!confirm('Na pewno usunąć ten wpis XP? Punkty zostaną odjęte od konta.')) return;
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_delete_xp_entry',
+                nonce: nonce,
+                entry_id: id
+            }, function(response) {
+                if (response.success) {
+                    showToast('Wpis XP usunięty, punkty odjęte', 'success');
+                    loadXPHistory();
+                } else {
+                    showToast('Błąd: ' + (response.data || 'Nieznany błąd'), 'error');
+                }
+            });
+        };
+
+        // Save Levels
+        window.saveLevelsConfig = function() {
+            var levels = {};
+            $('.level-xp').each(function() {
+                var lvl = $(this).data('level');
+                levels[lvl] = {
+                    xp: parseInt($(this).val()) || 0,
+                    name: $('.level-name[data-level="' + lvl + '"]').val(),
+                    icon: $('.level-icon[data-level="' + lvl + '"]').val()
+                };
+            });
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_gam_config',
+                nonce: nonce,
+                config_key: 'levels',
+                config_value: JSON.stringify(levels)
+            }, function(response) {
+                if (response.success) {
+                    $('#levels-save-status').text('✅ Zapisano!').fadeIn().delay(2000).fadeOut();
+                }
+            });
+        };
+
+        window.resetLevelsConfig = function() {
+            if (!confirm('Przywrócić domyślne poziomy?')) return;
+            $.post(ajaxurl, {
+                action: 'zadaniomat_reset_gam_config',
+                nonce: nonce,
+                config_key: 'levels'
+            }, function(response) {
+                if (response.success) {
+                    location.reload();
+                }
+            });
+        };
+
+        // Save XP Values
+        window.saveXPValues = function() {
+            var xpValues = {};
+            $('.xp-value').each(function() {
+                xpValues[$(this).data('key')] = parseInt($(this).val()) || 0;
+            });
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_gam_config',
+                nonce: nonce,
+                config_key: 'xp_values',
+                config_value: JSON.stringify(xpValues)
+            }, function(response) {
+                if (response.success) {
+                    $('#xp-values-save-status').text('✅ Zapisano!').fadeIn().delay(2000).fadeOut();
+                }
+            });
+        };
+
+        window.resetXPValues = function() {
+            if (!confirm('Przywrócić domyślne wartości XP?')) return;
+            $.post(ajaxurl, {
+                action: 'zadaniomat_reset_gam_config',
+                nonce: nonce,
+                config_key: 'xp_values'
+            }, function(response) {
+                if (response.success) {
+                    location.reload();
+                }
+            });
+        };
+
+        // Save Multipliers
+        window.saveMultipliers = function() {
+            var streakMults = [];
+            $('#streak-multipliers-body tr').each(function() {
+                streakMults.push({
+                    min_days: parseInt($(this).find('.streak-mult-days').val()) || 0,
+                    multiplier: parseFloat($(this).find('.streak-mult-value').val()) || 1.0
+                });
+            });
+
+            var comboMults = [];
+            $('#combo-multipliers-body tr').each(function() {
+                comboMults.push({
+                    min_combo: parseInt($(this).find('.combo-mult-count').val()) || 0,
+                    multiplier: parseFloat($(this).find('.combo-mult-value').val()) || 1.0
+                });
+            });
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_gam_config',
+                nonce: nonce,
+                config_key: 'multipliers',
+                streak_multipliers: JSON.stringify(streakMults),
+                combo_multipliers: JSON.stringify(comboMults)
+            }, function(response) {
+                if (response.success) {
+                    $('#multipliers-save-status').text('✅ Zapisano!').fadeIn().delay(2000).fadeOut();
+                }
+            });
+        };
+
+        window.resetMultipliers = function() {
+            if (!confirm('Przywrócić domyślne mnożniki?')) return;
+            $.post(ajaxurl, {
+                action: 'zadaniomat_reset_gam_config',
+                nonce: nonce,
+                config_key: 'multipliers'
+            }, function(response) {
+                if (response.success) {
+                    location.reload();
+                }
+            });
+        };
+
+        // Save Challenges
+        window.saveChallenges = function() {
+            var challenges = {};
+            $('#challenges-body tr').each(function() {
+                var key = $(this).data('key');
+                challenges[key] = {
+                    desc: $(this).find('.challenge-desc').val(),
+                    xp: parseInt($(this).find('.challenge-xp').val()) || 0,
+                    difficulty: $(this).find('.challenge-difficulty').val(),
+                    condition: $(this).find('.challenge-condition').val()
+                };
+            });
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_challenges_config',
+                nonce: nonce,
+                challenges: JSON.stringify(challenges)
+            }, function(response) {
+                if (response.success) {
+                    $('#challenges-save-status').text('✅ Zapisano!').fadeIn().delay(2000).fadeOut();
+                }
+            });
+        };
+
+        window.resetChallenges = function() {
+            if (!confirm('Przywrócić domyślne wyzwania?')) return;
+            $.post(ajaxurl, {
+                action: 'zadaniomat_reset_challenges_config',
+                nonce: nonce
+            }, function(response) {
+                if (response.success) {
+                    location.reload();
+                }
+            });
+        };
+
+        // Save Achievements
+        window.saveAchievements = function() {
+            var achievements = {};
+            $('#achievements-body tr').each(function() {
+                var key = $(this).data('key');
+                achievements[key] = {
+                    icon: $(this).find('.ach-icon').val(),
+                    name: $(this).find('.ach-name').val(),
+                    desc: $(this).find('.ach-desc').val(),
+                    xp: parseInt($(this).find('.ach-xp').val()) || 0,
+                    condition: $(this).find('.ach-condition').val()
+                };
+            });
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_achievements_config',
+                nonce: nonce,
+                achievements: JSON.stringify(achievements)
+            }, function(response) {
+                if (response.success) {
+                    $('#achievements-save-status').text('✅ Zapisano!').fadeIn().delay(2000).fadeOut();
+                }
+            });
+        };
+
+        window.resetAchievements = function() {
+            if (!confirm('Przywrócić domyślne osiągnięcia?')) return;
+            $.post(ajaxurl, {
+                action: 'zadaniomat_reset_achievements_config',
+                nonce: nonce
+            }, function(response) {
+                if (response.success) {
+                    location.reload();
+                }
+            });
+        };
+
+        // Save Other Settings
+        window.saveOtherSettings = function() {
+            var timeSettings = {
+                early_start_before: $('#time-early-start').val(),
+                early_planning_before: $('#time-early-planning').val(),
+                combo_timeout_hours: parseInt($('#time-combo-timeout').val()) || 2,
+                morning_work_hours: parseInt($('#time-morning-hours').val()) || 3,
+                morning_work_deadline: $('#time-morning-deadline').val()
+            };
+
+            var streakConditions = {
+                min_tasks: parseInt($('#streak-min-tasks').val()) || 3,
+                min_hours: parseInt($('#streak-min-hours').val()) || 4,
+                or_all_tasks_done: $('#streak-or-all').is(':checked')
+            };
+
+            var requireConfirmation = $('#require-xp-confirmation').is(':checked');
+
+            $.post(ajaxurl, {
+                action: 'zadaniomat_save_gam_config',
+                nonce: nonce,
+                config_key: 'other',
+                time_settings: JSON.stringify(timeSettings),
+                streak_conditions: JSON.stringify(streakConditions),
+                require_xp_confirmation: requireConfirmation ? 1 : 0
+            }, function(response) {
+                if (response.success) {
+                    $('#other-save-status').text('✅ Zapisano!').fadeIn().delay(2000).fadeOut();
+                }
+            });
+        };
+
+        window.resetOtherSettings = function() {
+            if (!confirm('Przywrócić domyślne ustawienia?')) return;
+            $.post(ajaxurl, {
+                action: 'zadaniomat_reset_gam_config',
+                nonce: nonce,
+                config_key: 'other'
+            }, function(response) {
+                if (response.success) {
+                    location.reload();
+                }
+            });
+        };
+
+        // Search achievements
+        $('#achievements-search').on('input', function() {
+            var query = $(this).val().toLowerCase();
+            $('#achievements-body tr').each(function() {
+                var text = $(this).text().toLowerCase();
+                $(this).toggle(text.indexOf(query) >= 0);
+            });
+        });
+
+        // Toast helper
+        window.showToast = function(message, type) {
+            var toast = $('<div style="position:fixed;bottom:20px;right:20px;background:' + (type === 'success' ? '#28a745' : '#dc3545') + ';color:#fff;padding:12px 20px;border-radius:8px;z-index:9999;">' + message + '</div>');
+            $('body').append(toast);
+            setTimeout(function() { toast.fadeOut(300, function() { $(this).remove(); }); }, 3000);
+        };
+
+        // Escape HTML
+        window.escapeHtml = function(text) {
+            if (!text) return '';
+            return text.toString()
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        };
+
+        // Initial load
+        loadXPHistory();
     });
     </script>
     <?php
