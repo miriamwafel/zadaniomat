@@ -3072,12 +3072,39 @@ add_action('wp_ajax_zadaniomat_get_achievements', function() {
 // ABSTRACT GOALS AJAX HANDLERS
 // =============================================
 
+// Helper function to ensure abstract goals table exists
+function zadaniomat_ensure_abstract_goals_table() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'zadaniomat_abstract_goals';
+
+    // Check if table exists
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table'") != $table) {
+        $charset_collate = $wpdb->get_charset_collate();
+        $sql = "CREATE TABLE IF NOT EXISTS $table (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL DEFAULT 1,
+            nazwa VARCHAR(255) NOT NULL,
+            opis TEXT,
+            xp_reward INT NOT NULL DEFAULT 100,
+            completed TINYINT(1) NOT NULL DEFAULT 0,
+            completed_at TIMESTAMP NULL DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            aktywne TINYINT(1) NOT NULL DEFAULT 1
+        ) $charset_collate;";
+
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+    }
+
+    return $table;
+}
+
 // Pobierz listę abstrakcyjnych celów
 add_action('wp_ajax_zadaniomat_get_abstract_goals', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
-    $table = $wpdb->prefix . 'zadaniomat_abstract_goals';
+    $table = zadaniomat_ensure_abstract_goals_table();
     $include_completed = !empty($_POST['include_completed']);
 
     if ($include_completed) {
@@ -3092,7 +3119,7 @@ add_action('wp_ajax_zadaniomat_get_abstract_goals', function() {
         );
     }
 
-    wp_send_json_success(['goals' => $goals]);
+    wp_send_json_success(['goals' => $goals ?: []]);
 });
 
 // Dodaj abstrakcyjny cel
@@ -3100,7 +3127,7 @@ add_action('wp_ajax_zadaniomat_add_abstract_goal', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
-    $table = $wpdb->prefix . 'zadaniomat_abstract_goals';
+    $table = zadaniomat_ensure_abstract_goals_table();
     $nazwa = sanitize_text_field($_POST['nazwa'] ?? '');
     $opis = sanitize_textarea_field($_POST['opis'] ?? '');
     $xp_reward = intval($_POST['xp_reward'] ?? 100);
@@ -3110,12 +3137,17 @@ add_action('wp_ajax_zadaniomat_add_abstract_goal', function() {
         return;
     }
 
-    $wpdb->insert($table, [
+    $result = $wpdb->insert($table, [
         'user_id' => 1,
         'nazwa' => $nazwa,
         'opis' => $opis,
         'xp_reward' => $xp_reward
     ]);
+
+    if ($result === false) {
+        wp_send_json_error('Błąd bazy danych: ' . $wpdb->last_error);
+        return;
+    }
 
     wp_send_json_success(['id' => $wpdb->insert_id]);
 });
@@ -3125,7 +3157,7 @@ add_action('wp_ajax_zadaniomat_complete_abstract_goal', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
-    $table = $wpdb->prefix . 'zadaniomat_abstract_goals';
+    $table = zadaniomat_ensure_abstract_goals_table();
     $id = intval($_POST['id'] ?? 0);
 
     if (!$id) {
@@ -3162,7 +3194,7 @@ add_action('wp_ajax_zadaniomat_delete_abstract_goal', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
-    $table = $wpdb->prefix . 'zadaniomat_abstract_goals';
+    $table = zadaniomat_ensure_abstract_goals_table();
     $id = intval($_POST['id'] ?? 0);
 
     if (!$id) {
@@ -3180,7 +3212,7 @@ add_action('wp_ajax_zadaniomat_edit_abstract_goal', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
-    $table = $wpdb->prefix . 'zadaniomat_abstract_goals';
+    $table = zadaniomat_ensure_abstract_goals_table();
     $id = intval($_POST['id'] ?? 0);
     $nazwa = sanitize_text_field($_POST['nazwa'] ?? '');
     $opis = sanitize_textarea_field($_POST['opis'] ?? '');
@@ -7832,8 +7864,10 @@ function zadaniomat_page_main() {
             var $row = $(btn).closest('tr');
             var day = $row.data('day');
             var kategoria = $row.data('kategoria');
-            var zadanie = $row.find('.slot-zadanie').val().trim();
-            var cel = $row.find('.slot-cel').val().trim();
+            var zadanieVal = $row.find('.slot-zadanie').val();
+            var celVal = $row.find('.slot-cel').val();
+            var zadanie = zadanieVal ? zadanieVal.trim() : '';
+            var cel = celVal ? celVal.trim() : '';
             var czas = $row.find('.slot-czas').val() || 0;
             
             if (!zadanie) {
@@ -12089,11 +12123,17 @@ function zadaniomat_page_gamification() {
             $.post(ajaxurl, {
                 action: 'zadaniomat_get_abstract_goals',
                 nonce: nonce,
-                include_completed: true
+                include_completed: 'true'
             }, function(response) {
                 if (response.success) {
-                    renderSettingsAbstractGoals(response.data.goals);
+                    renderSettingsAbstractGoals(response.data.goals || []);
+                } else {
+                    console.error('Error loading abstract goals:', response);
+                    $('#abstract-goals-body').html('<tr><td colspan="5" style="text-align:center;padding:20px;color:#dc3545;">Błąd ładowania celów: ' + (response.data || 'Nieznany błąd') + '</td></tr>');
                 }
+            }).fail(function(xhr, status, error) {
+                console.error('AJAX failed:', status, error);
+                $('#abstract-goals-body').html('<tr><td colspan="5" style="text-align:center;padding:20px;color:#dc3545;">Błąd połączenia: ' + error + '</td></tr>');
             });
         };
 
