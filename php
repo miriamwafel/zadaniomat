@@ -197,12 +197,6 @@ function zadaniomat_create_tables() {
         earned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
-    // Migration - add condition_text column if not exists
-    $condition_col = $wpdb->get_results("SHOW COLUMNS FROM $table_xp_log LIKE 'condition_text'");
-    if (empty($condition_col)) {
-        $wpdb->query("ALTER TABLE $table_xp_log ADD COLUMN condition_text VARCHAR(255) DEFAULT NULL AFTER description");
-    }
-
     // Zdobyte odznaki
     $table_achievements = $wpdb->prefix . 'zadaniomat_achievements';
     $sql11 = "CREATE TABLE IF NOT EXISTS $table_achievements (
@@ -373,6 +367,15 @@ add_action('admin_init', function() {
     $table_gamification_stats = $wpdb->prefix . 'zadaniomat_gamification_stats';
     if($wpdb->get_var("SHOW TABLES LIKE '$table_gamification_stats'") != $table_gamification_stats) {
         zadaniomat_create_tables();
+    }
+
+    // Migracja - dodaj kolumnę condition_text do xp_log
+    $table_xp_log = $wpdb->prefix . 'zadaniomat_xp_log';
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table_xp_log'") == $table_xp_log) {
+        $xp_log_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_xp_log");
+        if (!in_array('condition_text', $xp_log_columns)) {
+            $wpdb->query("ALTER TABLE $table_xp_log ADD COLUMN condition_text VARCHAR(255) DEFAULT NULL AFTER description");
+        }
     }
 });
 
@@ -866,17 +869,24 @@ function zadaniomat_add_xp($user_id, $xp_amount, $xp_type, $description = '', $r
         'current_level' => $new_level
     ], ['user_id' => $user_id]);
 
-    // Zapisz log
-    $wpdb->insert($log_table, [
+    // Zapisz log - najpierw sprawdź czy kolumna condition_text istnieje
+    $log_data = [
         'user_id' => $user_id,
         'xp_amount' => $final_xp,
         'xp_type' => $xp_type,
         'multiplier' => $multiplier,
         'description' => $description,
-        'condition_text' => $condition_text,
         'reference_id' => $reference_id,
         'reference_type' => $reference_type
-    ]);
+    ];
+
+    // Dodaj condition_text tylko jeśli kolumna istnieje
+    $columns = $wpdb->get_col("SHOW COLUMNS FROM $log_table");
+    if (in_array('condition_text', $columns)) {
+        $log_data['condition_text'] = $condition_text;
+    }
+
+    $wpdb->insert($log_table, $log_data);
 
     // Sprawdź level up
     $level_up = $new_level > $old_level;
@@ -6633,12 +6643,6 @@ function zadaniomat_page_main() {
                                 <label>⏱️ Planowany czas (min)</label>
                                 <input type="number" id="task-czas" min="0" placeholder="np. 30">
                             </div>
-                            <div class="form-group" style="display: flex; align-items: flex-end;">
-                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 0;">
-                                    <input type="checkbox" id="task-cykliczne" style="width: auto; margin: 0;">
-                                    <span>🔄 Cykliczne</span>
-                                </label>
-                            </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group wide">
@@ -7760,16 +7764,15 @@ function zadaniomat_page_main() {
         window.renderTaskRow = function(t, day) {
             var taskStatus = t.status || 'nowe';
             var statusClass = 'status-' + taskStatus;
-            var isCykliczne = t.jest_cykliczne == 1;
 
             var planowany = parseInt(t.planowany_czas) || 0;
             var faktyczny = parseInt(t.faktyczny_czas) || 0;
             var isActiveTimer = activeTimer && activeTimer.taskId == t.id;
 
-            var html = '<tr class="' + statusClass + (isCykliczne ? ' task-cykliczne' : '') + '" data-task-id="' + t.id + '" data-cykliczne="' + (isCykliczne ? '1' : '0') + '">';
+            var html = '<tr class="' + statusClass + '" data-task-id="' + t.id + '">';
             html += '<td><input type="checkbox" class="task-checkbox" data-task-id="' + t.id + '" data-day="' + day + '"></td>';
             html += '<td><span class="kategoria-badge ' + t.kategoria + '">' + t.kategoria_label + '</span></td>';
-            html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong>' + (isCykliczne ? ' <span class="cykliczne-badge">🔄</span>' : '') + '</td>';
+            html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong></td>';
             html += '<td style="font-size:12px;color:#666;">' + escapeHtml(t.cel_todo || '') + '</td>';
 
             // Kolumna czasu z timerem
@@ -8298,8 +8301,7 @@ function zadaniomat_page_main() {
                     kategoria: $('#task-kategoria').val(),
                     zadanie: $('#task-nazwa').val(),
                     cel_todo: $('#task-cel').val(),
-                    planowany_czas: $('#task-czas').val() || 0,
-                    jest_cykliczne: $('#task-cykliczne').is(':checked') ? 1 : 0
+                    planowany_czas: $('#task-czas').val() || 0
                 };
                 
                 if (editId) data.id = editId;
@@ -8714,7 +8716,6 @@ function zadaniomat_page_main() {
             var cel = $row.find('td:eq(2)').text();
             var plan = $row.find('td:eq(3)').text();
             var dzien = $daySection.data('day');
-            var isCykliczne = $row.data('cykliczne') == 1;
 
             $('#edit-task-id').val(id);
             $('#task-date').val(dzien);
@@ -8722,7 +8723,6 @@ function zadaniomat_page_main() {
             $('#task-nazwa').val(zadanie);
             $('#task-cel').val(cel);
             $('#task-czas').val(plan);
-            $('#task-cykliczne').prop('checked', isCykliczne);
 
             $('#form-title').text('✏️ Edytuj zadanie');
             $('#submit-btn').text('💾 Zapisz zmiany');
@@ -8740,7 +8740,6 @@ function zadaniomat_page_main() {
             $('#task-nazwa').val('');
             $('#task-cel').val('');
             $('#task-czas').val('');
-            $('#task-cykliczne').prop('checked', false);
             $('#form-title').text('➕ Dodaj zadanie');
             $('#submit-btn').text('➕ Dodaj zadanie');
             $('#cancel-edit-btn').hide();
