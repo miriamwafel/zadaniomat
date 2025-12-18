@@ -1365,15 +1365,25 @@ function zadaniomat_check_daily_challenges($user_id, $date = null) {
                 $config = zadaniomat_get_gam_config();
                 $required_hours = $config['time_settings']['morning_work_hours'] ?? 3;
                 $deadline = $config['time_settings']['morning_work_deadline'] ?? '12:00';
+                $current_time = date('H:i');
 
-                // Get tasks completed before deadline with actual time
-                $minutes_before_deadline = $wpdb->get_var($wpdb->prepare(
-                    "SELECT SUM(faktyczny_czas) FROM $table_zadania
-                     WHERE dzien = %s AND status = 'zakonczone'
-                     AND TIME(updated_at) <= %s",
-                    $date, $deadline . ':00'
-                ));
-                $is_completed = ($minutes_before_deadline ?: 0) >= ($required_hours * 60);
+                // If we're still before the deadline, count all completed work today
+                // After deadline, only count work that was marked complete before deadline
+                if ($current_time <= $deadline) {
+                    $minutes = $wpdb->get_var($wpdb->prepare(
+                        "SELECT SUM(faktyczny_czas) FROM $table_zadania
+                         WHERE dzien = %s AND status = 'zakonczone'",
+                        $date
+                    ));
+                } else {
+                    $minutes = $wpdb->get_var($wpdb->prepare(
+                        "SELECT SUM(faktyczny_czas) FROM $table_zadania
+                         WHERE dzien = %s AND status = 'zakonczone'
+                         AND DATE(updated_at) = %s AND TIME(updated_at) <= %s",
+                        $date, $date, $deadline . ':00'
+                    ));
+                }
+                $is_completed = ($minutes ?: 0) >= ($required_hours * 60);
                 break;
 
             case 'all_cyclic':
@@ -3269,7 +3279,7 @@ add_action('wp_ajax_zadaniomat_set_morning_checklist', function() {
             global $wpdb;
             $xp_log_table = $wpdb->prefix . 'zadaniomat_xp_log';
             $already_awarded = $wpdb->get_var($wpdb->prepare(
-                "SELECT COUNT(*) FROM $xp_log_table WHERE user_id = 1 AND xp_type = 'early_planning' AND DATE(created_at) = %s",
+                "SELECT COUNT(*) FROM $xp_log_table WHERE user_id = 1 AND xp_type = 'early_planning' AND DATE(earned_at) = %s",
                 $date
             ));
 
@@ -3284,6 +3294,9 @@ add_action('wp_ajax_zadaniomat_set_morning_checklist', function() {
     }
 
     update_option('zadaniomat_morning_checklist', $data);
+
+    // Check daily challenges after morning checklist is updated
+    zadaniomat_check_daily_challenges(1, $date);
 
     wp_send_json_success([
         'checked' => $checked,
