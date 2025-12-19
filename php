@@ -422,6 +422,54 @@ add_action('admin_init', function() {
         $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN recurring_template_id INT DEFAULT NULL");
     }
 
+    // Migracja - normalizuj klucze kategorii w zadaniach i opcjach
+    // Konwertuj wszystko do formatu: małe litery, podkreślniki zamiast spacji
+
+    // 1. Pobierz wszystkie unikalne kategorie z zadań
+    $kategorie_w_zadaniach = $wpdb->get_col("SELECT DISTINCT kategoria FROM $table_zadania WHERE kategoria IS NOT NULL");
+    $kategorie_w_stale = $wpdb->get_col("SELECT DISTINCT kategoria FROM $table_stale WHERE kategoria IS NOT NULL");
+    $wszystkie_kategorie = array_unique(array_merge($kategorie_w_zadaniach, $kategorie_w_stale));
+
+    // 2. Dla każdej kategorii, jeśli nie jest w formacie klucza, zaktualizuj
+    foreach ($wszystkie_kategorie as $kat) {
+        $proper_key = sanitize_key(str_replace(' ', '_', $kat));
+        if ($kat !== $proper_key && !empty($proper_key)) {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_zadania SET kategoria = %s WHERE kategoria = %s",
+                $proper_key, $kat
+            ));
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_stale SET kategoria = %s WHERE kategoria = %s",
+                $proper_key, $kat
+            ));
+        }
+    }
+
+    // 3. Napraw też zapisane opcje kategorii
+    $saved_kategorie = get_option('zadaniomat_kategorie_zadania');
+    if ($saved_kategorie && is_array($saved_kategorie)) {
+        $fixed_kategorie = [];
+        foreach ($saved_kategorie as $key => $label) {
+            $proper_key = sanitize_key(str_replace(' ', '_', $key));
+            $fixed_kategorie[$proper_key] = $label;
+        }
+        if ($fixed_kategorie !== $saved_kategorie) {
+            update_option('zadaniomat_kategorie_zadania', $fixed_kategorie);
+        }
+    }
+
+    $saved_kategorie_cele = get_option('zadaniomat_kategorie');
+    if ($saved_kategorie_cele && is_array($saved_kategorie_cele)) {
+        $fixed_kategorie_cele = [];
+        foreach ($saved_kategorie_cele as $key => $label) {
+            $proper_key = sanitize_key(str_replace(' ', '_', $key));
+            $fixed_kategorie_cele[$proper_key] = $label;
+        }
+        if ($fixed_kategorie_cele !== $saved_kategorie_cele) {
+            update_option('zadaniomat_kategorie', $fixed_kategorie_cele);
+        }
+    }
+
     // Migracja - dodaj kolumnę cel_todo do stałych zadań
     $stale_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_stale");
     if (!in_array('cel_todo', $stale_columns)) {
