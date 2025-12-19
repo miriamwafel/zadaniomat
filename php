@@ -156,6 +156,17 @@ function zadaniomat_create_tables() {
         $wpdb->query("ALTER TABLE $table_stale ADD COLUMN cel_todo TEXT AFTER kategoria");
     }
 
+    // Tabela nadpisań godzin stałych zadań per okres
+    $table_stale_overrides = $wpdb->prefix . 'zadaniomat_stale_overrides';
+    $sql_overrides = "CREATE TABLE IF NOT EXISTS $table_stale_overrides (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        stale_zadanie_id INT NOT NULL,
+        okres_id INT NOT NULL,
+        godzina_start TIME DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY stale_okres (stale_zadanie_id, okres_id)
+    ) $charset_collate;";
+
     // Tabela dni wolnych
     $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
     $sql7 = "CREATE TABLE IF NOT EXISTS $table_dni_wolne (
@@ -269,6 +280,7 @@ function zadaniomat_create_tables() {
     dbDelta($sql4);
     dbDelta($sql5);
     dbDelta($sql6);
+    dbDelta($sql_overrides);
     dbDelta($sql7);
     dbDelta($sql8);
     dbDelta($sql9);
@@ -480,6 +492,17 @@ function zadaniomat_generate_recurring_tasks($template_id, $rok_id = null) {
         $rok->id
     ));
 
+    // Pobierz nadpisania godzin per okres
+    $table_overrides = $wpdb->prefix . 'zadaniomat_stale_overrides';
+    $overrides_raw = $wpdb->get_results($wpdb->prepare(
+        "SELECT okres_id, godzina_start FROM $table_overrides WHERE stale_zadanie_id = %d",
+        $template_id
+    ));
+    $godziny_override = [];
+    foreach ($overrides_raw as $o) {
+        $godziny_override[$o->okres_id] = $o->godzina_start;
+    }
+
     $created_tasks = [];
     $start_date = new DateTime($rok->data_start);
     $end_date = new DateTime($rok->data_koniec);
@@ -544,6 +567,21 @@ function zadaniomat_generate_recurring_tasks($template_id, $rok_id = null) {
                     }
                 }
 
+                // Użyj nadpisanej godziny dla okresu lub domyślnej z template'a
+                $godzina_start = $template->godzina_start;
+                $godzina_koniec = $template->godzina_koniec;
+                if ($okres_id && isset($godziny_override[$okres_id])) {
+                    $godzina_start = $godziny_override[$okres_id];
+                    // Oblicz godzinę końca na podstawie nowej godziny startu i czasu trwania
+                    if ($godzina_start && $template->planowany_czas) {
+                        $start_time = DateTime::createFromFormat('H:i:s', $godzina_start) ?: DateTime::createFromFormat('H:i', $godzina_start);
+                        if ($start_time) {
+                            $start_time->modify('+' . intval($template->planowany_czas) . ' minutes');
+                            $godzina_koniec = $start_time->format('H:i:s');
+                        }
+                    }
+                }
+
                 // Utwórz zadanie
                 $wpdb->insert($table_zadania, [
                     'okres_id' => $okres_id,
@@ -553,8 +591,8 @@ function zadaniomat_generate_recurring_tasks($template_id, $rok_id = null) {
                     'cel_todo' => $template->cel_todo,
                     'planowany_czas' => $template->planowany_czas,
                     'status' => 'nowe',
-                    'godzina_start' => $template->godzina_start,
-                    'godzina_koniec' => $template->godzina_koniec,
+                    'godzina_start' => $godzina_start,
+                    'godzina_koniec' => $godzina_koniec,
                     'jest_cykliczne' => 1,
                     'recurring_template_id' => $template_id
                 ]);
@@ -4304,6 +4342,87 @@ add_action('wp_ajax_zadaniomat_toggle_stale_zadanie', function() {
     wp_send_json_success([
         'deleted_count' => $result['deleted'],
         'generated_count' => count($result['created'])
+    ]);
+});
+
+// Pobierz nadpisania godzin dla stałego zadania
+add_action('wp_ajax_zadaniomat_get_stale_overrides', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $stale_id = intval($_POST['stale_id']);
+    $table_overrides = $wpdb->prefix . 'zadaniomat_stale_overrides';
+    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
+
+    // Pobierz wszystkie okresy z aktualnego roku i przyszłe
+    $today = date('Y-m-d');
+    $okresy = $wpdb->get_results($wpdb->prepare(
+        "SELECT o.*, r.nazwa as rok_nazwa FROM $table_okresy o
+         LEFT JOIN {$wpdb->prefix}zadaniomat_roki r ON o.rok_id = r.id
+         WHERE o.data_koniec >= %s ORDER BY o.data_start ASC",
+        $today
+    ));
+
+    // Pobierz nadpisania
+    $overrides = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table_overrides WHERE stale_zadanie_id = %d",
+        $stale_id
+    ));
+
+    // Mapuj nadpisania per okres
+    $overrides_map = [];
+    foreach ($overrides as $o) {
+        $overrides_map[$o->okres_id] = $o->godzina_start ? substr($o->godzina_start, 0, 5) : '';
+    }
+
+    wp_send_json_success([
+        'okresy' => $okresy,
+        'overrides' => $overrides_map
+    ]);
+});
+
+// Zapisz nadpisanie godziny dla stałego zadania w okresie
+add_action('wp_ajax_zadaniomat_save_stale_override', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $stale_id = intval($_POST['stale_id']);
+    $okres_id = intval($_POST['okres_id']);
+    $godzina_start = sanitize_text_field($_POST['godzina_start']);
+    $table = $wpdb->prefix . 'zadaniomat_stale_overrides';
+
+    if (empty($godzina_start)) {
+        // Usuń nadpisanie
+        $wpdb->delete($table, [
+            'stale_zadanie_id' => $stale_id,
+            'okres_id' => $okres_id
+        ]);
+    } else {
+        // Upsert nadpisania
+        $existing = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM $table WHERE stale_zadanie_id = %d AND okres_id = %d",
+            $stale_id, $okres_id
+        ));
+
+        if ($existing) {
+            $wpdb->update($table, ['godzina_start' => $godzina_start], [
+                'stale_zadanie_id' => $stale_id,
+                'okres_id' => $okres_id
+            ]);
+        } else {
+            $wpdb->insert($table, [
+                'stale_zadanie_id' => $stale_id,
+                'okres_id' => $okres_id,
+                'godzina_start' => $godzina_start
+            ]);
+        }
+    }
+
+    // Regeneruj przyszłe zadania żeby zastosować nową godzinę
+    $result = zadaniomat_regenerate_recurring_tasks($stale_id);
+
+    wp_send_json_success([
+        'regenerated' => count($result['created'])
     ]);
 });
 
@@ -10476,18 +10595,47 @@ function zadaniomat_page_settings() {
             'data_start' => sanitize_text_field($_POST['data_start']),
             'data_koniec' => sanitize_text_field($_POST['data_koniec'])
         ]);
-        echo '<div class="notice notice-success"><p>✅ Rok dodany!</p></div>';
+        $new_rok_id = $wpdb->insert_id;
+
+        // Wygeneruj zadania stałe dla nowego roku
+        $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+        $aktywne_stale = $wpdb->get_results("SELECT id FROM $table_stale WHERE aktywne = 1");
+        $generated_count = 0;
+        foreach ($aktywne_stale as $stale) {
+            $generated_count += count(zadaniomat_generate_recurring_tasks($stale->id, $new_rok_id));
+        }
+
+        $msg = '✅ Rok dodany!';
+        if ($generated_count > 0) {
+            $msg .= " Wygenerowano $generated_count zadań cyklicznych.";
+        }
+        echo '<div class="notice notice-success"><p>' . $msg . '</p></div>';
     }
-    
+
     // Dodawanie okresu
     if (isset($_POST['dodaj_okres']) && wp_verify_nonce($_POST['nonce'], 'zadaniomat_action')) {
+        $rok_id = intval($_POST['rok_id']);
         $wpdb->insert($table_okresy, [
-            'rok_id' => intval($_POST['rok_id']),
+            'rok_id' => $rok_id,
             'nazwa' => sanitize_text_field($_POST['nazwa']),
             'data_start' => sanitize_text_field($_POST['data_start']),
             'data_koniec' => sanitize_text_field($_POST['data_koniec'])
         ]);
-        echo '<div class="notice notice-success"><p>✅ Okres dodany!</p></div>';
+
+        // Wygeneruj zadania stałe dla nowego okresu (regeneruj dla całego roku)
+        $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+        $aktywne_stale = $wpdb->get_results("SELECT id FROM $table_stale WHERE aktywne = 1");
+        $generated_count = 0;
+        foreach ($aktywne_stale as $stale) {
+            // Regeneruj zadania żeby uwzględnić nowy okres
+            $generated_count += count(zadaniomat_generate_recurring_tasks($stale->id, $rok_id));
+        }
+
+        $msg = '✅ Okres dodany!';
+        if ($generated_count > 0) {
+            $msg .= " Wygenerowano $generated_count zadań cyklicznych.";
+        }
+        echo '<div class="notice notice-success"><p>' . $msg . '</p></div>';
     }
     
     // Usuwanie roku (kaskadowo usuwa okresy i cele)
@@ -10688,10 +10836,6 @@ function zadaniomat_page_settings() {
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="form-group">
-                        <label>Czas (min)</label>
-                        <input type="number" id="stale-czas" min="0" placeholder="30" style="width: 80px;">
-                    </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group" style="flex: 1;">
@@ -10706,6 +10850,8 @@ function zadaniomat_page_settings() {
                             <option value="codziennie">Codziennie</option>
                             <option value="dni_tygodnia">Wybrane dni tygodnia</option>
                             <option value="dzien_miesiaca">Dzień miesiąca</option>
+                            <option value="dni_przed_koncem_roku">Dni przed końcem roku (90-dni)</option>
+                            <option value="dni_przed_koncem_okresu">Dni przed końcem okresu (2 tyg)</option>
                         </select>
                     </div>
                     <div class="form-group" id="stale-dni-wrap" style="display: none;">
@@ -10724,14 +10870,24 @@ function zadaniomat_page_settings() {
                         <label>Dzień miesiąca</label>
                         <input type="number" id="stale-dzien-miesiaca" min="1" max="31" placeholder="1-31" style="width: 80px;">
                     </div>
+                    <div class="form-group" id="stale-dni-przed-rok-wrap" style="display: none;">
+                        <label>Ile dni przed końcem roku</label>
+                        <input type="number" id="stale-dni-przed-koncem-roku" min="1" max="90" placeholder="np. 7" style="width: 80px;">
+                    </div>
+                    <div class="form-group" id="stale-dni-przed-okres-wrap" style="display: none;">
+                        <label>Ile dni przed końcem okresu</label>
+                        <input type="number" id="stale-dni-przed-koncem-okresu" min="1" max="14" placeholder="np. 3" style="width: 80px;">
+                    </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
-                        <label>Godzina start</label>
+                        <label>Godzina start (domyślna)</label>
                         <input type="time" id="stale-godzina-start">
+                        <span style="font-size:11px;color:#888;">można nadpisać per okres</span>
                     </div>
                     <div class="form-group">
-                        <label>Czas trwania</label>
-                        <input type="number" id="stale-czas-trwania" min="0" placeholder="min" style="width: 80px;">
-                        <span style="font-size:11px;color:#888;">min</span>
+                        <label>Czas trwania (min)</label>
+                        <input type="number" id="stale-czas" min="0" placeholder="30" style="width: 80px;">
                     </div>
                 </div>
                 <button type="button" class="button button-primary" id="stale-submit-btn" onclick="saveStaleZadanie()">➕ Dodaj stałe zadanie</button>
@@ -10747,7 +10903,7 @@ function zadaniomat_page_settings() {
                         <th>Nazwa</th>
                         <th>Kategoria</th>
                         <th>Powtarzanie</th>
-                        <th>Godziny</th>
+                        <th>Godzina</th>
                         <th>Czas</th>
                         <th>Akcje</th>
                     </tr>
@@ -11253,6 +11409,8 @@ function zadaniomat_page_settings() {
             var typ = $('#stale-typ').val();
             $('#stale-dni-wrap').toggle(typ === 'dni_tygodnia');
             $('#stale-dzien-wrap').toggle(typ === 'dzien_miesiaca');
+            $('#stale-dni-przed-rok-wrap').toggle(typ === 'dni_przed_koncem_roku');
+            $('#stale-dni-przed-okres-wrap').toggle(typ === 'dni_przed_koncem_okresu');
         };
 
         window.loadStaleZadania = function() {
@@ -11318,6 +11476,7 @@ function zadaniomat_page_settings() {
                     html += '<td>' + godziny + '</td>';
                     html += '<td>' + (zadanie.planowany_czas || '-') + ' min</td>';
                     html += '<td class="action-buttons">';
+                    html += '<button class="btn-time" onclick="openStaleOverrides(' + zadanie.id + ', \'' + escapeHtml(zadanie.nazwa).replace(/'/g, "\\'") + '\')" title="Ustaw godziny per okres">⏰</button>';
                     html += '<button class="btn-edit" onclick="editStaleZadanie(' + zadanie.id + ')" title="Edytuj">✏️</button>';
                     html += '<button class="btn-delete" onclick="deleteStaleZadanie(' + zadanie.id + ')" title="Usuń">🗑️</button>';
                     html += '</td>';
@@ -11341,8 +11500,9 @@ function zadaniomat_page_settings() {
             $('#stale-cel-todo').val(zadanie.cel_todo || '');
             $('#stale-typ').val(zadanie.typ_powtarzania);
             $('#stale-godzina-start').val(zadanie.godzina_start ? zadanie.godzina_start.substring(0, 5) : '');
-            $('#stale-czas-trwania').val(zadanie.planowany_czas || '');
             $('#stale-dzien-miesiaca').val(zadanie.dzien_miesiaca || '');
+            $('#stale-dni-przed-koncem-roku').val(zadanie.dni_przed_koncem_roku || '');
+            $('#stale-dni-przed-koncem-okresu').val(zadanie.dni_przed_koncem_okresu || '');
 
             // Zaznacz dni tygodnia
             $('.dni-tygodnia-checkboxes input').prop('checked', false);
@@ -11377,12 +11537,13 @@ function zadaniomat_page_settings() {
             $('#stale-czas').val('');
             $('#stale-cel-todo').val('');
             $('#stale-godzina-start').val('');
-            $('#stale-czas-trwania').val('');
             $('#stale-typ').val('codziennie');
             $('#stale-kategoria').val($('#stale-kategoria option:first').val());
             toggleStaleOptions();
             $('.dni-tygodnia-checkboxes input').prop('checked', false);
             $('#stale-dzien-miesiaca').val('');
+            $('#stale-dni-przed-koncem-roku').val('');
+            $('#stale-dni-przed-koncem-okresu').val('');
             $('#stale-save-info').text('');
 
             // Przywróć tytuł i przyciski
@@ -11412,7 +11573,7 @@ function zadaniomat_page_settings() {
 
             // Oblicz godzinę końca z godziny startu + czas trwania
             var godzinaStart = $('#stale-godzina-start').val();
-            var czasTrwania = parseInt($('#stale-czas-trwania').val()) || parseInt($('#stale-czas').val()) || 0;
+            var czasTrwania = parseInt($('#stale-czas').val()) || 0;
             var godzinaKoniec = '';
 
             // Auto-oblicz godzinę końca jeśli mamy start i czas
@@ -11434,6 +11595,8 @@ function zadaniomat_page_settings() {
                 typ_powtarzania: typ,
                 dni_tygodnia: dniTygodnia,
                 dzien_miesiaca: $('#stale-dzien-miesiaca').val(),
+                dni_przed_koncem_roku: $('#stale-dni-przed-koncem-roku').val(),
+                dni_przed_koncem_okresu: $('#stale-dni-przed-koncem-okresu').val(),
                 godzina_start: godzinaStart,
                 godzina_koniec: godzinaKoniec
             };
@@ -11537,6 +11700,90 @@ function zadaniomat_page_settings() {
                         showToast(msg, 'success');
                     }
                 });
+            });
+        };
+
+        // Otwórz dialog nadpisań godzin per okres
+        window.openStaleOverrides = function(staleId, staleName) {
+            $.post(ajaxurl, {
+                action: 'zadaniomat_get_stale_overrides',
+                nonce: nonce,
+                stale_id: staleId
+            }, function(response) {
+                if (!response.success) return;
+
+                var okresy = response.data.okresy;
+                var overrides = response.data.overrides || {};
+
+                // Znajdź domyślną godzinę z template'a
+                var template = staleZadania.find(function(z) { return z.id == staleId; });
+                var defaultTime = template && template.godzina_start ? template.godzina_start.substring(0, 5) : '';
+
+                var html = '<div class="modal-overlay stale-overrides-modal" onclick="closeStaleOverridesModal(event)">';
+                html += '<div class="modal" onclick="event.stopPropagation()" style="max-width:600px;">';
+                html += '<button class="modal-close" onclick="closeStaleOverridesModal()">&times;</button>';
+                html += '<h3>⏰ Godziny startu: ' + escapeHtml(staleName) + '</h3>';
+                html += '<p style="color:#666;margin-bottom:15px;">Domyślna godzina: <strong>' + (defaultTime || 'brak') + '</strong>. Ustaw inne godziny dla poszczególnych okresów.</p>';
+
+                if (okresy.length === 0) {
+                    html += '<p style="color:#888;">Brak przyszłych okresów.</p>';
+                } else {
+                    html += '<table style="width:100%;border-collapse:collapse;">';
+                    html += '<thead><tr style="background:#f8f9fa;"><th style="padding:8px;text-align:left;">Okres</th><th style="padding:8px;text-align:left;">Daty</th><th style="padding:8px;text-align:center;">Godzina start</th></tr></thead><tbody>';
+
+                    okresy.forEach(function(okres) {
+                        var currentOverride = overrides[okres.id] || '';
+                        var startDate = new Date(okres.data_start);
+                        var endDate = new Date(okres.data_koniec);
+                        var dateStr = startDate.getDate() + '.' + (startDate.getMonth()+1) + ' - ' + endDate.getDate() + '.' + (endDate.getMonth()+1);
+
+                        html += '<tr>';
+                        html += '<td style="padding:8px;border-bottom:1px solid #eee;"><strong>' + escapeHtml(okres.nazwa) + '</strong></td>';
+                        html += '<td style="padding:8px;border-bottom:1px solid #eee;font-size:12px;color:#666;">' + dateStr + '</td>';
+                        html += '<td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">';
+                        html += '<input type="time" class="override-time-input" data-okres-id="' + okres.id + '" value="' + currentOverride + '" style="padding:4px;" placeholder="' + defaultTime + '">';
+                        html += '</td>';
+                        html += '</tr>';
+                    });
+
+                    html += '</tbody></table>';
+                }
+
+                html += '<div style="margin-top:20px;text-align:right;">';
+                html += '<button class="button" onclick="closeStaleOverridesModal()">Anuluj</button> ';
+                html += '<button class="button button-primary" onclick="saveStaleOverrides(' + staleId + ')">💾 Zapisz</button>';
+                html += '</div>';
+                html += '</div></div>';
+
+                $('body').append(html);
+            });
+        };
+
+        window.closeStaleOverridesModal = function(event) {
+            if (event && event.target !== event.currentTarget) return;
+            $('.stale-overrides-modal').remove();
+        };
+
+        window.saveStaleOverrides = function(staleId) {
+            var inputs = $('.stale-overrides-modal .override-time-input');
+            var savePromises = [];
+
+            inputs.each(function() {
+                var okresId = $(this).data('okres-id');
+                var godzinaStart = $(this).val();
+
+                savePromises.push($.post(ajaxurl, {
+                    action: 'zadaniomat_save_stale_override',
+                    nonce: nonce,
+                    stale_id: staleId,
+                    okres_id: okresId,
+                    godzina_start: godzinaStart
+                }));
+            });
+
+            $.when.apply($, savePromises).done(function() {
+                closeStaleOverridesModal();
+                showToast('Godziny zapisane i zadania zregenerowane', 'success');
             });
         };
 
