@@ -4600,6 +4600,17 @@ add_action('wp_ajax_zadaniomat_get_harmonogram', function() {
         }
 
         if ($match) {
+            // Sprawdź czy zadanie z tego template'a już istnieje na ten dzień
+            $existing_task = $wpdb->get_var($wpdb->prepare(
+                "SELECT id FROM $table_zadania WHERE recurring_template_id = %d AND dzien = %s",
+                $s->id, $dzien
+            ));
+
+            // Jeśli zadanie już istnieje, nie dodawaj szablonu (zadanie jest w głównej liście)
+            if ($existing_task) {
+                continue;
+            }
+
             $s->kategoria_label = zadaniomat_get_kategoria_label($s->kategoria);
             $s->is_stale = true;
             $s->zadanie = $s->nazwa;
@@ -7073,8 +7084,8 @@ function zadaniomat_page_main() {
                         $table_godziny_okres = $wpdb->prefix . 'zadaniomat_godziny_okres';
                         $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
 
-                        // Kategorie celów (tylko te mają progres)
-                        $kategorie_celow = zadaniomat_get_kategorie();
+                        // Wszystkie kategorie zadań (używamy tych samych co w statystykach)
+                        $kategorie_celow = zadaniomat_get_kategorie_zadania();
                         $kategorie_celow_keys = array_keys($kategorie_celow);
 
                         // Planowane godziny dziennie per kategoria (z tabeli per okres)
@@ -7086,7 +7097,7 @@ function zadaniomat_page_main() {
                         $total_planowane = 0;
                         foreach ($planowane_raw as $p) {
                             $planowane_map[$p->kategoria] = floatval($p->planowane_godziny_dziennie);
-                            // Tylko kategorie celów liczą się do progresu
+                            // Wszystkie kategorie liczą się do progresu
                             if (in_array($p->kategoria, $kategorie_celow_keys)) {
                                 $total_planowane += floatval($p->planowane_godziny_dziennie);
                             }
@@ -7727,7 +7738,7 @@ function zadaniomat_page_main() {
             $('#okres-days-grid').html(html);
         }
 
-        var currentOkresId = null; // Przechowuje aktualny okres_id dla zapisu godzin
+        // currentOkresId jest już zdefiniowane wyżej z PHP (linia 7318)
 
         function renderStats(data) {
             // Zapisz okres_id do późniejszego użycia przy zapisie godzin
