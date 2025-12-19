@@ -1072,31 +1072,6 @@ function habits_render_page() {
             color: #9CA3AF;
         }
 
-        .minutes-input {
-            width: 60px;
-            padding: 8px;
-            border: 2px solid var(--habits-border);
-            border-radius: 6px;
-            text-align: center;
-            font-size: 14px;
-            font-weight: 600;
-        }
-
-        .minutes-input:focus {
-            border-color: var(--habits-primary);
-            outline: none;
-        }
-
-        .minutes-input.has-value {
-            background: #ECFDF5;
-            border-color: var(--habits-success);
-        }
-
-        .minutes-input.goal-met {
-            background: #D1FAE5;
-            border-color: var(--habits-success);
-        }
-
         .day-header {
             font-size: 12px;
         }
@@ -1377,25 +1352,225 @@ function habits_render_page() {
             color: var(--habits-dark);
         }
 
+        /* Habit check cell */
+        .habit-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .habit-check {
+            width: 36px;
+            height: 36px;
+            border: 2px solid var(--habits-border);
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            background: white;
+            font-size: 18px;
+        }
+
+        .habit-check:hover {
+            border-color: var(--habits-primary);
+            transform: scale(1.05);
+        }
+
+        .habit-check.checked {
+            background: var(--habits-success);
+            border-color: var(--habits-success);
+            color: white;
+        }
+
+        .habit-check.checked::after {
+            content: '✓';
+            font-weight: bold;
+        }
+
+        .habit-minutes {
+            font-size: 11px;
+            color: var(--habits-success);
+            font-weight: 600;
+            min-height: 16px;
+        }
+
+        .habit-minutes-input {
+            width: 50px;
+            padding: 4px;
+            border: 2px solid var(--habits-primary);
+            border-radius: 6px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .habit-minutes-input:focus {
+            outline: none;
+            border-color: var(--habits-secondary);
+        }
+
         /* Responsive */
-        @media (max-width: 768px) {
-            .habits-table {
-                font-size: 12px;
+        @media (max-width: 900px) {
+            .habits-wrap {
+                padding: 0 10px;
             }
 
-            .minutes-input {
-                width: 45px;
-                padding: 6px;
+            .habits-tabs {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+            }
+
+            .habits-tabs::-webkit-scrollbar {
+                display: none;
+            }
+
+            .habits-tab {
+                padding: 10px 14px;
+                font-size: 12px;
+                white-space: nowrap;
+            }
+
+            .habits-table {
+                font-size: 11px;
+            }
+
+            .habits-table th,
+            .habits-table td {
+                padding: 6px 4px;
+            }
+
+            .habit-name {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 2px;
+            }
+
+            .habit-icon {
+                font-size: 16px;
+            }
+
+            .habit-label {
+                font-size: 11px;
+            }
+
+            .habit-goal {
+                font-size: 9px;
+            }
+
+            .habit-check {
+                width: 32px;
+                height: 32px;
+                font-size: 14px;
+            }
+
+            .challenge-check {
+                width: 28px;
+                height: 28px;
+                font-size: 14px;
+            }
+
+            .day-header {
+                font-size: 10px;
+            }
+
+            .day-header.today {
+                padding: 4px;
+            }
+
+            .week-nav {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            .week-nav-label {
+                font-size: 13px;
+                order: -1;
+                width: 100%;
+                text-align: center;
             }
 
             .habits-header {
                 flex-direction: column;
                 align-items: flex-start;
+                gap: 15px;
+            }
+
+            .habits-title {
+                font-size: 22px;
             }
 
             .habits-stats-bar {
                 width: 100%;
-                justify-content: flex-start;
+                justify-content: space-between;
+            }
+
+            .habits-stat-item {
+                padding: 6px 12px;
+                font-size: 12px;
+            }
+
+            .habits-selectors {
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .habits-select {
+                width: 100%;
+                min-width: auto;
+            }
+
+            .habits-card {
+                padding: 15px;
+            }
+
+            .habits-summary-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .summary-stat-value {
+                font-size: 20px;
+            }
+
+            .habits-modal {
+                padding: 20px;
+                width: 95%;
+            }
+
+            .habits-form-group {
+                min-width: 100%;
+            }
+
+            .management-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+
+            .management-item-actions {
+                width: 100%;
+                justify-content: flex-end;
+            }
+        }
+
+        @media (max-width: 400px) {
+            .habit-check {
+                width: 28px;
+                height: 28px;
+            }
+
+            .habits-table th:first-child,
+            .habits-table td:first-child {
+                min-width: 80px;
+                max-width: 100px;
+            }
+
+            .habit-label {
+                font-size: 10px;
+                word-break: break-word;
             }
         }
     </style>
@@ -1676,18 +1851,35 @@ function habits_render_page() {
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
     const HabitsApp = {
-        currentYearId: null,
-        currentPeriodId: null,
+        currentYearId: <?php echo $current_year ? $current_year->id : 'null'; ?>,
+        currentPeriodId: <?php echo $current_period ? $current_period->id : 'null'; ?>,
         currentWeekStart: null,
         habits: [],
         challenges: [],
         chart: null,
+        initialYearId: <?php echo $current_year ? $current_year->id : 'null'; ?>,
+        initialPeriodId: <?php echo $current_period ? $current_period->id : 'null'; ?>,
 
-        init() {
+        async init() {
             this.currentWeekStart = this.getMonday(new Date());
             this.loadGlobalStats();
-            this.loadYears();
+            await this.loadYears();
             this.setupTabs();
+
+            // Auto-select current year and period
+            if (this.initialYearId) {
+                document.getElementById('yearSelect').value = this.initialYearId;
+                this.currentYearId = this.initialYearId;
+                await this.loadPeriods(this.initialYearId);
+
+                if (this.initialPeriodId) {
+                    document.getElementById('periodSelect').value = this.initialPeriodId;
+                    this.currentPeriodId = this.initialPeriodId;
+                    this.loadHabits();
+                    this.loadChallenges();
+                    this.loadSummary();
+                }
+            }
         },
 
         getMonday(date) {
@@ -1923,19 +2115,24 @@ function habits_render_page() {
                     const value = entries[habit.id]?.[d] || 0;
                     weekTotal += parseInt(value);
                     const hasValue = value > 0;
-                    const goalMet = value >= habit.cel_minut_dziennie;
 
                     html += `
                         <td class="day-cell">
-                            <input type="number"
-                                class="minutes-input ${hasValue ? 'has-value' : ''} ${goalMet ? 'goal-met' : ''}"
-                                value="${value || ''}"
-                                min="0"
-                                placeholder="0"
-                                data-habit-id="${habit.id}"
-                                data-date="${d}"
-                                onchange="HabitsApp.saveEntry(this)"
-                            >
+                            <div class="habit-cell">
+                                <div class="habit-check ${hasValue ? 'checked' : ''}"
+                                     data-habit-id="${habit.id}"
+                                     data-date="${d}"
+                                     data-goal="${habit.cel_minut_dziennie}"
+                                     data-value="${value}"
+                                     onclick="HabitsApp.toggleHabit(this)">
+                                </div>
+                                <div class="habit-minutes"
+                                     data-habit-id="${habit.id}"
+                                     data-date="${d}"
+                                     onclick="HabitsApp.editMinutes(this, ${habit.id}, '${d}', ${value}, ${habit.cel_minut_dziennie})">
+                                    ${hasValue ? value + 'm' : ''}
+                                </div>
+                            </div>
                         </td>
                     `;
                 });
@@ -1952,21 +2149,81 @@ function habits_render_page() {
             document.getElementById('trackingTable').innerHTML = html;
         },
 
-        async saveEntry(input) {
-            const habitId = input.dataset.habitId;
-            const date = input.dataset.date;
-            const minutes = parseInt(input.value) || 0;
+        async toggleHabit(el) {
+            const habitId = el.dataset.habitId;
+            const date = el.dataset.date;
+            const goal = parseInt(el.dataset.goal);
+            const currentValue = parseInt(el.dataset.value) || 0;
 
+            // Toggle: jeśli 0 -> ustaw cel, jeśli > 0 -> ustaw 0
+            const newValue = currentValue > 0 ? 0 : goal;
+
+            await this.ajax('habits_save_entry', {
+                habit_id: habitId,
+                dzien: date,
+                minuty: newValue
+            });
+
+            // Update visual
+            el.classList.toggle('checked', newValue > 0);
+            el.dataset.value = newValue;
+
+            // Update minutes display
+            const minutesEl = el.parentElement.querySelector('.habit-minutes');
+            minutesEl.textContent = newValue > 0 ? newValue + 'm' : '';
+
+            // Refresh stats
+            this.loadGlobalStats();
+            this.loadSummary();
+            this.renderTrackingTable(); // Refresh to update totals
+        },
+
+        editMinutes(el, habitId, date, currentValue, goal) {
+            // Jeśli już jest input, nie rób nic
+            if (el.querySelector('input')) return;
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.className = 'habit-minutes-input';
+            input.value = currentValue || goal;
+            input.min = 0;
+
+            el.textContent = '';
+            el.appendChild(input);
+            input.focus();
+            input.select();
+
+            const save = async () => {
+                const newValue = parseInt(input.value) || 0;
+
+                await this.ajax('habits_save_entry', {
+                    habit_id: habitId,
+                    dzien: date,
+                    minuty: newValue
+                });
+
+                // Refresh
+                this.loadGlobalStats();
+                this.loadSummary();
+                this.renderTrackingTable();
+            };
+
+            input.onblur = save;
+            input.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    input.blur();
+                } else if (e.key === 'Escape') {
+                    this.renderTrackingTable();
+                }
+            };
+        },
+
+        async saveEntry(habitId, date, minutes) {
             await this.ajax('habits_save_entry', {
                 habit_id: habitId,
                 dzien: date,
                 minuty: minutes
             });
-
-            // Update visual
-            const habit = this.habits.find(h => h.id == habitId);
-            input.classList.toggle('has-value', minutes > 0);
-            input.classList.toggle('goal-met', minutes >= habit.cel_minut_dziennie);
 
             // Refresh stats
             this.loadGlobalStats();
