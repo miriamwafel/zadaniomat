@@ -7120,6 +7120,13 @@ function zadaniomat_page_main() {
                             $today
                         ));
 
+                        // DEBUG: Pokaż kategorie które nie pasują
+                        $kategorie_w_bazie = $wpdb->get_col($wpdb->prepare(
+                            "SELECT DISTINCT kategoria FROM $table_zadania WHERE dzien = %s",
+                            $today
+                        ));
+                        $niepasujace = array_diff($kategorie_w_bazie, $kategorie_celow_keys);
+
                         $dzis_stats_total = $wpdb->get_row($wpdb->prepare(
                             "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
                                     COUNT(*) as liczba_zadan,
@@ -7155,6 +7162,12 @@ function zadaniomat_page_main() {
                                 <span>📋 <span id="daily-tasks-count"><?php echo $dzis_stats_total->liczba_zadan ?: 0; ?></span> zadań</span>
                                 <span>✅ <span id="daily-tasks-done"><?php echo $dzis_stats_total->ukonczone ?: 0; ?></span> ukończ.</span>
                             </div>
+                            <?php if (!empty($niepasujace)): ?>
+                            <div style="background: #fff3cd; padding: 8px; margin-top: 10px; border-radius: 4px; font-size: 11px;">
+                                ⚠️ Kategorie w bazie niepasujące do kluczy: <strong><?php echo implode(', ', $niepasujace); ?></strong><br>
+                                Klucze kategorii: <?php echo implode(', ', $kategorie_celow_keys); ?>
+                            </div>
+                            <?php endif; ?>
                         </div>
 
                         <h3>🎯 Cele: <?php echo esc_html($current_okres->nazwa); ?></h3>
