@@ -100,6 +100,20 @@ function habits_create_tables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
+    // Tabela aktywności sportowych
+    $table_sport = $wpdb->prefix . 'habits_sport';
+    $sql8 = "CREATE TABLE IF NOT EXISTS $table_sport (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        dzien DATE NOT NULL,
+        typ VARCHAR(50) NOT NULL,
+        czas_minuty INT DEFAULT 0,
+        kroki INT DEFAULT 0,
+        partie_ciala VARCHAR(255) DEFAULT NULL,
+        notatka TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY sport_day_type (dzien, typ)
+    ) $charset_collate;";
+
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql1);
     dbDelta($sql2);
@@ -108,6 +122,7 @@ function habits_create_tables() {
     dbDelta($sql5);
     dbDelta($sql6);
     dbDelta($sql7);
+    dbDelta($sql8);
 }
 
 add_action('admin_init', function() {
@@ -821,6 +836,128 @@ add_action('wp_ajax_habits_get_global_stats', function() {
 });
 
 // =============================================
+// SPORT AJAX HANDLERS
+// =============================================
+
+// Zapisz aktywność sportową
+add_action('wp_ajax_habits_save_sport', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_sport';
+
+    $dzien = sanitize_text_field($_POST['dzien']);
+    $typ = sanitize_text_field($_POST['typ']);
+    $czas = intval($_POST['czas_minuty'] ?? 0);
+    $kroki = intval($_POST['kroki'] ?? 0);
+    $partie = sanitize_text_field($_POST['partie_ciala'] ?? '');
+    $notatka = sanitize_textarea_field($_POST['notatka'] ?? '');
+
+    // Upsert
+    $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM $table WHERE dzien = %s AND typ = %s",
+        $dzien, $typ
+    ));
+
+    if ($existing) {
+        $wpdb->update($table, [
+            'czas_minuty' => $czas,
+            'kroki' => $kroki,
+            'partie_ciala' => $partie,
+            'notatka' => $notatka
+        ], ['id' => $existing]);
+    } else {
+        $wpdb->insert($table, [
+            'dzien' => $dzien,
+            'typ' => $typ,
+            'czas_minuty' => $czas,
+            'kroki' => $kroki,
+            'partie_ciala' => $partie,
+            'notatka' => $notatka
+        ]);
+    }
+
+    wp_send_json_success();
+});
+
+// Pobierz aktywności sportowe dla zakresu dat
+add_action('wp_ajax_habits_get_sport', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_sport';
+
+    $date_start = sanitize_text_field($_POST['date_start']);
+    $date_end = sanitize_text_field($_POST['date_end']);
+
+    $entries = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE dzien BETWEEN %s AND %s ORDER BY dzien DESC, typ ASC",
+        $date_start, $date_end
+    ));
+
+    wp_send_json_success($entries);
+});
+
+// Usuń aktywność sportową
+add_action('wp_ajax_habits_delete_sport', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_sport';
+
+    $id = intval($_POST['id']);
+    $wpdb->delete($table, ['id' => $id]);
+
+    wp_send_json_success();
+});
+
+// Pobierz podsumowanie sportowe
+add_action('wp_ajax_habits_get_sport_summary', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_sport';
+
+    $date_start = sanitize_text_field($_POST['date_start']);
+    $date_end = sanitize_text_field($_POST['date_end']);
+
+    // Suma kroków
+    $total_steps = $wpdb->get_var($wpdb->prepare(
+        "SELECT COALESCE(SUM(kroki), 0) FROM $table WHERE dzien BETWEEN %s AND %s",
+        $date_start, $date_end
+    ));
+
+    // Średnia kroków
+    $days_with_steps = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(DISTINCT dzien) FROM $table WHERE dzien BETWEEN %s AND %s AND kroki > 0",
+        $date_start, $date_end
+    ));
+    $avg_steps = $days_with_steps > 0 ? round($total_steps / $days_with_steps) : 0;
+
+    // Ilość treningów per typ
+    $by_type = $wpdb->get_results($wpdb->prepare(
+        "SELECT typ, COUNT(*) as count, SUM(czas_minuty) as total_minutes
+         FROM $table WHERE dzien BETWEEN %s AND %s GROUP BY typ",
+        $date_start, $date_end
+    ));
+
+    // Partie ciała (dla siłowni)
+    $muscle_counts = [];
+    $gym_entries = $wpdb->get_col($wpdb->prepare(
+        "SELECT partie_ciala FROM $table WHERE dzien BETWEEN %s AND %s AND typ = 'silownia' AND partie_ciala != ''",
+        $date_start, $date_end
+    ));
+    foreach ($gym_entries as $parties) {
+        foreach (explode(',', $parties) as $part) {
+            $part = trim($part);
+            if ($part) {
+                $muscle_counts[$part] = ($muscle_counts[$part] ?? 0) + 1;
+            }
+        }
+    }
+
+    wp_send_json_success([
+        'total_steps' => intval($total_steps),
+        'avg_steps' => intval($avg_steps),
+        'days_with_steps' => intval($days_with_steps),
+        'by_type' => $by_type,
+        'muscle_counts' => $muscle_counts
+    ]);
+});
+
+// =============================================
 // MENU I STRONA
 // =============================================
 add_action('admin_menu', function() {
@@ -1209,6 +1346,115 @@ function habits_render_page() {
             margin-top: 20px;
         }
 
+        /* Sport */
+        .muscle-groups {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .muscle-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: var(--habits-light);
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .muscle-checkbox:hover {
+            background: #E0E7FF;
+        }
+
+        .muscle-checkbox input {
+            display: none;
+        }
+
+        .muscle-checkbox:has(input:checked) {
+            background: var(--habits-primary);
+            color: white;
+        }
+
+        .sport-entry {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 15px;
+            background: var(--habits-light);
+            border-radius: 10px;
+            margin-bottom: 10px;
+        }
+
+        .sport-entry-icon {
+            font-size: 24px;
+        }
+
+        .sport-entry-info {
+            flex: 1;
+        }
+
+        .sport-entry-type {
+            font-weight: 600;
+            color: var(--habits-dark);
+        }
+
+        .sport-entry-details {
+            font-size: 12px;
+            color: #6B7280;
+        }
+
+        .sport-entry-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--habits-primary);
+        }
+
+        .sport-entry-date {
+            font-size: 11px;
+            color: #9CA3AF;
+        }
+
+        .sport-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+
+        .sport-stat-card {
+            background: var(--habits-light);
+            border-radius: 12px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .sport-stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--habits-primary);
+        }
+
+        .sport-stat-label {
+            font-size: 12px;
+            color: #6B7280;
+            margin-top: 4px;
+        }
+
+        .muscle-tag {
+            display: inline-block;
+            padding: 3px 8px;
+            background: var(--habits-secondary);
+            color: white;
+            border-radius: 12px;
+            font-size: 11px;
+            margin: 2px;
+        }
+
         /* Forms */
         .habits-form-row {
             display: flex;
@@ -1554,6 +1800,32 @@ function habits_render_page() {
                 width: 100%;
                 justify-content: flex-end;
             }
+
+            .muscle-groups {
+                gap: 6px;
+            }
+
+            .muscle-checkbox {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+
+            .sport-entry {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            .sport-entry-icon {
+                font-size: 20px;
+            }
+
+            .sport-stat-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .sport-stat-value {
+                font-size: 20px;
+            }
         }
 
         @media (max-width: 400px) {
@@ -1607,6 +1879,7 @@ function habits_render_page() {
 
         <div class="habits-tabs">
             <button class="habits-tab active" data-tab="tracking">📝 Logowanie</button>
+            <button class="habits-tab" data-tab="sport">🏃 Sport</button>
             <button class="habits-tab" data-tab="challenges">🎯 Challenge</button>
             <button class="habits-tab" data-tab="summary">📊 Podsumowanie</button>
             <button class="habits-tab" data-tab="charts">📈 Wykresy</button>
@@ -1627,6 +1900,95 @@ function habits_render_page() {
                     <p style="color: #6B7280; text-align: center; padding: 40px;">
                         Wybierz rok i okres, aby rozpocząć logowanie nawyków.
                     </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: Sport -->
+        <div class="habits-tab-content" id="tab-sport">
+            <div class="habits-card">
+                <div class="habits-card-title">🏃 Aktywność sportowa</div>
+
+                <!-- Formularz dodawania -->
+                <div class="sport-form">
+                    <div class="habits-form-row">
+                        <div class="habits-form-group" style="flex: 0 0 140px;">
+                            <label class="habits-form-label">Data</label>
+                            <input type="date" class="habits-form-input" id="sportDate" value="<?php echo date('Y-m-d', strtotime('-1 day')); ?>">
+                        </div>
+                        <div class="habits-form-group" style="flex: 0 0 150px;">
+                            <label class="habits-form-label">Typ aktywności</label>
+                            <select class="habits-form-input" id="sportType" onchange="HabitsApp.onSportTypeChange()">
+                                <option value="kroki">👟 Kroki</option>
+                                <option value="silownia">🏋️ Siłownia</option>
+                                <option value="bieganie">🏃 Bieganie</option>
+                                <option value="rower">🚴 Rower</option>
+                                <option value="plywanie">🏊 Pływanie</option>
+                                <option value="yoga">🧘 Yoga</option>
+                                <option value="inne">⚡ Inne</option>
+                            </select>
+                        </div>
+                        <div class="habits-form-group" id="stepsGroup">
+                            <label class="habits-form-label">Liczba kroków</label>
+                            <input type="number" class="habits-form-input" id="sportSteps" placeholder="np. 8500" min="0">
+                        </div>
+                        <div class="habits-form-group" id="durationGroup" style="display: none;">
+                            <label class="habits-form-label">Czas (min)</label>
+                            <input type="number" class="habits-form-input" id="sportDuration" placeholder="np. 60" min="0">
+                        </div>
+                    </div>
+
+                    <!-- Partie ciała dla siłowni -->
+                    <div id="muscleGroupsSection" style="display: none;">
+                        <label class="habits-form-label">Partie mięśniowe</label>
+                        <div class="muscle-groups">
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="klata"> 💪 Klata
+                            </label>
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="plecy"> 🔙 Plecy
+                            </label>
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="barki"> 🦾 Barki
+                            </label>
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="biceps"> 💪 Biceps
+                            </label>
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="triceps"> 💪 Triceps
+                            </label>
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="nogi"> 🦵 Nogi
+                            </label>
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="posladki"> 🍑 Pośladki
+                            </label>
+                            <label class="muscle-checkbox">
+                                <input type="checkbox" value="brzuch"> 🎯 Brzuch
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 15px;">
+                        <button class="habits-btn habits-btn-primary" onclick="HabitsApp.saveSport()">
+                            💾 Zapisz
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Historia i statystyki -->
+            <div class="habits-card">
+                <div class="habits-card-title">📊 Ostatnie 7 dni</div>
+                <div id="sportHistory">
+                    <p style="color: #6B7280; text-align: center;">Ładowanie...</p>
+                </div>
+            </div>
+
+            <div class="habits-card">
+                <div class="habits-card-title">📈 Statystyki (bieżący miesiąc)</div>
+                <div id="sportStats">
+                    <p style="color: #6B7280; text-align: center;">Ładowanie...</p>
                 </div>
             </div>
         </div>
@@ -1902,9 +2264,14 @@ function habits_render_page() {
                     tab.classList.add('active');
                     document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
 
-                    // Refresh content
+                    // Refresh content based on tab
                     if (tab.dataset.tab === 'charts' && this.currentPeriodId) {
                         this.loadChart('weekly');
+                    } else if (tab.dataset.tab === 'sport') {
+                        this.loadSportHistory();
+                        this.loadSportStats();
+                    } else if (tab.dataset.tab === 'summary' && this.currentPeriodId) {
+                        this.loadSummary();
                     }
                 });
             });
@@ -2158,29 +2525,44 @@ function habits_render_page() {
             // Toggle: jeśli 0 -> ustaw cel, jeśli > 0 -> ustaw 0
             const newValue = currentValue > 0 ? 0 : goal;
 
-            await this.ajax('habits_save_entry', {
+            // Update visual immediately (optimistic update)
+            el.classList.toggle('checked', newValue > 0);
+            el.dataset.value = newValue;
+
+            const minutesEl = el.parentElement.querySelector('.habit-minutes');
+            minutesEl.textContent = newValue > 0 ? newValue + 'm' : '';
+
+            // Update row total without full re-render
+            this.updateRowTotal(el, currentValue, newValue);
+
+            // Save to server (no await to not block)
+            this.ajax('habits_save_entry', {
                 habit_id: habitId,
                 dzien: date,
                 minuty: newValue
             });
 
-            // Update visual
-            el.classList.toggle('checked', newValue > 0);
-            el.dataset.value = newValue;
-
-            // Update minutes display
-            const minutesEl = el.parentElement.querySelector('.habit-minutes');
-            minutesEl.textContent = newValue > 0 ? newValue + 'm' : '';
-
-            // Refresh stats
+            // Lazy refresh stats
             this.loadGlobalStats();
-            this.loadSummary();
-            this.renderTrackingTable(); // Refresh to update totals
+        },
+
+        updateRowTotal(el, oldValue, newValue) {
+            const row = el.closest('tr');
+            if (!row) return;
+            const totalCell = row.querySelector('td:last-child');
+            if (!totalCell) return;
+
+            const currentTotal = parseInt(totalCell.textContent) || 0;
+            const diff = newValue - oldValue;
+            totalCell.textContent = (currentTotal + diff) + ' min';
         },
 
         editMinutes(el, habitId, date, currentValue, goal) {
             // Jeśli już jest input, nie rób nic
             if (el.querySelector('input')) return;
+
+            const checkEl = el.parentElement.querySelector('.habit-check');
+            const oldValue = currentValue;
 
             const input = document.createElement('input');
             input.type = 'number';
@@ -2196,16 +2578,22 @@ function habits_render_page() {
             const save = async () => {
                 const newValue = parseInt(input.value) || 0;
 
-                await this.ajax('habits_save_entry', {
+                // Update visual immediately
+                el.textContent = newValue > 0 ? newValue + 'm' : '';
+                checkEl.classList.toggle('checked', newValue > 0);
+                checkEl.dataset.value = newValue;
+
+                // Update row total
+                this.updateRowTotal(checkEl, oldValue, newValue);
+
+                // Save to server
+                this.ajax('habits_save_entry', {
                     habit_id: habitId,
                     dzien: date,
                     minuty: newValue
                 });
 
-                // Refresh
                 this.loadGlobalStats();
-                this.loadSummary();
-                this.renderTrackingTable();
             };
 
             input.onblur = save;
@@ -2213,7 +2601,7 @@ function habits_render_page() {
                 if (e.key === 'Enter') {
                     input.blur();
                 } else if (e.key === 'Escape') {
-                    this.renderTrackingTable();
+                    el.textContent = oldValue > 0 ? oldValue + 'm' : '';
                 }
             };
         },
@@ -2891,6 +3279,215 @@ function habits_render_page() {
 
             await this.ajax('habits_delete_challenge', { id: id });
             this.loadChallenges();
+        },
+
+        // =============================================
+        // SPORT FUNCTIONS
+        // =============================================
+
+        sportTypes: {
+            kroki: { icon: '👟', name: 'Kroki', unit: 'kroków' },
+            silownia: { icon: '🏋️', name: 'Siłownia', unit: 'min' },
+            bieganie: { icon: '🏃', name: 'Bieganie', unit: 'min' },
+            rower: { icon: '🚴', name: 'Rower', unit: 'min' },
+            plywanie: { icon: '🏊', name: 'Pływanie', unit: 'min' },
+            yoga: { icon: '🧘', name: 'Yoga', unit: 'min' },
+            inne: { icon: '⚡', name: 'Inne', unit: 'min' }
+        },
+
+        onSportTypeChange() {
+            const type = document.getElementById('sportType').value;
+            const stepsGroup = document.getElementById('stepsGroup');
+            const durationGroup = document.getElementById('durationGroup');
+            const muscleSection = document.getElementById('muscleGroupsSection');
+
+            if (type === 'kroki') {
+                stepsGroup.style.display = 'block';
+                durationGroup.style.display = 'none';
+                muscleSection.style.display = 'none';
+            } else {
+                stepsGroup.style.display = 'none';
+                durationGroup.style.display = 'block';
+                muscleSection.style.display = type === 'silownia' ? 'block' : 'none';
+            }
+        },
+
+        async saveSport() {
+            const type = document.getElementById('sportType').value;
+            const date = document.getElementById('sportDate').value;
+
+            if (!date) {
+                alert('Wybierz datę');
+                return;
+            }
+
+            let data = {
+                dzien: date,
+                typ: type,
+                czas_minuty: 0,
+                kroki: 0,
+                partie_ciala: ''
+            };
+
+            if (type === 'kroki') {
+                data.kroki = parseInt(document.getElementById('sportSteps').value) || 0;
+                if (data.kroki === 0) {
+                    alert('Podaj liczbę kroków');
+                    return;
+                }
+            } else {
+                data.czas_minuty = parseInt(document.getElementById('sportDuration').value) || 0;
+                if (data.czas_minuty === 0) {
+                    alert('Podaj czas trwania');
+                    return;
+                }
+
+                if (type === 'silownia') {
+                    const checkedMuscles = [];
+                    document.querySelectorAll('#muscleGroupsSection input:checked').forEach(cb => {
+                        checkedMuscles.push(cb.value);
+                    });
+                    data.partie_ciala = checkedMuscles.join(',');
+                }
+            }
+
+            await this.ajax('habits_save_sport', data);
+
+            // Clear form
+            document.getElementById('sportSteps').value = '';
+            document.getElementById('sportDuration').value = '';
+            document.querySelectorAll('#muscleGroupsSection input').forEach(cb => cb.checked = false);
+
+            // Refresh
+            this.loadSportHistory();
+            this.loadSportStats();
+        },
+
+        async loadSportHistory() {
+            const today = new Date();
+            const weekAgo = new Date(today);
+            weekAgo.setDate(weekAgo.getDate() - 7);
+
+            const result = await this.ajax('habits_get_sport', {
+                date_start: this.formatDate(weekAgo),
+                date_end: this.formatDate(today)
+            });
+
+            if (!result.success) return;
+
+            const container = document.getElementById('sportHistory');
+
+            if (result.data.length === 0) {
+                container.innerHTML = '<p style="color: #6B7280; text-align: center;">Brak aktywności w ostatnich 7 dniach.</p>';
+                return;
+            }
+
+            let html = '';
+            result.data.forEach(entry => {
+                const typeInfo = this.sportTypes[entry.typ] || this.sportTypes.inne;
+                const dateObj = new Date(entry.dzien);
+                const dateStr = dateObj.toLocaleDateString('pl-PL', { weekday: 'short', day: 'numeric', month: 'short' });
+
+                let value = '';
+                let details = '';
+
+                if (entry.typ === 'kroki') {
+                    value = parseInt(entry.kroki).toLocaleString();
+                    details = 'kroków';
+                } else {
+                    value = entry.czas_minuty;
+                    details = 'minut';
+                }
+
+                let musclesHtml = '';
+                if (entry.partie_ciala) {
+                    musclesHtml = '<div style="margin-top: 5px;">' +
+                        entry.partie_ciala.split(',').map(m => `<span class="muscle-tag">${m}</span>`).join('') +
+                        '</div>';
+                }
+
+                html += `
+                    <div class="sport-entry">
+                        <div class="sport-entry-icon">${typeInfo.icon}</div>
+                        <div class="sport-entry-info">
+                            <div class="sport-entry-type">${typeInfo.name}</div>
+                            <div class="sport-entry-date">${dateStr}</div>
+                            ${musclesHtml}
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="sport-entry-value">${value}</div>
+                            <div class="sport-entry-details">${details}</div>
+                        </div>
+                        <button class="habits-btn habits-btn-sm habits-btn-danger" onclick="HabitsApp.deleteSport(${entry.id})" style="margin-left: 10px;">🗑️</button>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        },
+
+        async loadSportStats() {
+            const today = new Date();
+            const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+            const result = await this.ajax('habits_get_sport_summary', {
+                date_start: this.formatDate(monthStart),
+                date_end: this.formatDate(today)
+            });
+
+            if (!result.success) return;
+
+            const data = result.data;
+            const container = document.getElementById('sportStats');
+
+            let html = '<div class="sport-stat-grid">';
+
+            html += `
+                <div class="sport-stat-card">
+                    <div class="sport-stat-value">👟 ${data.total_steps.toLocaleString()}</div>
+                    <div class="sport-stat-label">Kroków łącznie</div>
+                </div>
+                <div class="sport-stat-card">
+                    <div class="sport-stat-value">📊 ${data.avg_steps.toLocaleString()}</div>
+                    <div class="sport-stat-label">Średnia/dzień</div>
+                </div>
+            `;
+
+            // Treningi per typ
+            if (data.by_type && data.by_type.length > 0) {
+                data.by_type.forEach(t => {
+                    if (t.typ !== 'kroki') {
+                        const typeInfo = this.sportTypes[t.typ] || this.sportTypes.inne;
+                        html += `
+                            <div class="sport-stat-card">
+                                <div class="sport-stat-value">${typeInfo.icon} ${t.count}x</div>
+                                <div class="sport-stat-label">${typeInfo.name} (${t.total_minutes} min)</div>
+                            </div>
+                        `;
+                    }
+                });
+            }
+
+            html += '</div>';
+
+            // Partie ciała
+            if (data.muscle_counts && Object.keys(data.muscle_counts).length > 0) {
+                html += '<div style="margin-top: 20px;"><strong>Partie mięśniowe:</strong><div style="margin-top: 8px;">';
+                for (const [muscle, count] of Object.entries(data.muscle_counts)) {
+                    html += `<span class="muscle-tag">${muscle} (${count}x)</span> `;
+                }
+                html += '</div></div>';
+            }
+
+            container.innerHTML = html;
+        },
+
+        async deleteSport(id) {
+            if (!confirm('Usunąć tę aktywność?')) return;
+
+            await this.ajax('habits_delete_sport', { id: id });
+            this.loadSportHistory();
+            this.loadSportStats();
         }
     };
 
