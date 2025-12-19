@@ -422,23 +422,51 @@ add_action('admin_init', function() {
         $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN recurring_template_id INT DEFAULT NULL");
     }
 
-    // Migracja - normalizuj klucze kategorii w zadaniach (label -> key)
-    // Np. "Marketing Construction" -> "marketing_construction"
-    $kategorie_zadania = zadaniomat_get_kategorie_zadania();
-    $label_to_key = array_flip($kategorie_zadania); // ['Marketing Construction' => 'marketing_construction']
+    // Migracja - normalizuj klucze kategorii w zadaniach i opcjach
+    // Konwertuj wszystko do formatu: małe litery, podkreślniki zamiast spacji
 
-    foreach ($label_to_key as $label => $key) {
-        if ($label !== $key) {
-            // Zaktualizuj zadania które mają label zamiast key
+    // 1. Pobierz wszystkie unikalne kategorie z zadań
+    $kategorie_w_zadaniach = $wpdb->get_col("SELECT DISTINCT kategoria FROM $table_zadania WHERE kategoria IS NOT NULL");
+    $kategorie_w_stale = $wpdb->get_col("SELECT DISTINCT kategoria FROM $table_stale WHERE kategoria IS NOT NULL");
+    $wszystkie_kategorie = array_unique(array_merge($kategorie_w_zadaniach, $kategorie_w_stale));
+
+    // 2. Dla każdej kategorii, jeśli nie jest w formacie klucza, zaktualizuj
+    foreach ($wszystkie_kategorie as $kat) {
+        $proper_key = sanitize_key(str_replace(' ', '_', $kat));
+        if ($kat !== $proper_key && !empty($proper_key)) {
             $wpdb->query($wpdb->prepare(
                 "UPDATE $table_zadania SET kategoria = %s WHERE kategoria = %s",
-                $key, $label
+                $proper_key, $kat
             ));
-            // Zaktualizuj też stałe zadania
             $wpdb->query($wpdb->prepare(
                 "UPDATE $table_stale SET kategoria = %s WHERE kategoria = %s",
-                $key, $label
+                $proper_key, $kat
             ));
+        }
+    }
+
+    // 3. Napraw też zapisane opcje kategorii
+    $saved_kategorie = get_option('zadaniomat_kategorie_zadania');
+    if ($saved_kategorie && is_array($saved_kategorie)) {
+        $fixed_kategorie = [];
+        foreach ($saved_kategorie as $key => $label) {
+            $proper_key = sanitize_key(str_replace(' ', '_', $key));
+            $fixed_kategorie[$proper_key] = $label;
+        }
+        if ($fixed_kategorie !== $saved_kategorie) {
+            update_option('zadaniomat_kategorie_zadania', $fixed_kategorie);
+        }
+    }
+
+    $saved_kategorie_cele = get_option('zadaniomat_kategorie');
+    if ($saved_kategorie_cele && is_array($saved_kategorie_cele)) {
+        $fixed_kategorie_cele = [];
+        foreach ($saved_kategorie_cele as $key => $label) {
+            $proper_key = sanitize_key(str_replace(' ', '_', $key));
+            $fixed_kategorie_cele[$proper_key] = $label;
+        }
+        if ($fixed_kategorie_cele !== $saved_kategorie_cele) {
+            update_option('zadaniomat_kategorie', $fixed_kategorie_cele);
         }
     }
 
