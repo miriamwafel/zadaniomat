@@ -167,6 +167,17 @@ function zadaniomat_create_tables() {
         UNIQUE KEY stale_okres (stale_zadanie_id, okres_id)
     ) $charset_collate;";
 
+    // Tabela planowanych godzin dziennie per okres i kategoria
+    $table_godziny_okres = $wpdb->prefix . 'zadaniomat_godziny_okres';
+    $sql_godziny_okres = "CREATE TABLE IF NOT EXISTS $table_godziny_okres (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        okres_id INT NOT NULL,
+        kategoria VARCHAR(50) NOT NULL,
+        planowane_godziny_dziennie DECIMAL(4,2) DEFAULT 1.00,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY okres_kategoria (okres_id, kategoria)
+    ) $charset_collate;";
+
     // Tabela dni wolnych
     $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
     $sql7 = "CREATE TABLE IF NOT EXISTS $table_dni_wolne (
@@ -281,6 +292,7 @@ function zadaniomat_create_tables() {
     dbDelta($sql5);
     dbDelta($sql6);
     dbDelta($sql_overrides);
+    dbDelta($sql_godziny_okres);
     dbDelta($sql7);
     dbDelta($sql8);
     dbDelta($sql9);
@@ -532,7 +544,8 @@ function zadaniomat_generate_recurring_tasks($template_id, $rok_id = null) {
         } elseif ($template->typ_powtarzania === 'dzien_miesiaca' && $template->dzien_miesiaca) {
             $match = ($dayOfMonth === intval($template->dzien_miesiaca));
         } elseif ($template->typ_powtarzania === 'dni_przed_koncem_roku' && $template->dni_przed_koncem_roku) {
-            $diff = $end_date->diff($current);
+            // Oblicz ile dni pozostało do końca roku
+            $diff = $current->diff($end_date);
             if ($diff->invert === 0 && $diff->days === intval($template->dni_przed_koncem_roku)) {
                 $match = true;
             }
@@ -541,7 +554,8 @@ function zadaniomat_generate_recurring_tasks($template_id, $rok_id = null) {
             foreach ($okresy as $okres) {
                 if ($date_str >= $okres->data_start && $date_str <= $okres->data_koniec) {
                     $okres_koniec = new DateTime($okres->data_koniec);
-                    $diff = $okres_koniec->diff($current);
+                    // Oblicz ile dni pozostało do końca okresu
+                    $diff = $current->diff($okres_koniec);
                     if ($diff->invert === 0 && $diff->days === intval($template->dni_przed_koncem_okresu)) {
                         $match = true;
                     }
@@ -2656,24 +2670,24 @@ add_action('wp_ajax_zadaniomat_save_cel_rok', function() {
     wp_send_json_success();
 });
 
-// Zapisz planowane godziny dziennie dla kategorii
+// Zapisz planowane godziny dziennie dla kategorii (per okres)
 add_action('wp_ajax_zadaniomat_save_planowane_godziny', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
-    $table = $wpdb->prefix . 'zadaniomat_cele_rok';
-    $rok_id = intval($_POST['rok_id']);
+    $table = $wpdb->prefix . 'zadaniomat_godziny_okres';
+    $okres_id = intval($_POST['okres_id']);
     $kategoria = sanitize_text_field($_POST['kategoria']);
     $godziny = floatval($_POST['planowane_godziny_dziennie']);
 
     $existing = $wpdb->get_row($wpdb->prepare(
-        "SELECT id FROM $table WHERE rok_id = %d AND kategoria = %s", $rok_id, $kategoria
+        "SELECT id FROM $table WHERE okres_id = %d AND kategoria = %s", $okres_id, $kategoria
     ));
 
     if ($existing) {
         $wpdb->update($table, ['planowane_godziny_dziennie' => $godziny], ['id' => $existing->id]);
     } else {
-        $wpdb->insert($table, ['rok_id' => $rok_id, 'kategoria' => $kategoria, 'planowane_godziny_dziennie' => $godziny]);
+        $wpdb->insert($table, ['okres_id' => $okres_id, 'kategoria' => $kategoria, 'planowane_godziny_dziennie' => $godziny]);
     }
 
     wp_send_json_success();
@@ -2702,7 +2716,7 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
     $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
-    $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
+    $table_godziny_okres = $wpdb->prefix . 'zadaniomat_godziny_okres';
     $table_roki = $wpdb->prefix . 'zadaniomat_roki';
     $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
 
@@ -2710,12 +2724,21 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
     $filter_id = intval($_POST['filter_id']);
 
     // Pobierz daty
+    $okres_id = null;
     if ($filter_type === 'rok') {
         $filter_data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_roki WHERE id = %d", $filter_id));
         $rok_id = $filter_id;
+        // Dla roku bierzemy aktualny okres
+        $today = date('Y-m-d');
+        $current_okres = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM $table_okresy WHERE rok_id = %d AND %s BETWEEN data_start AND data_koniec",
+            $rok_id, $today
+        ));
+        $okres_id = $current_okres ? $current_okres->id : null;
     } else {
         $filter_data = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_okresy WHERE id = %d", $filter_id));
         $rok_id = $filter_data ? $filter_data->rok_id : null;
+        $okres_id = $filter_id;
     }
 
     if (!$filter_data) {
@@ -2777,12 +2800,12 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
         $start_date, $end_date
     ));
 
-    // Pobierz planowane godziny dziennie per kategoria
+    // Pobierz planowane godziny dziennie per kategoria (z tabeli godziny_okres)
     $planowane = [];
-    if ($rok_id) {
+    if ($okres_id) {
         $planowane_raw = $wpdb->get_results($wpdb->prepare(
-            "SELECT kategoria, planowane_godziny_dziennie FROM $table_cele_rok WHERE rok_id = %d",
-            $rok_id
+            "SELECT kategoria, planowane_godziny_dziennie FROM $table_godziny_okres WHERE okres_id = %d",
+            $okres_id
         ));
         foreach ($planowane_raw as $p) {
             $planowane[$p->kategoria] = floatval($p->planowane_godziny_dziennie);
@@ -2821,6 +2844,7 @@ add_action('wp_ajax_zadaniomat_get_stats', function() {
         'dni_wszystkie' => $total_days,
         'dni_wolne' => intval($dni_wolne_count),
         'rok_id' => $rok_id,
+        'okres_id' => $okres_id,
         'stats_by_kategoria' => $stats_by_kategoria,
         'total' => [
             'faktyczny_czas' => $total_faktyczny,
@@ -4461,13 +4485,13 @@ add_action('wp_ajax_zadaniomat_get_stale_for_day', function() {
             $match = ($dayOfMonth === intval($s->dzien_miesiaca));
         } elseif ($s->typ_powtarzania === 'dni_przed_koncem_roku' && $s->dni_przed_koncem_roku && $current_rok) {
             $rok_koniec = new DateTime($current_rok->data_koniec);
-            $diff = $rok_koniec->diff($date);
+            $diff = $date->diff($rok_koniec);
             if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_roku)) {
                 $match = true;
             }
         } elseif ($s->typ_powtarzania === 'dni_przed_koncem_okresu' && $s->dni_przed_koncem_okresu && $current_okres) {
             $okres_koniec = new DateTime($current_okres->data_koniec);
-            $diff = $okres_koniec->diff($date);
+            $diff = $date->diff($okres_koniec);
             if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_okresu)) {
                 $match = true;
             }
@@ -4562,20 +4586,31 @@ add_action('wp_ajax_zadaniomat_get_harmonogram', function() {
         } elseif ($s->typ_powtarzania === 'dni_przed_koncem_roku' && $s->dni_przed_koncem_roku && $current_rok) {
             // Oblicz ile dni przed końcem roku (90-dniowego okresu)
             $rok_koniec = new DateTime($current_rok->data_koniec);
-            $diff = $rok_koniec->diff($date);
+            $diff = $date->diff($rok_koniec);
             if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_roku)) {
                 $match = true;
             }
         } elseif ($s->typ_powtarzania === 'dni_przed_koncem_okresu' && $s->dni_przed_koncem_okresu && $current_okres) {
             // Oblicz ile dni przed końcem okresu 2-tygodniowego
             $okres_koniec = new DateTime($current_okres->data_koniec);
-            $diff = $okres_koniec->diff($date);
+            $diff = $date->diff($okres_koniec);
             if ($diff->invert === 0 && $diff->days === intval($s->dni_przed_koncem_okresu)) {
                 $match = true;
             }
         }
 
         if ($match) {
+            // Sprawdź czy zadanie z tego template'a już istnieje na ten dzień
+            $existing_task = $wpdb->get_var($wpdb->prepare(
+                "SELECT id FROM $table_zadania WHERE recurring_template_id = %d AND dzien = %s",
+                $s->id, $dzien
+            ));
+
+            // Jeśli zadanie już istnieje, nie dodawaj szablonu (zadanie jest w głównej liście)
+            if ($existing_task) {
+                continue;
+            }
+
             $s->kategoria_label = zadaniomat_get_kategoria_label($s->kategoria);
             $s->is_stale = true;
             $s->zadanie = $s->nazwa;
@@ -7046,23 +7081,23 @@ function zadaniomat_page_main() {
                     <div class="goals-panel">
                         <?php
                         // Pobierz dane do dzisiejszego progresu
-                        $table_cele_rok = $wpdb->prefix . 'zadaniomat_cele_rok';
+                        $table_godziny_okres = $wpdb->prefix . 'zadaniomat_godziny_okres';
                         $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
 
-                        // Kategorie celów (tylko te mają progres)
-                        $kategorie_celow = zadaniomat_get_kategorie();
+                        // Wszystkie kategorie zadań (używamy tych samych co w statystykach)
+                        $kategorie_celow = zadaniomat_get_kategorie_zadania();
                         $kategorie_celow_keys = array_keys($kategorie_celow);
 
-                        // Planowane godziny dziennie per kategoria (tylko dla kategorii celów)
+                        // Planowane godziny dziennie per kategoria (z tabeli per okres)
                         $planowane_raw = $wpdb->get_results($wpdb->prepare(
-                            "SELECT kategoria, planowane_godziny_dziennie FROM $table_cele_rok WHERE rok_id = %d",
-                            $current_rok->id
+                            "SELECT kategoria, planowane_godziny_dziennie FROM $table_godziny_okres WHERE okres_id = %d",
+                            $current_okres->id
                         ));
                         $planowane_map = [];
                         $total_planowane = 0;
                         foreach ($planowane_raw as $p) {
                             $planowane_map[$p->kategoria] = floatval($p->planowane_godziny_dziennie);
-                            // Tylko kategorie celów liczą się do progresu
+                            // Wszystkie kategorie liczą się do progresu
                             if (in_array($p->kategoria, $kategorie_celow_keys)) {
                                 $total_planowane += floatval($p->planowane_godziny_dziennie);
                             }
@@ -7703,7 +7738,12 @@ function zadaniomat_page_main() {
             $('#okres-days-grid').html(html);
         }
 
+        // currentOkresId jest już zdefiniowane wyżej z PHP (linia 7318)
+
         function renderStats(data) {
+            // Zapisz okres_id do późniejszego użycia przy zapisie godzin
+            currentOkresId = data.okres_id;
+
             // Aktualizuj info o filtrze
             var filterText = data.filter_data.nazwa + ' (' + formatDate(data.filter_data.data_start) + ' - ' + formatDate(data.filter_data.data_koniec) + ')';
             $('#filter-info').text(filterText);
@@ -7791,9 +7831,8 @@ function zadaniomat_page_main() {
         };
 
         window.savePlanowaneGodziny = function(kategoria) {
-            var rokId = $('#stats-rok-filter').val();
-            if (!rokId) {
-                showToast('Najpierw wybierz rok', 'error');
+            if (!currentOkresId) {
+                showToast('Najpierw wybierz okres', 'error');
                 return;
             }
 
@@ -7802,12 +7841,12 @@ function zadaniomat_page_main() {
             $.post(ajaxurl, {
                 action: 'zadaniomat_save_planowane_godziny',
                 nonce: nonce,
-                rok_id: rokId,
+                okres_id: currentOkresId,
                 kategoria: kategoria,
                 planowane_godziny_dziennie: godziny
             }, function(response) {
                 if (response.success) {
-                    showToast('Zapisano planowane godziny!', 'success');
+                    showToast('Zapisano planowane godziny dla tego okresu!', 'success');
                     $('#hours-edit-' + kategoria).hide();
                     loadStats(); // Odśwież statystyki
                 }
