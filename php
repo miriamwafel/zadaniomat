@@ -113,6 +113,7 @@ function zadaniomat_create_tables() {
         godzina_koniec TIME DEFAULT NULL,
         pozycja_harmonogram INT DEFAULT NULL,
         jest_cykliczne TINYINT(1) DEFAULT 0,
+        recurring_template_id INT DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
@@ -122,12 +123,19 @@ function zadaniomat_create_tables() {
         $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN jest_cykliczne TINYINT(1) DEFAULT 0");
     }
 
-    // Tabela stałych zadań (cyklicznych)
+    // Dodaj kolumnę recurring_template_id do tabeli zadań (jeśli nie istnieje)
+    $column_check = $wpdb->get_results("SHOW COLUMNS FROM $table_zadania LIKE 'recurring_template_id'");
+    if (empty($column_check)) {
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN recurring_template_id INT DEFAULT NULL");
+    }
+
+    // Tabela stałych zadań (cyklicznych) - teraz jako wzorce (templates)
     $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
     $sql6 = "CREATE TABLE IF NOT EXISTS $table_stale (
         id INT AUTO_INCREMENT PRIMARY KEY,
         nazwa VARCHAR(255) NOT NULL,
         kategoria VARCHAR(50) NOT NULL,
+        cel_todo TEXT,
         planowany_czas INT DEFAULT 0,
         typ_powtarzania VARCHAR(50) NOT NULL DEFAULT 'codziennie',
         dni_tygodnia VARCHAR(50) DEFAULT NULL,
@@ -141,6 +149,12 @@ function zadaniomat_create_tables() {
         aktywne TINYINT(1) DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
+
+    // Dodaj kolumnę cel_todo do stale_zadania (jeśli nie istnieje)
+    $column_check = $wpdb->get_results("SHOW COLUMNS FROM $table_stale LIKE 'cel_todo'");
+    if (empty($column_check)) {
+        $wpdb->query("ALTER TABLE $table_stale ADD COLUMN cel_todo TEXT AFTER kategoria");
+    }
 
     // Tabela dni wolnych
     $table_dni_wolne = $wpdb->prefix . 'zadaniomat_dni_wolne';
@@ -377,6 +391,28 @@ add_action('admin_init', function() {
             $wpdb->query("ALTER TABLE $table_xp_log ADD COLUMN condition_text VARCHAR(255) DEFAULT NULL AFTER description");
         }
     }
+
+    // Migracja - dodaj kolumnę recurring_template_id do zadań
+    $zadania_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_zadania");
+    if (!in_array('recurring_template_id', $zadania_columns)) {
+        $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN recurring_template_id INT DEFAULT NULL");
+    }
+
+    // Migracja - dodaj kolumnę cel_todo do stałych zadań
+    $stale_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_stale");
+    if (!in_array('cel_todo', $stale_columns)) {
+        $wpdb->query("ALTER TABLE $table_stale ADD COLUMN cel_todo TEXT AFTER kategoria");
+    }
+
+    // Migracja - wygeneruj zadania dla istniejących aktywnych stałych zadań (jednorazowo)
+    $migration_done = get_option('zadaniomat_recurring_migration_done', false);
+    if (!$migration_done) {
+        $aktywne_stale = $wpdb->get_results("SELECT id FROM $table_stale WHERE aktywne = 1");
+        foreach ($aktywne_stale as $stale) {
+            zadaniomat_generate_recurring_tasks($stale->id);
+        }
+        update_option('zadaniomat_recurring_migration_done', true);
+    }
 });
 
 // =============================================
@@ -406,6 +442,164 @@ function zadaniomat_get_current_rok($date = null) {
 
 function zadaniomat_get_kategoria_label($key) {
     return ZADANIOMAT_KATEGORIE_ZADANIA[$key] ?? $key;
+}
+
+// =============================================
+// RECURRING TASKS - GENERATE FROM TEMPLATE
+// =============================================
+
+/**
+ * Generuje zadania z template'a stałego zadania na dany rok (90-dniowy okres)
+ * @param int $template_id - ID stałego zadania (template)
+ * @param int|null $rok_id - ID roku (jeśli null, używa aktualnego)
+ * @return array - lista utworzonych zadań
+ */
+function zadaniomat_generate_recurring_tasks($template_id, $rok_id = null) {
+    global $wpdb;
+
+    $table_stale = $wpdb->prefix . 'zadaniomat_stale_zadania';
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $table_roki = $wpdb->prefix . 'zadaniomat_roki';
+
+    // Pobierz template
+    $template = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_stale WHERE id = %d", $template_id));
+    if (!$template || !$template->aktywne) return [];
+
+    // Pobierz rok
+    if ($rok_id) {
+        $rok = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_roki WHERE id = %d", $rok_id));
+    } else {
+        $rok = zadaniomat_get_current_rok();
+    }
+    if (!$rok) return [];
+
+    // Pobierz okresy w tym roku
+    $table_okresy = $wpdb->prefix . 'zadaniomat_okresy';
+    $okresy = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table_okresy WHERE rok_id = %d ORDER BY data_start",
+        $rok->id
+    ));
+
+    $created_tasks = [];
+    $start_date = new DateTime($rok->data_start);
+    $end_date = new DateTime($rok->data_koniec);
+    $today = new DateTime();
+
+    // Nie generuj zadań wstecz - zacznij od dziś lub startu roku (cokolwiek jest późniejsze)
+    if ($start_date < $today) {
+        $start_date = clone $today;
+    }
+
+    $current = clone $start_date;
+
+    while ($current <= $end_date) {
+        $match = false;
+        $dayOfWeek = strtolower($current->format('D'));
+        $dayOfWeekPl = ['mon' => 'pn', 'tue' => 'wt', 'wed' => 'sr', 'thu' => 'cz', 'fri' => 'pt', 'sat' => 'so', 'sun' => 'nd'];
+        $dayPl = $dayOfWeekPl[$dayOfWeek];
+        $dayOfMonth = intval($current->format('j'));
+        $date_str = $current->format('Y-m-d');
+
+        // Sprawdź typ powtarzania
+        if ($template->typ_powtarzania === 'codziennie') {
+            $match = true;
+        } elseif ($template->typ_powtarzania === 'dni_tygodnia' && !empty($template->dni_tygodnia)) {
+            $dni = explode(',', $template->dni_tygodnia);
+            $match = in_array($dayPl, $dni);
+        } elseif ($template->typ_powtarzania === 'dzien_miesiaca' && $template->dzien_miesiaca) {
+            $match = ($dayOfMonth === intval($template->dzien_miesiaca));
+        } elseif ($template->typ_powtarzania === 'dni_przed_koncem_roku' && $template->dni_przed_koncem_roku) {
+            $diff = $end_date->diff($current);
+            if ($diff->invert === 0 && $diff->days === intval($template->dni_przed_koncem_roku)) {
+                $match = true;
+            }
+        } elseif ($template->typ_powtarzania === 'dni_przed_koncem_okresu' && $template->dni_przed_koncem_okresu) {
+            // Znajdź okres dla tego dnia
+            foreach ($okresy as $okres) {
+                if ($date_str >= $okres->data_start && $date_str <= $okres->data_koniec) {
+                    $okres_koniec = new DateTime($okres->data_koniec);
+                    $diff = $okres_koniec->diff($current);
+                    if ($diff->invert === 0 && $diff->days === intval($template->dni_przed_koncem_okresu)) {
+                        $match = true;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if ($match) {
+            // Sprawdź czy zadanie już istnieje na ten dzień
+            $existing = $wpdb->get_var($wpdb->prepare(
+                "SELECT id FROM $table_zadania WHERE recurring_template_id = %d AND dzien = %s",
+                $template_id, $date_str
+            ));
+
+            if (!$existing) {
+                // Znajdź okres dla tego dnia
+                $okres_id = null;
+                foreach ($okresy as $okres) {
+                    if ($date_str >= $okres->data_start && $date_str <= $okres->data_koniec) {
+                        $okres_id = $okres->id;
+                        break;
+                    }
+                }
+
+                // Utwórz zadanie
+                $wpdb->insert($table_zadania, [
+                    'okres_id' => $okres_id,
+                    'kategoria' => $template->kategoria,
+                    'dzien' => $date_str,
+                    'zadanie' => $template->nazwa,
+                    'cel_todo' => $template->cel_todo,
+                    'planowany_czas' => $template->planowany_czas,
+                    'status' => 'nowe',
+                    'godzina_start' => $template->godzina_start,
+                    'godzina_koniec' => $template->godzina_koniec,
+                    'jest_cykliczne' => 1,
+                    'recurring_template_id' => $template_id
+                ]);
+
+                $created_tasks[] = $wpdb->insert_id;
+            }
+        }
+
+        $current->modify('+1 day');
+    }
+
+    return $created_tasks;
+}
+
+/**
+ * Usuwa przyszłe zadania wygenerowane z template'a
+ * @param int $template_id - ID stałego zadania (template)
+ * @param bool $delete_today - czy usunąć też zadania z dzisiaj
+ * @return int - liczba usuniętych zadań
+ */
+function zadaniomat_delete_future_recurring_tasks($template_id, $delete_today = false) {
+    global $wpdb;
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $today = date('Y-m-d');
+
+    $operator = $delete_today ? '>=' : '>';
+
+    // Usuń tylko niezrealizowane przyszłe zadania
+    $deleted = $wpdb->query($wpdb->prepare(
+        "DELETE FROM $table_zadania WHERE recurring_template_id = %d AND dzien $operator %s AND status IN ('nowe', 'w_trakcie')",
+        $template_id, $today
+    ));
+
+    return $deleted;
+}
+
+/**
+ * Regeneruje zadania dla template'a (usuwa przyszłe i tworzy nowe)
+ * @param int $template_id - ID stałego zadania (template)
+ * @return array - ['deleted' => int, 'created' => array]
+ */
+function zadaniomat_regenerate_recurring_tasks($template_id) {
+    $deleted = zadaniomat_delete_future_recurring_tasks($template_id);
+    $created = zadaniomat_generate_recurring_tasks($template_id);
+    return ['deleted' => $deleted, 'created' => $created];
 }
 
 // =============================================
@@ -3967,7 +4161,7 @@ add_action('wp_ajax_zadaniomat_get_stale_zadania', function() {
     wp_send_json_success(['stale_zadania' => $stale]);
 });
 
-// Dodaj stałe zadanie
+// Dodaj stałe zadanie (template) i generuj zadania na rok
 add_action('wp_ajax_zadaniomat_add_stale_zadanie', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
@@ -3977,27 +4171,35 @@ add_action('wp_ajax_zadaniomat_add_stale_zadanie', function() {
     $wpdb->insert($table, [
         'nazwa' => sanitize_text_field($_POST['nazwa']),
         'kategoria' => sanitize_text_field($_POST['kategoria']),
+        'cel_todo' => sanitize_textarea_field($_POST['cel_todo'] ?? ''),
         'planowany_czas' => intval($_POST['planowany_czas']),
         'typ_powtarzania' => sanitize_text_field($_POST['typ_powtarzania']),
         'dni_tygodnia' => sanitize_text_field($_POST['dni_tygodnia'] ?? ''),
         'dzien_miesiaca' => !empty($_POST['dzien_miesiaca']) ? intval($_POST['dzien_miesiaca']) : null,
         'dni_przed_koncem_roku' => !empty($_POST['dni_przed_koncem_roku']) ? intval($_POST['dni_przed_koncem_roku']) : null,
         'dni_przed_koncem_okresu' => !empty($_POST['dni_przed_koncem_okresu']) ? intval($_POST['dni_przed_koncem_okresu']) : null,
-        'minuty_po_starcie' => !empty($_POST['minuty_po_starcie']) ? intval($_POST['minuty_po_starcie']) : null,
-        'dodaj_do_listy' => !empty($_POST['dodaj_do_listy']) ? 1 : 0,
+        'minuty_po_starcie' => null,
+        'dodaj_do_listy' => 1, // Zawsze dodawane do listy jako normalne zadania
         'godzina_start' => !empty($_POST['godzina_start']) ? sanitize_text_field($_POST['godzina_start']) : null,
         'godzina_koniec' => !empty($_POST['godzina_koniec']) ? sanitize_text_field($_POST['godzina_koniec']) : null,
         'aktywne' => 1
     ]);
 
     $id = $wpdb->insert_id;
+
+    // Generuj zadania na aktualny rok (90 dni)
+    $created_tasks = zadaniomat_generate_recurring_tasks($id);
+
     $zadanie = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
     $zadanie->kategoria_label = zadaniomat_get_kategoria_label($zadanie->kategoria);
 
-    wp_send_json_success(['zadanie' => $zadanie]);
+    wp_send_json_success([
+        'zadanie' => $zadanie,
+        'generated_count' => count($created_tasks)
+    ]);
 });
 
-// Edytuj stałe zadanie
+// Edytuj stałe zadanie (template) i regeneruj przyszłe zadania
 add_action('wp_ajax_zadaniomat_edit_stale_zadanie', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
@@ -4008,38 +4210,78 @@ add_action('wp_ajax_zadaniomat_edit_stale_zadanie', function() {
     $wpdb->update($table, [
         'nazwa' => sanitize_text_field($_POST['nazwa']),
         'kategoria' => sanitize_text_field($_POST['kategoria']),
+        'cel_todo' => sanitize_textarea_field($_POST['cel_todo'] ?? ''),
         'planowany_czas' => intval($_POST['planowany_czas']),
         'typ_powtarzania' => sanitize_text_field($_POST['typ_powtarzania']),
         'dni_tygodnia' => sanitize_text_field($_POST['dni_tygodnia'] ?? ''),
         'dzien_miesiaca' => !empty($_POST['dzien_miesiaca']) ? intval($_POST['dzien_miesiaca']) : null,
         'dni_przed_koncem_roku' => !empty($_POST['dni_przed_koncem_roku']) ? intval($_POST['dni_przed_koncem_roku']) : null,
         'dni_przed_koncem_okresu' => !empty($_POST['dni_przed_koncem_okresu']) ? intval($_POST['dni_przed_koncem_okresu']) : null,
-        'minuty_po_starcie' => !empty($_POST['minuty_po_starcie']) ? intval($_POST['minuty_po_starcie']) : null,
-        'dodaj_do_listy' => !empty($_POST['dodaj_do_listy']) ? 1 : 0,
+        'minuty_po_starcie' => null,
+        'dodaj_do_listy' => 1,
         'godzina_start' => !empty($_POST['godzina_start']) ? sanitize_text_field($_POST['godzina_start']) : null,
         'godzina_koniec' => !empty($_POST['godzina_koniec']) ? sanitize_text_field($_POST['godzina_koniec']) : null
     ], ['id' => $id]);
 
+    // Regeneruj przyszłe zadania z nowego template'a
+    $result = zadaniomat_regenerate_recurring_tasks($id);
+
     $zadanie = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $id));
     $zadanie->kategoria_label = zadaniomat_get_kategoria_label($zadanie->kategoria);
 
-    wp_send_json_success(['zadanie' => $zadanie]);
+    wp_send_json_success([
+        'zadanie' => $zadanie,
+        'deleted_count' => $result['deleted'],
+        'generated_count' => count($result['created'])
+    ]);
 });
 
-// Usuń stałe zadanie
+// Usuń stałe zadanie (template) z opcją usunięcia przyszłych zadań
 add_action('wp_ajax_zadaniomat_delete_stale_zadanie', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
 
     $table = $wpdb->prefix . 'zadaniomat_stale_zadania';
     $id = intval($_POST['id']);
+    $delete_future = !empty($_POST['delete_future']); // Czy usunąć przyszłe zadania
 
+    $deleted_tasks = 0;
+    if ($delete_future) {
+        // Usuń przyszłe zadania wygenerowane z tego template'a
+        $deleted_tasks = zadaniomat_delete_future_recurring_tasks($id, true);
+    } else {
+        // Tylko odłącz przyszłe zadania od template'a (zachowaj je jako zwykłe zadania)
+        $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+        $wpdb->query($wpdb->prepare(
+            "UPDATE $table_zadania SET recurring_template_id = NULL WHERE recurring_template_id = %d",
+            $id
+        ));
+    }
+
+    // Usuń template
     $wpdb->delete($table, ['id' => $id]);
 
-    wp_send_json_success();
+    wp_send_json_success(['deleted_tasks' => $deleted_tasks]);
 });
 
-// Toggle aktywność stałego zadania
+// Pobierz liczbę przyszłych zadań dla template'a (do dialogu usuwania)
+add_action('wp_ajax_zadaniomat_count_future_tasks', function() {
+    global $wpdb;
+    check_ajax_referer('zadaniomat_ajax', 'nonce');
+
+    $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
+    $template_id = intval($_POST['template_id']);
+    $today = date('Y-m-d');
+
+    $count = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_zadania WHERE recurring_template_id = %d AND dzien >= %s AND status IN ('nowe', 'w_trakcie')",
+        $template_id, $today
+    ));
+
+    wp_send_json_success(['count' => intval($count)]);
+});
+
+// Toggle aktywność stałego zadania - regeneruj zadania przy aktywacji
 add_action('wp_ajax_zadaniomat_toggle_stale_zadanie', function() {
     global $wpdb;
     check_ajax_referer('zadaniomat_ajax', 'nonce');
@@ -4050,7 +4292,19 @@ add_action('wp_ajax_zadaniomat_toggle_stale_zadanie', function() {
 
     $wpdb->update($table, ['aktywne' => $aktywne], ['id' => $id]);
 
-    wp_send_json_success();
+    $result = ['deleted' => 0, 'created' => []];
+    if ($aktywne) {
+        // Przy aktywacji - generuj zadania na rok
+        $result['created'] = zadaniomat_generate_recurring_tasks($id);
+    } else {
+        // Przy dezaktywacji - usuń przyszłe niezrealizowane zadania
+        $result['deleted'] = zadaniomat_delete_future_recurring_tasks($id);
+    }
+
+    wp_send_json_success([
+        'deleted_count' => $result['deleted'],
+        'generated_count' => count($result['created'])
+    ]);
 });
 
 // Pobierz stałe zadania dla danego dnia (sprawdza typ powtarzania)
@@ -5190,14 +5444,19 @@ add_action('admin_head', function() {
             }
 
             /* Cykliczne zadania badge */
-            .cykliczne-badge {
+            .cykliczne-badge,
+            .cyclic-badge {
                 display: inline-block;
                 margin-left: 5px;
                 font-size: 12px;
                 opacity: 0.7;
             }
-            .task-cykliczne {
+            .task-cykliczne,
+            tr.is-cyclic {
                 background: linear-gradient(90deg, rgba(102, 126, 234, 0.05), transparent) !important;
+            }
+            tr.is-cyclic td:first-child {
+                border-left: 3px solid #667eea;
             }
 
             .stale-task-row {
@@ -7764,15 +8023,16 @@ function zadaniomat_page_main() {
         window.renderTaskRow = function(t, day) {
             var taskStatus = t.status || 'nowe';
             var statusClass = 'status-' + taskStatus;
+            var isCyclic = t.jest_cykliczne == 1 || t.recurring_template_id;
 
             var planowany = parseInt(t.planowany_czas) || 0;
             var faktyczny = parseInt(t.faktyczny_czas) || 0;
             var isActiveTimer = activeTimer && activeTimer.taskId == t.id;
 
-            var html = '<tr class="' + statusClass + '" data-task-id="' + t.id + '">';
+            var html = '<tr class="' + statusClass + (isCyclic ? ' is-cyclic' : '') + '" data-task-id="' + t.id + '">';
             html += '<td><input type="checkbox" class="task-checkbox" data-task-id="' + t.id + '" data-day="' + day + '"></td>';
             html += '<td><span class="kategoria-badge ' + t.kategoria + '">' + t.kategoria_label + '</span></td>';
-            html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong></td>';
+            html += '<td><strong>' + escapeHtml(t.zadanie) + '</strong>' + (isCyclic ? ' <span class="cyclic-badge" title="Zadanie cykliczne">🔄</span>' : '') + '</td>';
             html += '<td style="font-size:12px;color:#666;">' + escapeHtml(t.cel_todo || '') + '</td>';
 
             // Kolumna czasu z timerem
@@ -10409,7 +10669,7 @@ function zadaniomat_page_settings() {
 
         <div class="zadaniomat-card">
             <h2>🔄 Stałe zadania (cykliczne)</h2>
-            <p style="color: #666; margin-bottom: 15px;">Definiuj zadania, które powtarzają się regularnie. Będą automatycznie pojawiać się w harmonogramie dnia.</p>
+            <p style="color: #666; margin-bottom: 15px;">Definiuj zadania, które powtarzają się regularnie. Zadania są automatycznie generowane na cały rok (90-dniowy okres) i pojawiają się jako normalne zadania na liście i w harmonogramie.</p>
 
             <!-- Formularz dodawania/edycji stałego zadania -->
             <div class="stale-zadania-form">
@@ -10434,14 +10694,18 @@ function zadaniomat_page_settings() {
                     </div>
                 </div>
                 <div class="form-row">
+                    <div class="form-group" style="flex: 1;">
+                        <label>To do (opcjonalnie)</label>
+                        <textarea id="stale-cel-todo" placeholder="Lista rzeczy do zrobienia..." style="width: 100%; min-height: 60px; resize: vertical;"></textarea>
+                    </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
-                        <label>Typ powtarzania</label>
+                        <label>Cykliczność</label>
                         <select id="stale-typ" onchange="toggleStaleOptions()">
                             <option value="codziennie">Codziennie</option>
                             <option value="dni_tygodnia">Wybrane dni tygodnia</option>
                             <option value="dzien_miesiaca">Dzień miesiąca</option>
-                            <option value="dni_przed_koncem_roku">Dni przed końcem roku (90-dni)</option>
-                            <option value="dni_przed_koncem_okresu">Dni przed końcem okresu (2 tyg)</option>
                         </select>
                     </div>
                     <div class="form-group" id="stale-dni-wrap" style="display: none;">
@@ -10460,34 +10724,19 @@ function zadaniomat_page_settings() {
                         <label>Dzień miesiąca</label>
                         <input type="number" id="stale-dzien-miesiaca" min="1" max="31" placeholder="1-31" style="width: 80px;">
                     </div>
-                    <div class="form-group" id="stale-dni-przed-wrap" style="display: none;">
-                        <label>Ile dni przed końcem roku</label>
-                        <input type="number" id="stale-dni-przed-koncem" min="1" max="90" placeholder="np. 7" style="width: 80px;">
-                    </div>
-                    <div class="form-group" id="stale-dni-przed-okresu-wrap" style="display: none;">
-                        <label>Ile dni przed końcem okresu</label>
-                        <input type="number" id="stale-dni-przed-okresu" min="1" max="14" placeholder="np. 3" style="width: 80px;">
-                    </div>
                     <div class="form-group">
                         <label>Godzina start</label>
                         <input type="time" id="stale-godzina-start">
                     </div>
                     <div class="form-group">
-                        <label>Godzina koniec</label>
-                        <input type="time" id="stale-godzina-koniec">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                            <input type="checkbox" id="stale-dodaj-do-listy" style="width:auto;">
-                            <span>Dodaj też do listy zadań</span>
-                        </label>
-                        <span style="font-size:11px;color:#888;">(nie tylko harmonogram)</span>
+                        <label>Czas trwania</label>
+                        <input type="number" id="stale-czas-trwania" min="0" placeholder="min" style="width: 80px;">
+                        <span style="font-size:11px;color:#888;">min</span>
                     </div>
                 </div>
                 <button type="button" class="button button-primary" id="stale-submit-btn" onclick="saveStaleZadanie()">➕ Dodaj stałe zadanie</button>
                 <button type="button" class="button" id="stale-cancel-btn" onclick="cancelStaleEdit()" style="display: none; margin-left: 10px;">Anuluj</button>
+                <span id="stale-save-info" style="margin-left: 15px; color: #28a745; font-size: 12px;"></span>
             </div>
 
             <!-- Lista stałych zadań -->
@@ -11004,8 +11253,6 @@ function zadaniomat_page_settings() {
             var typ = $('#stale-typ').val();
             $('#stale-dni-wrap').toggle(typ === 'dni_tygodnia');
             $('#stale-dzien-wrap').toggle(typ === 'dzien_miesiaca');
-            $('#stale-dni-przed-wrap').toggle(typ === 'dni_przed_koncem_roku');
-            $('#stale-dni-przed-okresu-wrap').toggle(typ === 'dni_przed_koncem_okresu');
         };
 
         window.loadStaleZadania = function() {
@@ -11091,13 +11338,11 @@ function zadaniomat_page_settings() {
             $('#stale-nazwa').val(zadanie.nazwa);
             $('#stale-kategoria').val(zadanie.kategoria);
             $('#stale-czas').val(zadanie.planowany_czas || '');
+            $('#stale-cel-todo').val(zadanie.cel_todo || '');
             $('#stale-typ').val(zadanie.typ_powtarzania);
             $('#stale-godzina-start').val(zadanie.godzina_start ? zadanie.godzina_start.substring(0, 5) : '');
-            $('#stale-godzina-koniec').val(zadanie.godzina_koniec ? zadanie.godzina_koniec.substring(0, 5) : '');
+            $('#stale-czas-trwania').val(zadanie.planowany_czas || '');
             $('#stale-dzien-miesiaca').val(zadanie.dzien_miesiaca || '');
-            $('#stale-dni-przed-koncem').val(zadanie.dni_przed_koncem_roku || '');
-            $('#stale-dni-przed-okresu').val(zadanie.dni_przed_koncem_okresu || '');
-            $('#stale-dodaj-do-listy').prop('checked', zadanie.dodaj_do_listy == 1);
 
             // Zaznacz dni tygodnia
             $('.dni-tygodnia-checkboxes input').prop('checked', false);
@@ -11130,16 +11375,15 @@ function zadaniomat_page_settings() {
             $('#stale-edit-id').val('');
             $('#stale-nazwa').val('');
             $('#stale-czas').val('');
+            $('#stale-cel-todo').val('');
             $('#stale-godzina-start').val('');
-            $('#stale-godzina-koniec').val('');
+            $('#stale-czas-trwania').val('');
             $('#stale-typ').val('codziennie');
             $('#stale-kategoria').val($('#stale-kategoria option:first').val());
             toggleStaleOptions();
             $('.dni-tygodnia-checkboxes input').prop('checked', false);
             $('#stale-dzien-miesiaca').val('');
-            $('#stale-dni-przed-koncem').val('');
-            $('#stale-dni-przed-okresu').val('');
-            $('#stale-dodaj-do-listy').prop('checked', false);
+            $('#stale-save-info').text('');
 
             // Przywróć tytuł i przyciski
             $('#stale-form-title').text('➕ Dodaj stałe zadanie');
@@ -11168,11 +11412,11 @@ function zadaniomat_page_settings() {
 
             // Oblicz godzinę końca z godziny startu + czas trwania
             var godzinaStart = $('#stale-godzina-start').val();
-            var czasTrwania = parseInt($('#stale-czas').val()) || 0;
-            var godzinaKoniec = $('#stale-godzina-koniec').val();
+            var czasTrwania = parseInt($('#stale-czas-trwania').val()) || parseInt($('#stale-czas').val()) || 0;
+            var godzinaKoniec = '';
 
             // Auto-oblicz godzinę końca jeśli mamy start i czas
-            if (godzinaStart && czasTrwania > 0 && !godzinaKoniec) {
+            if (godzinaStart && czasTrwania > 0) {
                 var startParts = godzinaStart.split(':');
                 var startMinutes = parseInt(startParts[0]) * 60 + parseInt(startParts[1]);
                 var endMinutes = startMinutes + czasTrwania;
@@ -11185,13 +11429,11 @@ function zadaniomat_page_settings() {
                 nonce: nonce,
                 nazwa: nazwa,
                 kategoria: $('#stale-kategoria').val(),
+                cel_todo: $('#stale-cel-todo').val(),
                 planowany_czas: czasTrwania,
                 typ_powtarzania: typ,
                 dni_tygodnia: dniTygodnia,
                 dzien_miesiaca: $('#stale-dzien-miesiaca').val(),
-                dni_przed_koncem_roku: $('#stale-dni-przed-koniec').val(),
-                dni_przed_koncem_okresu: $('#stale-dni-przed-okresu').val(),
-                dodaj_do_listy: $('#stale-dodaj-do-listy').is(':checked') ? 1 : 0,
                 godzina_start: godzinaStart,
                 godzina_koniec: godzinaKoniec
             };
@@ -11209,6 +11451,10 @@ function zadaniomat_page_settings() {
                             staleZadania[index] = response.data.zadanie;
                         }
                         renderStaleZadania();
+                        var msg = 'Zaktualizowano! ';
+                        if (response.data.deleted_count > 0) msg += 'Usunięto ' + response.data.deleted_count + ' starych. ';
+                        if (response.data.generated_count > 0) msg += 'Wygenerowano ' + response.data.generated_count + ' nowych zadań.';
+                        $('#stale-save-info').text(msg);
                         resetStaleForm();
                         showToast('Stałe zadanie zaktualizowane!', 'success');
                     }
@@ -11221,6 +11467,8 @@ function zadaniomat_page_settings() {
                     if (response.success) {
                         staleZadania.push(response.data.zadanie);
                         renderStaleZadania();
+                        var msg = 'Dodano! Wygenerowano ' + response.data.generated_count + ' zadań na ten rok.';
+                        $('#stale-save-info').text(msg);
                         resetStaleForm();
                         showToast('Stałe zadanie dodane!', 'success');
                     }
@@ -11246,18 +11494,49 @@ function zadaniomat_page_settings() {
         };
 
         window.deleteStaleZadanie = function(id) {
-            if (!confirm('Na pewno usunąć to stałe zadanie?')) return;
-
+            // Najpierw sprawdź ile jest przyszłych zadań
             $.post(ajaxurl, {
-                action: 'zadaniomat_delete_stale_zadanie',
+                action: 'zadaniomat_count_future_tasks',
                 nonce: nonce,
-                id: id
-            }, function(response) {
-                if (response.success) {
-                    staleZadania = staleZadania.filter(function(z) { return z.id != id; });
-                    renderStaleZadania();
-                    showToast('Stałe zadanie usunięte', 'success');
+                template_id: id
+            }, function(countResponse) {
+                if (!countResponse.success) {
+                    alert('Błąd przy sprawdzaniu zadań');
+                    return;
                 }
+
+                var futureCount = countResponse.data.count;
+                var message = 'Usunąć stałe zadanie?\n\n';
+
+                if (futureCount > 0) {
+                    message += 'Masz ' + futureCount + ' przyszłych zadań wygenerowanych z tego wzorca.\n\n';
+                    message += 'Wybierz opcję:\n';
+                    message += '- OK = Usuń wzorzec I przyszłe zadania\n';
+                    message += '- Anuluj = Wyjdź bez usuwania\n\n';
+                    message += '(Aby zachować przyszłe zadania jako zwykłe, najpierw dezaktywuj wzorzec)';
+                }
+
+                if (!confirm(message)) return;
+
+                // Pytanie czy usunąć przyszłe zadania
+                var deleteFuture = futureCount > 0 ? confirm('Czy usunąć też wszystkie ' + futureCount + ' przyszłych zadań?\n\nOK = Usuń wszystkie\nAnuluj = Zachowaj jako zwykłe zadania') : false;
+
+                $.post(ajaxurl, {
+                    action: 'zadaniomat_delete_stale_zadanie',
+                    nonce: nonce,
+                    id: id,
+                    delete_future: deleteFuture ? 1 : 0
+                }, function(response) {
+                    if (response.success) {
+                        staleZadania = staleZadania.filter(function(z) { return z.id != id; });
+                        renderStaleZadania();
+                        var msg = 'Stałe zadanie usunięte';
+                        if (response.data.deleted_tasks > 0) {
+                            msg += ' (usunięto też ' + response.data.deleted_tasks + ' przyszłych zadań)';
+                        }
+                        showToast(msg, 'success');
+                    }
+                });
             });
         };
 
