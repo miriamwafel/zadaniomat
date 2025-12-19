@@ -422,6 +422,26 @@ add_action('admin_init', function() {
         $wpdb->query("ALTER TABLE $table_zadania ADD COLUMN recurring_template_id INT DEFAULT NULL");
     }
 
+    // Migracja - normalizuj klucze kategorii w zadaniach (label -> key)
+    // Np. "Marketing Construction" -> "marketing_construction"
+    $kategorie_zadania = zadaniomat_get_kategorie_zadania();
+    $label_to_key = array_flip($kategorie_zadania); // ['Marketing Construction' => 'marketing_construction']
+
+    foreach ($label_to_key as $label => $key) {
+        if ($label !== $key) {
+            // Zaktualizuj zadania które mają label zamiast key
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_zadania SET kategoria = %s WHERE kategoria = %s",
+                $key, $label
+            ));
+            // Zaktualizuj też stałe zadania
+            $wpdb->query($wpdb->prepare(
+                "UPDATE $table_stale SET kategoria = %s WHERE kategoria = %s",
+                $key, $label
+            ));
+        }
+    }
+
     // Migracja - dodaj kolumnę cel_todo do stałych zadań
     $stale_columns = $wpdb->get_col("SHOW COLUMNS FROM $table_stale");
     if (!in_array('cel_todo', $stale_columns)) {
@@ -7120,13 +7140,6 @@ function zadaniomat_page_main() {
                             $today
                         ));
 
-                        // DEBUG: Pokaż kategorie które nie pasują
-                        $kategorie_w_bazie = $wpdb->get_col($wpdb->prepare(
-                            "SELECT DISTINCT kategoria FROM $table_zadania WHERE dzien = %s",
-                            $today
-                        ));
-                        $niepasujace = array_diff($kategorie_w_bazie, $kategorie_celow_keys);
-
                         $dzis_stats_total = $wpdb->get_row($wpdb->prepare(
                             "SELECT SUM(COALESCE(faktyczny_czas, 0)) as faktyczny_min,
                                     COUNT(*) as liczba_zadan,
@@ -7162,12 +7175,6 @@ function zadaniomat_page_main() {
                                 <span>📋 <span id="daily-tasks-count"><?php echo $dzis_stats_total->liczba_zadan ?: 0; ?></span> zadań</span>
                                 <span>✅ <span id="daily-tasks-done"><?php echo $dzis_stats_total->ukonczone ?: 0; ?></span> ukończ.</span>
                             </div>
-                            <?php if (!empty($niepasujace)): ?>
-                            <div style="background: #fff3cd; padding: 8px; margin-top: 10px; border-radius: 4px; font-size: 11px;">
-                                ⚠️ Kategorie w bazie niepasujące do kluczy: <strong><?php echo implode(', ', $niepasujace); ?></strong><br>
-                                Klucze kategorii: <?php echo implode(', ', $kategorie_celow_keys); ?>
-                            </div>
-                            <?php endif; ?>
                         </div>
 
                         <h3>🎯 Cele: <?php echo esc_html($current_okres->nazwa); ?></h3>
