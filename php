@@ -1674,15 +1674,17 @@ function zadaniomat_check_daily_challenges($user_id, $date = null) {
                 break;
 
             case 'work_6_hours':
+                // Liczy cały faktyczny czas pracy (nie tylko ukończone zadania)
                 $minutes = $wpdb->get_var($wpdb->prepare(
-                    "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                    "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s", $date
                 ));
                 $is_completed = ($minutes ?: 0) >= 360;
                 break;
 
             case 'work_8_hours':
+                // Liczy cały faktyczny czas pracy (nie tylko ukończone zadania)
                 $minutes = $wpdb->get_var($wpdb->prepare(
-                    "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s AND status = 'zakonczone'", $date
+                    "SELECT SUM(faktyczny_czas) FROM $table_zadania WHERE dzien = %s", $date
                 ));
                 $is_completed = ($minutes ?: 0) >= 480;
                 break;
@@ -2518,14 +2520,16 @@ add_action('wp_ajax_zadaniomat_get_daily_stats', function() {
     $date = sanitize_text_field($_POST['date'] ?? date('Y-m-d'));
     $table_zadania = $wpdb->prefix . 'zadaniomat_zadania';
 
-    // Kategorie celów
-    $kategorie_celow = ['zapianowany', 'klejpan', 'fjo'];
+    // Kategorie celów - dynamicznie z ustawień (wszystkie kategorie celów)
+    $kategorie_celow = array_keys(zadaniomat_get_kategorie());
+    $kategorie_celow_escaped = array_map('esc_sql', $kategorie_celow);
+    $kategorie_celow_sql = "'" . implode("','", $kategorie_celow_escaped) . "'";
 
     // Statystyki dla kategorii celów
     $cele_stats = $wpdb->get_row($wpdb->prepare(
         "SELECT SUM(faktyczny_czas) as faktyczny_min, SUM(planowany_czas) as planowany_min
          FROM $table_zadania
-         WHERE dzien = %s AND kategoria IN ('zapianowany', 'klejpan', 'fjo')",
+         WHERE dzien = %s AND kategoria IN ($kategorie_celow_sql)",
         $date
     ));
 
@@ -2533,7 +2537,7 @@ add_action('wp_ajax_zadaniomat_get_daily_stats', function() {
     $inne_stats = $wpdb->get_row($wpdb->prepare(
         "SELECT SUM(faktyczny_czas) as faktyczny_min
          FROM $table_zadania
-         WHERE dzien = %s AND kategoria NOT IN ('zapianowany', 'klejpan', 'fjo')",
+         WHERE dzien = %s AND kategoria NOT IN ($kategorie_celow_sql)",
         $date
     ));
 
