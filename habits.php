@@ -131,6 +131,12 @@ add_action('admin_init', function() {
     if($wpdb->get_var("SHOW TABLES LIKE '$table_years'") != $table_years) {
         habits_create_tables();
     }
+
+    // Sprawdź czy tabela sport istnieje (nowa tabela)
+    $table_sport = $wpdb->prefix . 'habits_sport';
+    if($wpdb->get_var("SHOW TABLES LIKE '$table_sport'") != $table_sport) {
+        habits_create_tables();
+    }
 });
 
 // =============================================
@@ -885,11 +891,19 @@ add_action('wp_ajax_habits_get_sport', function() {
 
     $date_start = sanitize_text_field($_POST['date_start']);
     $date_end = sanitize_text_field($_POST['date_end']);
+    $typ = isset($_POST['typ']) ? sanitize_text_field($_POST['typ']) : 'all';
 
-    $entries = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM $table WHERE dzien BETWEEN %s AND %s ORDER BY dzien DESC, typ ASC",
-        $date_start, $date_end
-    ));
+    if ($typ && $typ !== 'all') {
+        $entries = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table WHERE dzien BETWEEN %s AND %s AND typ = %s ORDER BY dzien DESC",
+            $date_start, $date_end, $typ
+        ));
+    } else {
+        $entries = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table WHERE dzien BETWEEN %s AND %s ORDER BY dzien DESC, typ ASC",
+            $date_start, $date_end
+        ));
+    }
 
     wp_send_json_success($entries);
 });
@@ -1979,7 +1993,26 @@ function habits_render_page() {
 
             <!-- Historia i statystyki -->
             <div class="habits-card">
-                <div class="habits-card-title">📊 Ostatnie 7 dni</div>
+                <div class="habits-card-title">
+                    📊 Historia aktywności
+                    <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
+                        <select class="habits-form-input" id="sportHistoryFilter" onchange="HabitsApp.loadSportHistory()" style="width: auto; padding: 6px 10px; font-size: 12px;">
+                            <option value="7">Ostatnie 7 dni</option>
+                            <option value="30">Ostatnie 30 dni</option>
+                            <option value="90">Ostatnie 90 dni</option>
+                            <option value="all">Cała historia</option>
+                        </select>
+                        <select class="habits-form-input" id="sportHistoryType" onchange="HabitsApp.loadSportHistory()" style="width: auto; padding: 6px 10px; font-size: 12px;">
+                            <option value="all">Wszystkie typy</option>
+                            <option value="kroki">👟 Kroki</option>
+                            <option value="silownia">🏋️ Siłownia</option>
+                            <option value="bieganie">🏃 Bieganie</option>
+                            <option value="rower">🚴 Rower</option>
+                            <option value="plywanie">🏊 Pływanie</option>
+                            <option value="yoga">🧘 Yoga</option>
+                        </select>
+                    </div>
+                </div>
                 <div id="sportHistory">
                     <p style="color: #6B7280; text-align: center;">Ładowanie...</p>
                 </div>
@@ -3364,13 +3397,23 @@ function habits_render_page() {
         },
 
         async loadSportHistory() {
+            const filterDays = document.getElementById('sportHistoryFilter')?.value || '7';
+            const filterType = document.getElementById('sportHistoryType')?.value || 'all';
+
             const today = new Date();
-            const weekAgo = new Date(today);
-            weekAgo.setDate(weekAgo.getDate() - 7);
+            let startDate;
+
+            if (filterDays === 'all') {
+                startDate = new Date('2020-01-01');
+            } else {
+                startDate = new Date(today);
+                startDate.setDate(startDate.getDate() - parseInt(filterDays));
+            }
 
             const result = await this.ajax('habits_get_sport', {
-                date_start: this.formatDate(weekAgo),
-                date_end: this.formatDate(today)
+                date_start: this.formatDate(startDate),
+                date_end: this.formatDate(today),
+                typ: filterType
             });
 
             if (!result.success) return;
@@ -3378,7 +3421,7 @@ function habits_render_page() {
             const container = document.getElementById('sportHistory');
 
             if (result.data.length === 0) {
-                container.innerHTML = '<p style="color: #6B7280; text-align: center;">Brak aktywności w ostatnich 7 dniach.</p>';
+                container.innerHTML = '<p style="color: #6B7280; text-align: center;">Brak aktywności w wybranym okresie.</p>';
                 return;
             }
 
@@ -3386,7 +3429,7 @@ function habits_render_page() {
             result.data.forEach(entry => {
                 const typeInfo = this.sportTypes[entry.typ] || this.sportTypes.inne;
                 const dateObj = new Date(entry.dzien);
-                const dateStr = dateObj.toLocaleDateString('pl-PL', { weekday: 'short', day: 'numeric', month: 'short' });
+                const dateStr = dateObj.toLocaleDateString('pl-PL', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 
                 let value = '';
                 let details = '';
