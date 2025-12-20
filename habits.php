@@ -109,9 +109,10 @@ function habits_create_tables() {
         czas_minuty INT DEFAULT 0,
         kroki INT DEFAULT 0,
         partie_ciala VARCHAR(255) DEFAULT NULL,
+        custom_name VARCHAR(100) DEFAULT NULL,
+        converted_to_activity TINYINT(1) DEFAULT 0,
         notatka TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY sport_day_type (dzien, typ)
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
@@ -136,6 +137,26 @@ add_action('admin_init', function() {
     $table_sport = $wpdb->prefix . 'habits_sport';
     if($wpdb->get_var("SHOW TABLES LIKE '$table_sport'") != $table_sport) {
         habits_create_tables();
+    }
+
+    // Migracja: dodaj nowe kolumny do tabeli sport jeśli nie istnieją
+    $columns = $wpdb->get_results("SHOW COLUMNS FROM $table_sport");
+    $column_names = array_map(function($c) { return $c->Field; }, $columns);
+
+    if (!in_array('custom_name', $column_names)) {
+        $wpdb->query("ALTER TABLE $table_sport ADD COLUMN custom_name VARCHAR(100) DEFAULT NULL");
+    }
+    if (!in_array('converted_to_activity', $column_names)) {
+        $wpdb->query("ALTER TABLE $table_sport ADD COLUMN converted_to_activity TINYINT(1) DEFAULT 0");
+    }
+
+    // Migracja: dodaj kolumnę typ do challenges jeśli nie istnieje (weekly/general)
+    $table_challenges = $wpdb->prefix . 'habits_challenges';
+    $ch_columns = $wpdb->get_results("SHOW COLUMNS FROM $table_challenges");
+    $ch_column_names = array_map(function($c) { return $c->Field; }, $ch_columns);
+
+    if (!in_array('completed', $ch_column_names)) {
+        $wpdb->query("ALTER TABLE $table_challenges ADD COLUMN completed TINYINT(1) DEFAULT 0");
     }
 });
 
@@ -558,6 +579,18 @@ add_action('wp_ajax_habits_get_challenge_checks', function() {
     wp_send_json_success($checks);
 });
 
+// Toggle general challenge (jednorazowy)
+add_action('wp_ajax_habits_toggle_general_challenge', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_challenges';
+
+    $id = intval($_POST['id']);
+    $completed = intval($_POST['completed']);
+
+    $wpdb->update($table, ['completed' => $completed], ['id' => $id]);
+    wp_send_json_success();
+});
+
 // Pobierz statystyki dla wykresu
 add_action('wp_ajax_habits_get_chart_data', function() {
     global $wpdb;
@@ -856,27 +889,38 @@ add_action('wp_ajax_habits_save_sport', function() {
     $kroki = intval($_POST['kroki'] ?? 0);
     $partie = sanitize_text_field($_POST['partie_ciala'] ?? '');
     $notatka = sanitize_textarea_field($_POST['notatka'] ?? '');
+    $custom_name = sanitize_text_field($_POST['custom_name'] ?? '');
 
-    // Upsert
-    $existing = $wpdb->get_var($wpdb->prepare(
-        "SELECT id FROM $table WHERE dzien = %s AND typ = %s",
-        $dzien, $typ
-    ));
+    // Dla kroków - upsert po dniu
+    if ($typ === 'kroki') {
+        $existing = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM $table WHERE dzien = %s AND typ = 'kroki'",
+            $dzien
+        ));
 
-    if ($existing) {
-        $wpdb->update($table, [
-            'czas_minuty' => $czas,
-            'kroki' => $kroki,
-            'partie_ciala' => $partie,
-            'notatka' => $notatka
-        ], ['id' => $existing]);
+        if ($existing) {
+            $wpdb->update($table, [
+                'kroki' => $kroki
+            ], ['id' => $existing]);
+        } else {
+            $wpdb->insert($table, [
+                'dzien' => $dzien,
+                'typ' => 'kroki',
+                'czas_minuty' => 0,
+                'kroki' => $kroki,
+                'partie_ciala' => '',
+                'notatka' => $notatka
+            ]);
+        }
     } else {
+        // Dla aktywności - zawsze dodawaj nowy wpis (można mieć kilka aktywności dziennie)
         $wpdb->insert($table, [
             'dzien' => $dzien,
             'typ' => $typ,
             'czas_minuty' => $czas,
             'kroki' => $kroki,
             'partie_ciala' => $partie,
+            'custom_name' => $custom_name ?: null,
             'notatka' => $notatka
         ]);
     }
@@ -969,6 +1013,73 @@ add_action('wp_ajax_habits_get_sport_summary', function() {
         'by_type' => $by_type,
         'muscle_counts' => $muscle_counts
     ]);
+});
+
+// Zapisz próg kroków
+add_action('wp_ajax_habits_save_steps_threshold', function() {
+    $threshold = intval($_POST['threshold']);
+    update_option('habits_steps_threshold', $threshold);
+    wp_send_json_success();
+});
+
+// Pobierz kroki (ostatnie 14 dni)
+add_action('wp_ajax_habits_get_steps', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_sport';
+
+    $days = intval($_POST['days'] ?? 14);
+    $start_date = date('Y-m-d', strtotime("-{$days} days"));
+
+    $entries = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $table WHERE typ = 'kroki' AND dzien >= %s ORDER BY dzien DESC",
+        $start_date
+    ));
+
+    $threshold = get_option('habits_steps_threshold', 10000);
+
+    wp_send_json_success([
+        'entries' => $entries,
+        'threshold' => intval($threshold)
+    ]);
+});
+
+// Dodaj kroki jako aktywność
+add_action('wp_ajax_habits_steps_to_activity', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_sport';
+
+    $dzien = sanitize_text_field($_POST['dzien']);
+    $kroki = intval($_POST['kroki']);
+
+    // Sprawdź czy już jest aktywność "spacer" dla tego dnia
+    $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM $table WHERE dzien = %s AND typ = 'spacer'",
+        $dzien
+    ));
+
+    if (!$existing) {
+        // Dodaj jako spacer (szacuj 1 min na 100 kroków = ~6km/h)
+        $minutes = round($kroki / 100);
+        $wpdb->insert($table, [
+            'dzien' => $dzien,
+            'typ' => 'spacer',
+            'czas_minuty' => $minutes,
+            'kroki' => $kroki,
+            'notatka' => 'Dodane z kroków'
+        ]);
+    }
+
+    wp_send_json_success();
+});
+
+// Oznacz kroki jako skonwertowane do aktywności
+add_action('wp_ajax_habits_mark_steps_converted', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_sport';
+    $id = intval($_POST['id']);
+
+    $wpdb->update($table, ['converted_to_activity' => 1], ['id' => $id]);
+    wp_send_json_success();
 });
 
 // =============================================
@@ -1920,33 +2031,72 @@ function habits_render_page() {
 
         <!-- TAB: Sport -->
         <div class="habits-tab-content" id="tab-sport">
+            <!-- SEKCJA KROKI -->
             <div class="habits-card">
-                <div class="habits-card-title">🏃 Aktywność sportowa</div>
+                <div class="habits-card-title">
+                    👟 Kroki
+                    <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
+                        <span style="font-size: 12px; color: #6B7280;">Próg aktywności:</span>
+                        <input type="number" class="habits-form-input" id="stepsThreshold"
+                               style="width: 100px; padding: 6px 10px; font-size: 12px;"
+                               placeholder="np. 10000" value="<?php echo get_option('habits_steps_threshold', 10000); ?>"
+                               onchange="HabitsApp.saveStepsThreshold()">
+                    </div>
+                </div>
 
-                <!-- Formularz dodawania -->
+                <div class="steps-table-container">
+                    <table class="habits-table" id="stepsTable">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left;">Data</th>
+                                <th style="text-align: right;">Kroki</th>
+                                <th style="width: 100px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="stepsTableBody">
+                        </tbody>
+                    </table>
+                    <div style="margin-top: 15px; display: flex; gap: 10px; align-items: center;">
+                        <input type="date" class="habits-form-input" id="newStepsDate"
+                               value="<?php echo date('Y-m-d', strtotime('-1 day')); ?>" style="width: 150px;">
+                        <input type="number" class="habits-form-input" id="newStepsValue"
+                               placeholder="Liczba kroków" min="0" style="width: 150px;">
+                        <button class="habits-btn habits-btn-primary" onclick="HabitsApp.addSteps()">+ Dodaj</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SEKCJA AKTYWNOŚCI -->
+            <div class="habits-card">
+                <div class="habits-card-title">
+                    🏃 Aktywności
+                    <button class="habits-btn habits-btn-sm habits-btn-secondary" onclick="HabitsApp.openActivityTypesModal()" style="margin-left: auto;">
+                        ⚙️ Typy
+                    </button>
+                </div>
+
                 <div class="sport-form">
                     <div class="habits-form-row">
                         <div class="habits-form-group" style="flex: 0 0 140px;">
                             <label class="habits-form-label">Data</label>
-                            <input type="date" class="habits-form-input" id="sportDate" value="<?php echo date('Y-m-d', strtotime('-1 day')); ?>">
+                            <input type="date" class="habits-form-input" id="sportDate" value="<?php echo date('Y-m-d'); ?>">
                         </div>
-                        <div class="habits-form-group" style="flex: 0 0 150px;">
+                        <div class="habits-form-group" style="flex: 0 0 180px;">
                             <label class="habits-form-label">Typ aktywności</label>
                             <select class="habits-form-input" id="sportType" onchange="HabitsApp.onSportTypeChange()">
-                                <option value="kroki">👟 Kroki</option>
                                 <option value="silownia">🏋️ Siłownia</option>
                                 <option value="bieganie">🏃 Bieganie</option>
                                 <option value="rower">🚴 Rower</option>
                                 <option value="plywanie">🏊 Pływanie</option>
-                                <option value="yoga">🧘 Yoga</option>
-                                <option value="inne">⚡ Inne</option>
+                                <option value="padel">🎾 Padel</option>
+                                <option value="inne">⚡ Inne...</option>
                             </select>
                         </div>
-                        <div class="habits-form-group" id="stepsGroup">
-                            <label class="habits-form-label">Liczba kroków</label>
-                            <input type="number" class="habits-form-input" id="sportSteps" placeholder="np. 8500" min="0">
+                        <div class="habits-form-group" id="customActivityGroup" style="display: none; flex: 0 0 150px;">
+                            <label class="habits-form-label">Nazwa</label>
+                            <input type="text" class="habits-form-input" id="customActivityName" placeholder="Wpisz nazwę">
                         </div>
-                        <div class="habits-form-group" id="durationGroup" style="display: none;">
+                        <div class="habits-form-group">
                             <label class="habits-form-label">Czas (min)</label>
                             <input type="number" class="habits-form-input" id="sportDuration" placeholder="np. 60" min="0">
                         </div>
@@ -1984,14 +2134,14 @@ function habits_render_page() {
                     </div>
 
                     <div style="margin-top: 15px;">
-                        <button class="habits-btn habits-btn-primary" onclick="HabitsApp.saveSport()">
-                            💾 Zapisz
+                        <button class="habits-btn habits-btn-primary" onclick="HabitsApp.saveActivity()">
+                            💾 Zapisz aktywność
                         </button>
                     </div>
                 </div>
             </div>
 
-            <!-- Historia i statystyki -->
+            <!-- Historia aktywności -->
             <div class="habits-card">
                 <div class="habits-card-title">
                     📊 Historia aktywności
@@ -2002,15 +2152,6 @@ function habits_render_page() {
                             <option value="90">Ostatnie 90 dni</option>
                             <option value="all">Cała historia</option>
                         </select>
-                        <select class="habits-form-input" id="sportHistoryType" onchange="HabitsApp.loadSportHistory()" style="width: auto; padding: 6px 10px; font-size: 12px;">
-                            <option value="all">Wszystkie typy</option>
-                            <option value="kroki">👟 Kroki</option>
-                            <option value="silownia">🏋️ Siłownia</option>
-                            <option value="bieganie">🏃 Bieganie</option>
-                            <option value="rower">🚴 Rower</option>
-                            <option value="plywanie">🏊 Pływanie</option>
-                            <option value="yoga">🧘 Yoga</option>
-                        </select>
                     </div>
                 </div>
                 <div id="sportHistory">
@@ -2018,6 +2159,7 @@ function habits_render_page() {
                 </div>
             </div>
 
+            <!-- Statystyki -->
             <div class="habits-card">
                 <div class="habits-card-title">📈 Statystyki (bieżący miesiąc)</div>
                 <div id="sportStats">
@@ -2028,11 +2170,12 @@ function habits_render_page() {
 
         <!-- TAB: Challenge -->
         <div class="habits-tab-content" id="tab-challenges">
+            <!-- Challenge tygodniowe -->
             <div class="habits-card">
                 <div class="habits-card-title">
-                    🎯 Twoje Challenge
-                    <button class="habits-btn habits-btn-sm habits-btn-primary" onclick="HabitsApp.openAddChallengeModal()" style="margin-left: auto;">
-                        + Dodaj Challenge
+                    📅 Challenge tygodniowe
+                    <button class="habits-btn habits-btn-sm habits-btn-primary" onclick="HabitsApp.openAddChallengeModal('weekly')" style="margin-left: auto;">
+                        + Dodaj
                     </button>
                 </div>
 
@@ -2043,8 +2186,24 @@ function habits_render_page() {
                     <button class="habits-btn habits-btn-sm habits-btn-secondary" onclick="HabitsApp.goToToday()">Dziś</button>
                 </div>
 
-                <div id="challengesTable">
-                    <p style="color: #6B7280; text-align: center; padding: 40px;">
+                <div id="weeklyChallengesTable">
+                    <p style="color: #6B7280; text-align: center; padding: 20px;">
+                        Wybierz okres, aby zobaczyć challenge.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Challenge ogólne (jednorazowe) -->
+            <div class="habits-card">
+                <div class="habits-card-title">
+                    🎯 Challenge ogólne
+                    <button class="habits-btn habits-btn-sm habits-btn-primary" onclick="HabitsApp.openAddChallengeModal('general')" style="margin-left: auto;">
+                        + Dodaj
+                    </button>
+                </div>
+
+                <div id="generalChallengesTable">
+                    <p style="color: #6B7280; text-align: center; padding: 20px;">
                         Wybierz okres, aby zobaczyć challenge.
                     </p>
                 </div>
@@ -2203,6 +2362,7 @@ function habits_render_page() {
         <div class="habits-modal">
             <div class="habits-modal-title" id="challengeModalTitle">Dodaj challenge</div>
             <input type="hidden" id="editChallengeId">
+            <input type="hidden" id="challengeType" value="weekly">
 
             <div class="habits-form-row">
                 <div class="habits-form-group">
@@ -2218,7 +2378,7 @@ function habits_render_page() {
                 </div>
             </div>
 
-            <div class="habits-form-row">
+            <div class="habits-form-row" id="challengeGoalRow">
                 <div class="habits-form-group">
                     <label class="habits-form-label">Cel (dni w tygodniu)</label>
                     <input type="number" class="habits-form-input" id="challengeGoal" value="4" min="1" max="7">
@@ -2226,6 +2386,13 @@ function habits_render_page() {
                 <div class="habits-form-group">
                     <label class="habits-form-label">Ikona</label>
                     <input type="text" class="habits-form-input" id="challengeIcon" value="🎯" style="font-size: 20px;">
+                </div>
+            </div>
+
+            <div class="habits-form-row" id="challengeIconRowGeneral" style="display: none;">
+                <div class="habits-form-group">
+                    <label class="habits-form-label">Ikona</label>
+                    <input type="text" class="habits-form-input" id="challengeIconGeneral" value="🎯" style="font-size: 20px;">
                 </div>
             </div>
 
@@ -2301,6 +2468,7 @@ function habits_render_page() {
                     if (tab.dataset.tab === 'charts' && this.currentPeriodId) {
                         this.loadChart('weekly');
                     } else if (tab.dataset.tab === 'sport') {
+                        this.loadSteps();
                         this.loadSportHistory();
                         this.loadSportStats();
                     } else if (tab.dataset.tab === 'summary' && this.currentPeriodId) {
@@ -2653,18 +2821,37 @@ function habits_render_page() {
 
         async renderChallengesTable() {
             if (!this.currentPeriodId) {
-                document.getElementById('challengesTable').innerHTML = `
-                    <p style="color: #6B7280; text-align: center; padding: 40px;">
+                document.getElementById('weeklyChallengesTable').innerHTML = `
+                    <p style="color: #6B7280; text-align: center; padding: 20px;">
+                        Wybierz okres, aby zobaczyć challenge.
+                    </p>
+                `;
+                document.getElementById('generalChallengesTable').innerHTML = `
+                    <p style="color: #6B7280; text-align: center; padding: 20px;">
                         Wybierz okres, aby zobaczyć challenge.
                     </p>
                 `;
                 return;
             }
 
-            if (this.challenges.length === 0) {
-                document.getElementById('challengesTable').innerHTML = `
-                    <p style="color: #6B7280; text-align: center; padding: 40px;">
-                        Brak challenge'ów. Kliknij "Dodaj Challenge" aby utworzyć pierwszy.
+            // Podziel challenge na weekly i general
+            const weeklyChallenges = this.challenges.filter(ch => ch.aktywny == 1 && ch.typ === 'weekly');
+            const generalChallenges = this.challenges.filter(ch => ch.aktywny == 1 && ch.typ === 'general');
+
+            // Render weekly challenges
+            await this.renderWeeklyChallenges(weeklyChallenges);
+
+            // Render general challenges
+            this.renderGeneralChallenges(generalChallenges);
+        },
+
+        async renderWeeklyChallenges(challenges) {
+            const container = document.getElementById('weeklyChallengesTable');
+
+            if (challenges.length === 0) {
+                container.innerHTML = `
+                    <p style="color: #6B7280; text-align: center; padding: 20px;">
+                        Brak challenge'ów tygodniowych.
                     </p>
                 `;
                 return;
@@ -2677,7 +2864,7 @@ function habits_render_page() {
 
             // Pobierz checks dla wszystkich challenge
             const checksMap = {};
-            for (const ch of this.challenges) {
+            for (const ch of challenges) {
                 const result = await this.ajax('habits_get_challenge_checks', {
                     challenge_id: ch.id,
                     date_start: dates[0],
@@ -2715,7 +2902,7 @@ function habits_render_page() {
                     <tbody>
             `;
 
-            this.challenges.filter(ch => ch.aktywny == 1).forEach(challenge => {
+            challenges.forEach(challenge => {
                 let weekCount = 0;
 
                 html += `
@@ -2762,7 +2949,57 @@ function habits_render_page() {
             });
 
             html += '</tbody></table>';
-            document.getElementById('challengesTable').innerHTML = html;
+            container.innerHTML = html;
+        },
+
+        renderGeneralChallenges(challenges) {
+            const container = document.getElementById('generalChallengesTable');
+
+            if (challenges.length === 0) {
+                container.innerHTML = `
+                    <p style="color: #6B7280; text-align: center; padding: 20px;">
+                        Brak challenge'ów ogólnych.
+                    </p>
+                `;
+                return;
+            }
+
+            let html = '<div class="general-challenges-list">';
+
+            challenges.forEach(challenge => {
+                const isCompleted = challenge.completed == 1;
+                html += `
+                    <div class="general-challenge-item ${isCompleted ? 'completed' : ''}" style="
+                        display: flex;
+                        align-items: center;
+                        gap: 15px;
+                        padding: 15px;
+                        background: ${isCompleted ? '#F0FDF4' : '#F9FAFB'};
+                        border-radius: 8px;
+                        margin-bottom: 10px;
+                        border-left: 4px solid ${isCompleted ? '#22C55E' : challenge.kolor};
+                    ">
+                        <div class="challenge-check ${isCompleted ? 'checked' : ''}"
+                             style="cursor: pointer;"
+                             onclick="HabitsApp.toggleGeneralChallenge(${challenge.id})">
+                        </div>
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 20px;">${challenge.ikona}</span>
+                                <span style="font-weight: 600; ${isCompleted ? 'text-decoration: line-through; color: #9CA3AF;' : ''}">${challenge.nazwa}</span>
+                            </div>
+                            ${challenge.opis ? `<div style="font-size: 12px; color: #6B7280; margin-top: 4px;">${challenge.opis}</div>` : ''}
+                        </div>
+                        <div style="display: flex; gap: 5px;">
+                            <button class="habits-btn habits-btn-sm habits-btn-secondary" onclick="HabitsApp.editChallenge(${challenge.id})">✏️</button>
+                            <button class="habits-btn habits-btn-sm habits-btn-danger" onclick="HabitsApp.deleteChallenge(${challenge.id})">🗑️</button>
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            container.innerHTML = html;
         },
 
         async toggleChallenge(el) {
@@ -3241,19 +3478,26 @@ function habits_render_page() {
         },
 
         // Challenge modal
-        openAddChallengeModal() {
+        openAddChallengeModal(type = 'weekly') {
             if (!this.currentPeriodId) {
                 alert('Najpierw wybierz okres');
                 return;
             }
 
-            document.getElementById('challengeModalTitle').textContent = 'Dodaj challenge';
+            const isWeekly = type === 'weekly';
+            document.getElementById('challengeModalTitle').textContent = isWeekly ? 'Dodaj challenge tygodniowy' : 'Dodaj challenge ogólny';
             document.getElementById('editChallengeId').value = '';
+            document.getElementById('challengeType').value = type;
             document.getElementById('challengeName').value = '';
             document.getElementById('challengeDesc').value = '';
             document.getElementById('challengeGoal').value = '4';
             document.getElementById('challengeIcon').value = '🎯';
+            document.getElementById('challengeIconGeneral').value = '🎯';
             document.getElementById('challengeColor').value = '#E74C3C';
+
+            // Pokaż/ukryj odpowiednie pola
+            document.getElementById('challengeGoalRow').style.display = isWeekly ? 'flex' : 'none';
+            document.getElementById('challengeIconRowGeneral').style.display = isWeekly ? 'none' : 'flex';
 
             document.getElementById('challengeModal').classList.add('active');
         },
@@ -3262,13 +3506,19 @@ function habits_render_page() {
             const challenge = this.challenges.find(c => c.id == id);
             if (!challenge) return;
 
+            const isWeekly = challenge.typ === 'weekly';
             document.getElementById('challengeModalTitle').textContent = 'Edytuj challenge';
             document.getElementById('editChallengeId').value = id;
+            document.getElementById('challengeType').value = challenge.typ;
             document.getElementById('challengeName').value = challenge.nazwa;
             document.getElementById('challengeDesc').value = challenge.opis || '';
             document.getElementById('challengeGoal').value = challenge.cel_dni;
             document.getElementById('challengeIcon').value = challenge.ikona;
+            document.getElementById('challengeIconGeneral').value = challenge.ikona;
             document.getElementById('challengeColor').value = challenge.kolor;
+
+            document.getElementById('challengeGoalRow').style.display = isWeekly ? 'flex' : 'none';
+            document.getElementById('challengeIconRowGeneral').style.display = isWeekly ? 'none' : 'flex';
 
             document.getElementById('challengeModal').classList.add('active');
         },
@@ -3279,14 +3529,17 @@ function habits_render_page() {
 
         async saveChallenge() {
             const id = document.getElementById('editChallengeId').value;
+            const type = document.getElementById('challengeType').value;
+            const isWeekly = type === 'weekly';
+
             const data = {
                 nazwa: document.getElementById('challengeName').value,
                 opis: document.getElementById('challengeDesc').value,
-                cel_dni: document.getElementById('challengeGoal').value,
-                ikona: document.getElementById('challengeIcon').value,
+                cel_dni: isWeekly ? document.getElementById('challengeGoal').value : 1,
+                ikona: isWeekly ? document.getElementById('challengeIcon').value : document.getElementById('challengeIconGeneral').value,
                 kolor: document.getElementById('challengeColor').value,
-                typ: 'weekly',
-                dni_w_tygodniu: 7
+                typ: type,
+                dni_w_tygodniu: isWeekly ? 7 : 0
             };
 
             if (!data.nazwa) {
@@ -3314,86 +3567,204 @@ function habits_render_page() {
             this.loadChallenges();
         },
 
+        async toggleGeneralChallenge(id) {
+            const challenge = this.challenges.find(c => c.id == id);
+            if (!challenge) return;
+
+            const newCompleted = challenge.completed == 1 ? 0 : 1;
+            await this.ajax('habits_toggle_general_challenge', { id: id, completed: newCompleted });
+            this.loadChallenges();
+        },
+
         // =============================================
         // SPORT FUNCTIONS
         // =============================================
 
         sportTypes: {
-            kroki: { icon: '👟', name: 'Kroki', unit: 'kroków' },
             silownia: { icon: '🏋️', name: 'Siłownia', unit: 'min' },
             bieganie: { icon: '🏃', name: 'Bieganie', unit: 'min' },
             rower: { icon: '🚴', name: 'Rower', unit: 'min' },
             plywanie: { icon: '🏊', name: 'Pływanie', unit: 'min' },
-            yoga: { icon: '🧘', name: 'Yoga', unit: 'min' },
+            padel: { icon: '🎾', name: 'Padel', unit: 'min' },
+            spacer: { icon: '🚶', name: 'Spacer', unit: 'min' },
             inne: { icon: '⚡', name: 'Inne', unit: 'min' }
         },
 
-        onSportTypeChange() {
-            const type = document.getElementById('sportType').value;
-            const stepsGroup = document.getElementById('stepsGroup');
-            const durationGroup = document.getElementById('durationGroup');
-            const muscleSection = document.getElementById('muscleGroupsSection');
+        stepsThreshold: <?php echo get_option('habits_steps_threshold', 10000); ?>,
 
-            if (type === 'kroki') {
-                stepsGroup.style.display = 'block';
-                durationGroup.style.display = 'none';
-                muscleSection.style.display = 'none';
-            } else {
-                stepsGroup.style.display = 'none';
-                durationGroup.style.display = 'block';
-                muscleSection.style.display = type === 'silownia' ? 'block' : 'none';
+        // =============================================
+        // STEPS FUNCTIONS
+        // =============================================
+
+        async loadSteps() {
+            const result = await this.ajax('habits_get_steps', { days: 14 });
+            if (!result.success) return;
+
+            const tbody = document.getElementById('stepsTableBody');
+            this.stepsThreshold = result.data.threshold;
+            document.getElementById('stepsThreshold').value = this.stepsThreshold;
+
+            if (result.data.entries.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #6B7280; padding: 20px;">Brak wpisów kroków.</td></tr>';
+                return;
             }
+
+            let html = '';
+            result.data.entries.forEach(entry => {
+                const dateObj = new Date(entry.dzien);
+                const dateStr = dateObj.toLocaleDateString('pl-PL', { weekday: 'short', day: 'numeric', month: 'short' });
+                const steps = parseInt(entry.kroki);
+                const aboveThreshold = steps >= this.stepsThreshold;
+
+                html += `
+                    <tr>
+                        <td style="text-align: left;">${dateStr}</td>
+                        <td style="text-align: right; font-weight: 600; color: ${aboveThreshold ? '#22C55E' : 'inherit'};">
+                            ${steps.toLocaleString()}
+                            ${aboveThreshold ? '<span style="margin-left: 5px;">✅</span>' : ''}
+                        </td>
+                        <td style="text-align: center;">
+                            ${aboveThreshold && !entry.converted_to_activity ?
+                                `<button class="habits-btn habits-btn-sm habits-btn-primary" onclick="HabitsApp.stepsToActivity(${entry.id}, '${entry.dzien}', ${steps})">→ Spacer</button>`
+                                : ''}
+                            <button class="habits-btn habits-btn-sm habits-btn-danger" onclick="HabitsApp.deleteSteps(${entry.id})">🗑️</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = html;
         },
 
-        async saveSport() {
+        async addSteps() {
+            const date = document.getElementById('newStepsDate').value;
+            const steps = parseInt(document.getElementById('newStepsValue').value) || 0;
+
+            if (!date) {
+                alert('Wybierz datę');
+                return;
+            }
+            if (steps <= 0) {
+                alert('Podaj liczbę kroków');
+                return;
+            }
+
+            await this.ajax('habits_save_sport', {
+                dzien: date,
+                typ: 'kroki',
+                kroki: steps,
+                czas_minuty: 0,
+                partie_ciala: ''
+            });
+
+            document.getElementById('newStepsValue').value = '';
+            document.getElementById('newStepsDate').value = new Date().toISOString().split('T')[0];
+
+            this.loadSteps();
+            this.loadSportStats();
+        },
+
+        async deleteSteps(id) {
+            if (!confirm('Usunąć ten wpis?')) return;
+            await this.ajax('habits_delete_sport', { id: id });
+            this.loadSteps();
+            this.loadSportStats();
+        },
+
+        async saveStepsThreshold() {
+            const threshold = parseInt(document.getElementById('stepsThreshold').value) || 10000;
+            this.stepsThreshold = threshold;
+            await this.ajax('habits_save_steps_threshold', { threshold: threshold });
+            this.loadSteps();
+        },
+
+        async stepsToActivity(stepsId, date, steps) {
+            // Dodaj spacer jako aktywność
+            const minutes = Math.round(steps / 100); // ~100 kroków = 1 minuta spaceru
+
+            await this.ajax('habits_save_sport', {
+                dzien: date,
+                typ: 'spacer',
+                czas_minuty: minutes,
+                kroki: 0,
+                partie_ciala: ''
+            });
+
+            // Oznacz wpis kroków jako skonwertowany
+            await this.ajax('habits_mark_steps_converted', { id: stepsId });
+
+            this.loadSteps();
+            this.loadSportHistory();
+            this.loadSportStats();
+        },
+
+        // =============================================
+        // ACTIVITY FUNCTIONS
+        // =============================================
+
+        onSportTypeChange() {
+            const type = document.getElementById('sportType').value;
+            const muscleSection = document.getElementById('muscleGroupsSection');
+            const customGroup = document.getElementById('customActivityGroup');
+
+            muscleSection.style.display = type === 'silownia' ? 'block' : 'none';
+            customGroup.style.display = type === 'inne' ? 'flex' : 'none';
+        },
+
+        async saveActivity() {
             const type = document.getElementById('sportType').value;
             const date = document.getElementById('sportDate').value;
+            const duration = parseInt(document.getElementById('sportDuration').value) || 0;
 
             if (!date) {
                 alert('Wybierz datę');
                 return;
             }
 
+            if (duration === 0) {
+                alert('Podaj czas trwania');
+                return;
+            }
+
             let data = {
                 dzien: date,
                 typ: type,
-                czas_minuty: 0,
+                czas_minuty: duration,
                 kroki: 0,
                 partie_ciala: ''
             };
 
-            if (type === 'kroki') {
-                data.kroki = parseInt(document.getElementById('sportSteps').value) || 0;
-                if (data.kroki === 0) {
-                    alert('Podaj liczbę kroków');
-                    return;
+            // Dla "inne" zapisz własną nazwę
+            if (type === 'inne') {
+                const customName = document.getElementById('customActivityName').value.trim();
+                if (customName) {
+                    data.custom_name = customName;
                 }
-            } else {
-                data.czas_minuty = parseInt(document.getElementById('sportDuration').value) || 0;
-                if (data.czas_minuty === 0) {
-                    alert('Podaj czas trwania');
-                    return;
-                }
+            }
 
-                if (type === 'silownia') {
-                    const checkedMuscles = [];
-                    document.querySelectorAll('#muscleGroupsSection input:checked').forEach(cb => {
-                        checkedMuscles.push(cb.value);
-                    });
-                    data.partie_ciala = checkedMuscles.join(',');
-                }
+            // Dla siłowni zapisz partie ciała
+            if (type === 'silownia') {
+                const checkedMuscles = [];
+                document.querySelectorAll('#muscleGroupsSection input:checked').forEach(cb => {
+                    checkedMuscles.push(cb.value);
+                });
+                data.partie_ciala = checkedMuscles.join(',');
             }
 
             await this.ajax('habits_save_sport', data);
 
             // Clear form
-            document.getElementById('sportSteps').value = '';
             document.getElementById('sportDuration').value = '';
+            document.getElementById('customActivityName').value = '';
             document.querySelectorAll('#muscleGroupsSection input').forEach(cb => cb.checked = false);
 
             // Refresh
             this.loadSportHistory();
             this.loadSportStats();
+        },
+
+        openActivityTypesModal() {
+            alert('Zarządzanie typami aktywności będzie dostępne wkrótce!');
         },
 
         async loadSportHistory() {
@@ -3426,21 +3797,24 @@ function habits_render_page() {
             }
 
             let html = '';
-            result.data.forEach(entry => {
+            // Filtruj kroki - teraz są w osobnej sekcji
+            const activities = result.data.filter(e => e.typ !== 'kroki');
+
+            if (activities.length === 0) {
+                container.innerHTML = '<p style="color: #6B7280; text-align: center;">Brak aktywności w wybranym okresie.</p>';
+                return;
+            }
+
+            activities.forEach(entry => {
                 const typeInfo = this.sportTypes[entry.typ] || this.sportTypes.inne;
                 const dateObj = new Date(entry.dzien);
                 const dateStr = dateObj.toLocaleDateString('pl-PL', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 
-                let value = '';
-                let details = '';
+                const value = entry.czas_minuty;
+                const details = 'minut';
 
-                if (entry.typ === 'kroki') {
-                    value = parseInt(entry.kroki).toLocaleString();
-                    details = 'kroków';
-                } else {
-                    value = entry.czas_minuty;
-                    details = 'minut';
-                }
+                // Dla "inne" pokaż custom_name jeśli jest
+                const typeName = (entry.typ === 'inne' && entry.custom_name) ? entry.custom_name : typeInfo.name;
 
                 let musclesHtml = '';
                 if (entry.partie_ciala) {
@@ -3453,7 +3827,7 @@ function habits_render_page() {
                     <div class="sport-entry">
                         <div class="sport-entry-icon">${typeInfo.icon}</div>
                         <div class="sport-entry-info">
-                            <div class="sport-entry-type">${typeInfo.name}</div>
+                            <div class="sport-entry-type">${typeName}</div>
                             <div class="sport-entry-date">${dateStr}</div>
                             ${musclesHtml}
                         </div>
