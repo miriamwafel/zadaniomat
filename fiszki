@@ -1,0 +1,864 @@
+/**
+ * FISZKI - System Powtórek v5
+ * - 6 interwałów: 0, 1, 5, 15, 40, 120 dni
+ * - Wybór języka (hiszpański/angielski)
+ * - Inteligentne rozkładanie dat PER JĘZYK (osobne kolejki)
+ * 
+ * Wklej ten kod w WPCode jako snippet PHP (auto-load)
+ */
+
+// =============================================
+// 1. CUSTOM POST TYPE "FISZKI"
+// =============================================
+
+add_action('init', function() {
+    register_post_type('fiszka', [
+        'labels' => [
+            'name' => 'Fiszki',
+            'singular_name' => 'Fiszka',
+            'add_new' => 'Dodaj fiszkę',
+            'add_new_item' => 'Dodaj nową fiszkę',
+            'edit_item' => 'Edytuj fiszkę',
+            'view_item' => 'Zobacz fiszkę',
+            'all_items' => 'Wszystkie fiszki',
+            'search_items' => 'Szukaj fiszek',
+            'not_found' => 'Nie znaleziono fiszek',
+        ],
+        'public' => false,
+        'show_ui' => true,
+        'show_in_menu' => true,
+        'menu_icon' => 'dashicons-welcome-learn-more',
+        'supports' => ['title'],
+        'show_in_rest' => true,
+    ]);
+});
+
+// =============================================
+// 2. FUNKCJE POMOCNICZE - LICZENIE ZADAŃ PER JĘZYK
+// =============================================
+
+/**
+ * Zlicza zadania na dany dzień DLA KONKRETNEGO JĘZYKA
+ */
+function fiszki_count_tasks_for_date($date, $jezyk = '', $exclude_post_id = 0) {
+    $args = [
+        'post_type' => 'fiszka',
+        'posts_per_page' => -1,
+        'post_status' => 'publish',
+        'post__not_in' => $exclude_post_id ? [$exclude_post_id] : [],
+    ];
+    
+    // Filtruj po języku jeśli podano
+    if (!empty($jezyk)) {
+        $args['meta_query'] = [
+            [
+                'key' => '_fiszka_jezyk',
+                'value' => $jezyk,
+                'compare' => '=',
+            ]
+        ];
+    }
+    
+    $fiszki = get_posts($args);
+    
+    $count = 0;
+    $meta_keys = ['_fiszka_data_utworzenia', '_fiszka_powtorka_1', '_fiszka_powtorka_2', '_fiszka_powtorka_3', '_fiszka_powtorka_4', '_fiszka_powtorka_5'];
+    
+    foreach ($fiszki as $fiszka) {
+        foreach ($meta_keys as $key) {
+            if (get_post_meta($fiszka->ID, $key, true) === $date) {
+                $count++;
+            }
+        }
+    }
+    
+    return $count;
+}
+
+/**
+ * Znajduje optymalny dzień dla danego języka
+ */
+function fiszki_find_optimal_date($target_date, $jezyk = '', $exclude_post_id = 0, $range = 3) {
+    $target_timestamp = strtotime($target_date);
+    $best_date = $target_date;
+    $best_count = fiszki_count_tasks_for_date($target_date, $jezyk, $exclude_post_id);
+    
+    for ($i = 1; $i <= $range; $i++) {
+        $earlier = date('Y-m-d', strtotime("-{$i} days", $target_timestamp));
+        $earlier_count = fiszki_count_tasks_for_date($earlier, $jezyk, $exclude_post_id);
+        if ($earlier_count < $best_count) {
+            $best_count = $earlier_count;
+            $best_date = $earlier;
+        }
+        
+        $later = date('Y-m-d', strtotime("+{$i} days", $target_timestamp));
+        $later_count = fiszki_count_tasks_for_date($later, $jezyk, $exclude_post_id);
+        if ($later_count < $best_count) {
+            $best_count = $later_count;
+            $best_date = $later;
+        }
+    }
+    
+    $diff_days = (strtotime($best_date) - strtotime($target_date)) / 86400;
+    
+    return [
+        'date' => $best_date,
+        'count' => $best_count,
+        'original_date' => $target_date,
+        'original_count' => fiszki_count_tasks_for_date($target_date, $jezyk, $exclude_post_id),
+        'changed' => $best_date !== $target_date,
+        'diff_days' => intval($diff_days),
+    ];
+}
+
+/**
+ * Generuje inteligentny harmonogram dla danego języka
+ * NOWE INTERWAŁY: +1, +5, +15, +40, +120 dni
+ */
+function fiszki_generate_smart_schedule($start_date, $jezyk = '', $exclude_post_id = 0) {
+    $intervals = [
+        'powtorka_1' => 1,
+        'powtorka_2' => 5,
+        'powtorka_3' => 15,
+        'powtorka_4' => 40,
+        'powtorka_5' => 120,
+    ];
+    
+    $schedule = [];
+    $start_timestamp = strtotime($start_date);
+    
+    foreach ($intervals as $key => $days) {
+        $default_date = date('Y-m-d', strtotime("+{$days} days", $start_timestamp));
+        $schedule[$key] = fiszki_find_optimal_date($default_date, $jezyk, $exclude_post_id);
+        $schedule[$key]['interval'] = $days;
+    }
+    
+    return $schedule;
+}
+
+// =============================================
+// 3. META BOX
+// =============================================
+
+add_action('add_meta_boxes', function() {
+    add_meta_box(
+        'fiszka_daty',
+        '📅 Harmonogram powtórek',
+        'fiszka_meta_box_html',
+        'fiszka',
+        'normal',
+        'high'
+    );
+});
+
+function fiszka_meta_box_html($post) {
+    $jezyk = get_post_meta($post->ID, '_fiszka_jezyk', true) ?: 'hiszpanski';
+    $data_utworzenia = get_post_meta($post->ID, '_fiszka_data_utworzenia', true);
+    $powtorka_1 = get_post_meta($post->ID, '_fiszka_powtorka_1', true);
+    $powtorka_2 = get_post_meta($post->ID, '_fiszka_powtorka_2', true);
+    $powtorka_3 = get_post_meta($post->ID, '_fiszka_powtorka_3', true);
+    $powtorka_4 = get_post_meta($post->ID, '_fiszka_powtorka_4', true);
+    $powtorka_5 = get_post_meta($post->ID, '_fiszka_powtorka_5', true);
+    
+    if (empty($data_utworzenia)) {
+        $data_utworzenia = date('Y-m-d');
+    }
+    
+    wp_nonce_field('fiszka_save', 'fiszka_nonce');
+    ?>
+    <style>
+        .fiszka-section { margin-bottom: 20px; padding: 15px; background: #f9f9f9; border-radius: 4px; }
+        .fiszka-section h4 { margin: 0 0 10px 0; }
+        .fiszka-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .fiszka-field { display: flex; flex-direction: column; }
+        .fiszka-field label { font-weight: bold; margin-bottom: 5px; }
+        .fiszka-field input, .fiszka-field select { padding: 8px; }
+        .fiszka-field small { color: #666; margin-top: 3px; }
+        .fiszka-suggestion { padding: 8px; border-radius: 4px; margin-top: 5px; font-size: 12px; }
+        .fiszka-suggestion.ok { background: #d4edda; color: #155724; }
+        .fiszka-suggestion.warning { background: #fff3cd; color: #856404; }
+        .fiszka-suggestion.danger { background: #f8d7da; color: #721c24; }
+        .fiszka-btn-row { margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }
+        .fiszka-preview { background: #e7f3ff; padding: 15px; border-radius: 4px; margin-top: 15px; }
+        .fiszka-preview-item { margin: 5px 0; padding: 5px 0; border-bottom: 1px solid #cce5ff; }
+        .fiszka-preview-item:last-child { border-bottom: none; }
+        .fiszka-shift { font-size: 11px; background: #007bff; color: white; padding: 2px 6px; border-radius: 3px; margin-left: 5px; }
+        .fiszka-shift.negative { background: #6c757d; }
+        .fiszka-jezyk-info { display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px; }
+        .fiszka-jezyk-info.hiszpanski { background: #ffcc00; color: #333; }
+        .fiszka-jezyk-info.angielski { background: #003399; color: white; }
+        @media (max-width: 600px) { .fiszka-grid { grid-template-columns: 1fr; } }
+    </style>
+    
+    <!-- SEKCJA: JĘZYK -->
+    <div class="fiszka-section">
+        <h4>🌍 Język <span class="fiszka-jezyk-info <?php echo esc_attr($jezyk); ?>" id="jezyk-badge"><?php echo $jezyk === 'hiszpanski' ? '🇪🇸 Hiszpański' : '🇬🇧 Angielski'; ?></span></h4>
+        <div class="fiszka-field">
+            <select name="fiszka_jezyk" id="fiszka_jezyk" style="max-width: 200px;" onchange="fiszkaJezykChanged()">
+                <option value="hiszpanski" <?php selected($jezyk, 'hiszpanski'); ?>>🇪🇸 Hiszpański</option>
+                <option value="angielski" <?php selected($jezyk, 'angielski'); ?>>🇬🇧 Angielski</option>
+            </select>
+            <small>⚠️ Zmiana języka wpływa na liczenie obciążenia - każdy język ma osobną kolejkę!</small>
+        </div>
+    </div>
+    
+    <!-- SEKCJA: DATY -->
+    <div class="fiszka-section">
+        <h4>📆 Daty powtórek</h4>
+        
+        <div class="fiszka-grid">
+            <div class="fiszka-field">
+                <label>📆 Data utworzenia (Dzień 0 - NAUKA)</label>
+                <input type="date" name="fiszka_data_utworzenia" value="<?php echo esc_attr($data_utworzenia); ?>" id="fiszka_data_start" onchange="fiszkaUpdateAllSuggestions()">
+                <small>Dzień dodania fiszki</small>
+            </div>
+            
+            <div class="fiszka-field">
+                <label>🔄 Powtórka #1 (+1 dzień)</label>
+                <input type="date" name="fiszka_powtorka_1" value="<?php echo esc_attr($powtorka_1); ?>" id="fiszka_p1" onchange="fiszkaCheckDate('fiszka_p1', 1)">
+                <div id="fiszka_p1_suggestion" class="fiszka-suggestion ok">Sprawdzanie...</div>
+            </div>
+            
+            <div class="fiszka-field">
+                <label>🔄 Powtórka #2 (+5 dni)</label>
+                <input type="date" name="fiszka_powtorka_2" value="<?php echo esc_attr($powtorka_2); ?>" id="fiszka_p2" onchange="fiszkaCheckDate('fiszka_p2', 5)">
+                <div id="fiszka_p2_suggestion" class="fiszka-suggestion ok">Sprawdzanie...</div>
+            </div>
+            
+            <div class="fiszka-field">
+                <label>🔄 Powtórka #3 (+15 dni)</label>
+                <input type="date" name="fiszka_powtorka_3" value="<?php echo esc_attr($powtorka_3); ?>" id="fiszka_p3" onchange="fiszkaCheckDate('fiszka_p3', 15)">
+                <div id="fiszka_p3_suggestion" class="fiszka-suggestion ok">Sprawdzanie...</div>
+            </div>
+            
+            <div class="fiszka-field">
+                <label>🔄 Powtórka #4 (+40 dni)</label>
+                <input type="date" name="fiszka_powtorka_4" value="<?php echo esc_attr($powtorka_4); ?>" id="fiszka_p4" onchange="fiszkaCheckDate('fiszka_p4', 40)">
+                <div id="fiszka_p4_suggestion" class="fiszka-suggestion ok">Sprawdzanie...</div>
+            </div>
+            
+            <div class="fiszka-field">
+                <label>🔄 Powtórka #5 (+120 dni)</label>
+                <input type="date" name="fiszka_powtorka_5" value="<?php echo esc_attr($powtorka_5); ?>" id="fiszka_p5" onchange="fiszkaCheckDate('fiszka_p5', 120)">
+                <div id="fiszka_p5_suggestion" class="fiszka-suggestion ok">Sprawdzanie...</div>
+            </div>
+        </div>
+        
+        <div class="fiszka-btn-row">
+            <button type="button" class="button button-primary" onclick="fiszkaSmartDates()">
+                🧠 Przydziel inteligentnie
+            </button>
+            <button type="button" class="button" onclick="fiszkaDefaultDates()">
+                📅 Domyślne daty
+            </button>
+            <button type="button" class="button" onclick="fiszkaUpdateAllSuggestions()">
+                🔄 Odśwież podgląd
+            </button>
+        </div>
+        
+        <div class="fiszka-preview" id="fiszka-preview">
+            <strong>📊 Podgląd obciążenia <span id="preview-jezyk-badge"></span>:</strong>
+            <div id="fiszka-preview-content">Kliknij "Przydziel inteligentnie" lub "Odśwież podgląd"</div>
+        </div>
+    </div>
+    
+    <script>
+    const POST_ID = <?php echo $post->ID ?: 0; ?>;
+    const AJAX_URL = '<?php echo admin_url('admin-ajax.php'); ?>';
+    const INTERVALS = {
+        'fiszka_p1': 1,
+        'fiszka_p2': 5,
+        'fiszka_p3': 15,
+        'fiszka_p4': 40,
+        'fiszka_p5': 120
+    };
+    
+    function getSelectedJezyk() {
+        return document.getElementById('fiszka_jezyk').value;
+    }
+    
+    function getJezykLabel(jezyk) {
+        return jezyk === 'hiszpanski' ? '🇪🇸 Hiszpański' : '🇬🇧 Angielski';
+    }
+    
+    function fiszkaJezykChanged() {
+        const jezyk = getSelectedJezyk();
+        const badge = document.getElementById('jezyk-badge');
+        badge.className = 'fiszka-jezyk-info ' + jezyk;
+        badge.innerText = getJezykLabel(jezyk);
+        
+        // Odśwież wszystkie sugestie dla nowego języka
+        fiszkaUpdateAllSuggestions();
+    }
+    
+    async function fiszkaCheckDate(inputId, expectedInterval) {
+        const date = document.getElementById(inputId).value;
+        const suggestionDiv = document.getElementById(inputId + '_suggestion');
+        const startDate = document.getElementById('fiszka_data_start').value;
+        const jezyk = getSelectedJezyk();
+        
+        if (!date) {
+            suggestionDiv.className = 'fiszka-suggestion warning';
+            suggestionDiv.innerHTML = '⚠️ Brak daty';
+            return;
+        }
+        
+        suggestionDiv.innerHTML = '⏳ Sprawdzanie...';
+        
+        try {
+            const response = await fetch(`${AJAX_URL}?action=fiszka_check_date&date=${date}&post_id=${POST_ID}&jezyk=${jezyk}`);
+            const data = await response.json();
+            
+            if (data.success) {
+                const count = data.count;
+                const startTimestamp = new Date(startDate).getTime();
+                const dateTimestamp = new Date(date).getTime();
+                const actualDays = Math.round((dateTimestamp - startTimestamp) / 86400000);
+                const shiftDays = actualDays - expectedInterval;
+                
+                let shiftBadge = '';
+                if (shiftDays !== 0) {
+                    const shiftClass = shiftDays < 0 ? 'negative' : '';
+                    const shiftText = shiftDays > 0 ? `+${shiftDays}` : shiftDays;
+                    shiftBadge = `<span class="fiszka-shift ${shiftClass}">${shiftText} dni</span>`;
+                }
+                
+                const jezykIcon = jezyk === 'hiszpanski' ? '🇪🇸' : '🇬🇧';
+                
+                if (count === 0) {
+                    suggestionDiv.className = 'fiszka-suggestion ok';
+                    suggestionDiv.innerHTML = `✅ Wolny termin ${jezykIcon} (0 zadań) ${shiftBadge}`;
+                } else if (count <= 2) {
+                    suggestionDiv.className = 'fiszka-suggestion ok';
+                    suggestionDiv.innerHTML = `✅ ${jezykIcon} ${count} zadań w tym dniu ${shiftBadge}`;
+                } else if (count <= 3) {
+                    suggestionDiv.className = 'fiszka-suggestion warning';
+                    suggestionDiv.innerHTML = `⚠️ ${jezykIcon} ${count} zadania w tym dniu ${shiftBadge}`;
+                } else {
+                    suggestionDiv.className = 'fiszka-suggestion danger';
+                    suggestionDiv.innerHTML = `🔴 ${jezykIcon} ${count} zadań - przeciążone! ${shiftBadge}`;
+                }
+            }
+        } catch (err) {
+            console.error(err);
+            suggestionDiv.className = 'fiszka-suggestion warning';
+            suggestionDiv.innerHTML = '⚠️ Błąd sprawdzania';
+        }
+    }
+    
+    function fiszkaUpdateAllSuggestions() {
+        const jezyk = getSelectedJezyk();
+        document.getElementById('preview-jezyk-badge').innerHTML = `<span class="fiszka-jezyk-info ${jezyk}" style="font-size: 11px;">${getJezykLabel(jezyk)}</span>`;
+        
+        for (const [inputId, interval] of Object.entries(INTERVALS)) {
+            if (document.getElementById(inputId).value) {
+                fiszkaCheckDate(inputId, interval);
+            }
+        }
+    }
+    
+    async function fiszkaSmartDates() {
+        const start = document.getElementById('fiszka_data_start').value;
+        const jezyk = getSelectedJezyk();
+        
+        if (!start) { 
+            alert('Najpierw ustaw datę utworzenia!'); 
+            return; 
+        }
+        
+        document.getElementById('fiszka-preview-content').innerHTML = '⏳ Obliczanie optymalnych dat dla ' + getJezykLabel(jezyk) + '...';
+        
+        try {
+            const response = await fetch(`${AJAX_URL}?action=fiszka_smart_schedule&start_date=${start}&post_id=${POST_ID}&jezyk=${jezyk}`);
+            const data = await response.json();
+            
+            if (data.success) {
+                document.getElementById('fiszka_p1').value = data.schedule.powtorka_1.date;
+                document.getElementById('fiszka_p2').value = data.schedule.powtorka_2.date;
+                document.getElementById('fiszka_p3').value = data.schedule.powtorka_3.date;
+                document.getElementById('fiszka_p4').value = data.schedule.powtorka_4.date;
+                document.getElementById('fiszka_p5').value = data.schedule.powtorka_5.date;
+                
+                updatePreview(data.schedule, jezyk);
+                fiszkaUpdateAllSuggestions();
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Błąd podczas obliczania. Spróbuj ponownie.');
+        }
+    }
+    
+    function fiszkaDefaultDates() {
+        const start = document.getElementById('fiszka_data_start').value;
+        if (!start) { 
+            alert('Najpierw ustaw datę utworzenia!'); 
+            return; 
+        }
+        
+        const d = new Date(start);
+        
+        const p1 = new Date(d); p1.setDate(d.getDate() + 1);
+        const p2 = new Date(d); p2.setDate(d.getDate() + 5);
+        const p3 = new Date(d); p3.setDate(d.getDate() + 15);
+        const p4 = new Date(d); p4.setDate(d.getDate() + 40);
+        const p5 = new Date(d); p5.setDate(d.getDate() + 120);
+        
+        document.getElementById('fiszka_p1').value = p1.toISOString().split('T')[0];
+        document.getElementById('fiszka_p2').value = p2.toISOString().split('T')[0];
+        document.getElementById('fiszka_p3').value = p3.toISOString().split('T')[0];
+        document.getElementById('fiszka_p4').value = p4.toISOString().split('T')[0];
+        document.getElementById('fiszka_p5').value = p5.toISOString().split('T')[0];
+        
+        document.getElementById('fiszka-preview-content').innerHTML = '📅 Ustawiono domyślne daty (+1, +5, +15, +40, +120 dni)';
+        
+        fiszkaUpdateAllSuggestions();
+    }
+    
+    function updatePreview(schedule, jezyk) {
+        const labels = {
+            powtorka_1: {name: 'P1', interval: 1},
+            powtorka_2: {name: 'P2', interval: 5},
+            powtorka_3: {name: 'P3', interval: 15},
+            powtorka_4: {name: 'P4', interval: 40},
+            powtorka_5: {name: 'P5', interval: 120}
+        };
+        
+        const jezykIcon = jezyk === 'hiszpanski' ? '🇪🇸' : '🇬🇧';
+        let html = '';
+        
+        for (const [key, data] of Object.entries(schedule)) {
+            const label = labels[key];
+            const icon = data.changed ? '🔄' : '✅';
+            
+            let shiftInfo = '';
+            if (data.changed) {
+                const shiftDir = data.diff_days > 0 ? '+' : '';
+                shiftInfo = `<span class="fiszka-shift ${data.diff_days < 0 ? 'negative' : ''}">${shiftDir}${data.diff_days} dni</span>`;
+            }
+            
+            let changeInfo = '';
+            if (data.changed) {
+                changeInfo = `<br><small style="color: #666;">Przesunięto z ${formatDatePL(data.original_date)} (${data.original_count} ${jezykIcon})</small>`;
+            }
+            
+            html += `<div class="fiszka-preview-item">
+                ${icon} <strong>${label.name}</strong> (+${label.interval}): 
+                ${formatDatePL(data.date)} 
+                <span>(${data.count} ${jezykIcon})</span>
+                ${shiftInfo}
+                ${changeInfo}
+            </div>`;
+        }
+        
+        document.getElementById('fiszka-preview-content').innerHTML = html;
+    }
+    
+    function formatDatePL(dateStr) {
+        const d = new Date(dateStr);
+        return d.toLocaleDateString('pl-PL', {day: '2-digit', month: '2-digit', year: 'numeric'});
+    }
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(fiszkaUpdateAllSuggestions, 500);
+    });
+    </script>
+    <?php
+}
+
+// =============================================
+// 4. AJAX ENDPOINTS
+// =============================================
+
+add_action('wp_ajax_fiszka_check_date', function() {
+    $date = sanitize_text_field($_GET['date'] ?? '');
+    $post_id = intval($_GET['post_id'] ?? 0);
+    $jezyk = sanitize_text_field($_GET['jezyk'] ?? '');
+    
+    if (empty($date)) {
+        wp_send_json(['success' => false, 'error' => 'Brak daty']);
+        return;
+    }
+    
+    $count = fiszki_count_tasks_for_date($date, $jezyk, $post_id);
+    
+    wp_send_json([
+        'success' => true,
+        'date' => $date,
+        'count' => $count,
+        'jezyk' => $jezyk,
+    ]);
+});
+
+add_action('wp_ajax_fiszka_smart_schedule', function() {
+    $start_date = sanitize_text_field($_GET['start_date'] ?? date('Y-m-d'));
+    $post_id = intval($_GET['post_id'] ?? 0);
+    $jezyk = sanitize_text_field($_GET['jezyk'] ?? '');
+    
+    $schedule = fiszki_generate_smart_schedule($start_date, $jezyk, $post_id);
+    
+    wp_send_json([
+        'success' => true,
+        'schedule' => $schedule,
+        'jezyk' => $jezyk,
+    ]);
+});
+
+// =============================================
+// 5. ZAPISYWANIE META FIELDS
+// =============================================
+
+add_action('save_post_fiszka', function($post_id) {
+    if (!isset($_POST['fiszka_nonce']) || !wp_verify_nonce($_POST['fiszka_nonce'], 'fiszka_save')) {
+        return;
+    }
+    
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    
+    if (isset($_POST['fiszka_jezyk'])) {
+        update_post_meta($post_id, '_fiszka_jezyk', sanitize_text_field($_POST['fiszka_jezyk']));
+    }
+    
+    $fields = ['data_utworzenia', 'powtorka_1', 'powtorka_2', 'powtorka_3', 'powtorka_4', 'powtorka_5'];
+    
+    foreach ($fields as $field) {
+        if (isset($_POST['fiszka_' . $field])) {
+            update_post_meta($post_id, '_fiszka_' . $field, sanitize_text_field($_POST['fiszka_' . $field]));
+        }
+    }
+});
+
+// =============================================
+// 6. AUTO-WYPEŁNIANIE PRZY TWORZENIU
+// =============================================
+
+add_action('save_post_fiszka', function($post_id, $post, $update) {
+    if ($update) return;
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    
+    $data_start = get_post_meta($post_id, '_fiszka_data_utworzenia', true);
+    if (empty($data_start)) {
+        $data_start = date('Y-m-d');
+        update_post_meta($post_id, '_fiszka_data_utworzenia', $data_start);
+    }
+    
+    $jezyk = get_post_meta($post_id, '_fiszka_jezyk', true);
+    if (empty($jezyk)) {
+        $jezyk = 'hiszpanski';
+        update_post_meta($post_id, '_fiszka_jezyk', $jezyk);
+    }
+    
+    // Inteligentne daty DLA WYBRANEGO JĘZYKA
+    $schedule = fiszki_generate_smart_schedule($data_start, $jezyk, $post_id);
+    
+    if (empty(get_post_meta($post_id, '_fiszka_powtorka_1', true))) {
+        update_post_meta($post_id, '_fiszka_powtorka_1', $schedule['powtorka_1']['date']);
+    }
+    if (empty(get_post_meta($post_id, '_fiszka_powtorka_2', true))) {
+        update_post_meta($post_id, '_fiszka_powtorka_2', $schedule['powtorka_2']['date']);
+    }
+    if (empty(get_post_meta($post_id, '_fiszka_powtorka_3', true))) {
+        update_post_meta($post_id, '_fiszka_powtorka_3', $schedule['powtorka_3']['date']);
+    }
+    if (empty(get_post_meta($post_id, '_fiszka_powtorka_4', true))) {
+        update_post_meta($post_id, '_fiszka_powtorka_4', $schedule['powtorka_4']['date']);
+    }
+    if (empty(get_post_meta($post_id, '_fiszka_powtorka_5', true))) {
+        update_post_meta($post_id, '_fiszka_powtorka_5', $schedule['powtorka_5']['date']);
+    }
+}, 10, 3);
+
+// =============================================
+// 7. REST API
+// =============================================
+
+add_action('rest_api_init', function() {
+    register_rest_route('fiszki/v1', '/today', [
+        'methods' => 'GET',
+        'callback' => 'fiszki_api_today',
+        'permission_callback' => '__return_true',
+    ]);
+    
+    register_rest_route('fiszki/v1', '/date/(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})', [
+        'methods' => 'GET',
+        'callback' => 'fiszki_api_date',
+        'permission_callback' => '__return_true',
+    ]);
+    
+    register_rest_route('fiszki/v1', '/all', [
+        'methods' => 'GET',
+        'callback' => 'fiszki_api_all',
+        'permission_callback' => '__return_true',
+    ]);
+    
+    register_rest_route('fiszki/v1', '/load/(?P<year>[0-9]{4})/(?P<month>[0-9]{2})', [
+        'methods' => 'GET',
+        'callback' => 'fiszki_api_load',
+        'permission_callback' => '__return_true',
+    ]);
+    
+    // Nowy endpoint: statystyki per język
+    register_rest_route('fiszki/v1', '/stats', [
+        'methods' => 'GET',
+        'callback' => 'fiszki_api_stats',
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+function fiszki_api_today($request) {
+    return fiszki_api_date(new WP_REST_Request('GET', '/fiszki/v1/date/' . date('Y-m-d')));
+}
+
+function fiszki_api_date($request) {
+    $date = $request->get_param('date') ?: date('Y-m-d');
+    $jezyk_filter = $request->get_param('jezyk') ?: '';
+    
+    $fiszki = get_posts([
+        'post_type' => 'fiszka',
+        'posts_per_page' => -1,
+        'post_status' => 'publish',
+    ]);
+    
+    $tasks = [];
+    
+    foreach ($fiszki as $fiszka) {
+        $jezyk = get_post_meta($fiszka->ID, '_fiszka_jezyk', true) ?: 'hiszpanski';
+        
+        if ($jezyk_filter && $jezyk !== $jezyk_filter) {
+            continue;
+        }
+        
+        $data_utworzenia = get_post_meta($fiszka->ID, '_fiszka_data_utworzenia', true);
+        $powtorka_1 = get_post_meta($fiszka->ID, '_fiszka_powtorka_1', true);
+        $powtorka_2 = get_post_meta($fiszka->ID, '_fiszka_powtorka_2', true);
+        $powtorka_3 = get_post_meta($fiszka->ID, '_fiszka_powtorka_3', true);
+        $powtorka_4 = get_post_meta($fiszka->ID, '_fiszka_powtorka_4', true);
+        $powtorka_5 = get_post_meta($fiszka->ID, '_fiszka_powtorka_5', true);
+        
+        $dates = [
+            ['date' => $data_utworzenia, 'type' => 'nauka', 'priority' => 0],
+            ['date' => $powtorka_1, 'type' => 'powtorka_1', 'priority' => 1],
+            ['date' => $powtorka_2, 'type' => 'powtorka_2', 'priority' => 2],
+            ['date' => $powtorka_3, 'type' => 'powtorka_3', 'priority' => 3],
+            ['date' => $powtorka_4, 'type' => 'powtorka_4', 'priority' => 4],
+            ['date' => $powtorka_5, 'type' => 'powtorka_5', 'priority' => 5],
+        ];
+        
+        foreach ($dates as $d) {
+            if ($d['date'] === $date) {
+                $tasks[] = [
+                    'id' => $fiszka->ID,
+                    'name' => $fiszka->post_title,
+                    'type' => $d['type'],
+                    'priority' => $d['priority'],
+                    'jezyk' => $jezyk,
+                    'edit_url' => admin_url('post.php?post=' . $fiszka->ID . '&action=edit'),
+                ];
+            }
+        }
+    }
+    
+    usort($tasks, function($a, $b) {
+        return $a['priority'] - $b['priority'];
+    });
+    
+    return [
+        'date' => $date,
+        'count' => count($tasks),
+        'tasks' => $tasks,
+        'jezyk_filter' => $jezyk_filter,
+    ];
+}
+
+function fiszki_api_all($request) {
+    $jezyk_filter = $request->get_param('jezyk') ?: '';
+    
+    $fiszki = get_posts([
+        'post_type' => 'fiszka',
+        'posts_per_page' => -1,
+        'post_status' => 'publish',
+        'orderby' => 'meta_value',
+        'meta_key' => '_fiszka_data_utworzenia',
+        'order' => 'DESC',
+    ]);
+    
+    $result = [];
+    
+    foreach ($fiszki as $fiszka) {
+        $jezyk = get_post_meta($fiszka->ID, '_fiszka_jezyk', true) ?: 'hiszpanski';
+        
+        if ($jezyk_filter && $jezyk !== $jezyk_filter) {
+            continue;
+        }
+        
+        $result[] = [
+            'id' => $fiszka->ID,
+            'name' => $fiszka->post_title,
+            'jezyk' => $jezyk,
+            'data_utworzenia' => get_post_meta($fiszka->ID, '_fiszka_data_utworzenia', true),
+            'powtorka_1' => get_post_meta($fiszka->ID, '_fiszka_powtorka_1', true),
+            'powtorka_2' => get_post_meta($fiszka->ID, '_fiszka_powtorka_2', true),
+            'powtorka_3' => get_post_meta($fiszka->ID, '_fiszka_powtorka_3', true),
+            'powtorka_4' => get_post_meta($fiszka->ID, '_fiszka_powtorka_4', true),
+            'powtorka_5' => get_post_meta($fiszka->ID, '_fiszka_powtorka_5', true),
+            'edit_url' => admin_url('post.php?post=' . $fiszka->ID . '&action=edit'),
+        ];
+    }
+    
+    return [
+        'count' => count($result),
+        'fiszki' => $result,
+        'jezyk_filter' => $jezyk_filter,
+    ];
+}
+
+function fiszki_api_load($request) {
+    $year = $request->get_param('year');
+    $month = $request->get_param('month');
+    $jezyk_filter = $request->get_param('jezyk') ?: '';
+    
+    $days_in_month = cal_days_in_month(CAL_GREGORIAN, intval($month), intval($year));
+    $load = [];
+    
+    for ($day = 1; $day <= $days_in_month; $day++) {
+        $date = sprintf('%s-%s-%02d', $year, $month, $day);
+        $load[$date] = fiszki_count_tasks_for_date($date, $jezyk_filter);
+    }
+    
+    return [
+        'year' => $year,
+        'month' => $month,
+        'load' => $load,
+        'jezyk_filter' => $jezyk_filter,
+    ];
+}
+
+function fiszki_api_stats($request) {
+    $fiszki = get_posts([
+        'post_type' => 'fiszka',
+        'posts_per_page' => -1,
+        'post_status' => 'publish',
+    ]);
+    
+    $stats = [
+        'hiszpanski' => ['total' => 0, 'today' => 0],
+        'angielski' => ['total' => 0, 'today' => 0],
+    ];
+    
+    $today = date('Y-m-d');
+    $meta_keys = ['_fiszka_data_utworzenia', '_fiszka_powtorka_1', '_fiszka_powtorka_2', '_fiszka_powtorka_3', '_fiszka_powtorka_4', '_fiszka_powtorka_5'];
+    
+    foreach ($fiszki as $fiszka) {
+        $jezyk = get_post_meta($fiszka->ID, '_fiszka_jezyk', true) ?: 'hiszpanski';
+        
+        if (isset($stats[$jezyk])) {
+            $stats[$jezyk]['total']++;
+            
+            foreach ($meta_keys as $key) {
+                if (get_post_meta($fiszka->ID, $key, true) === $today) {
+                    $stats[$jezyk]['today']++;
+                    break;
+                }
+            }
+        }
+    }
+    
+    return $stats;
+}
+
+// =============================================
+// 8. KOLUMNY W LIŚCIE ADMIN
+// =============================================
+
+add_filter('manage_fiszka_posts_columns', function($columns) {
+    $new = [];
+    foreach ($columns as $key => $value) {
+        $new[$key] = $value;
+        if ($key === 'title') {
+            $new['jezyk'] = '🌍';
+            $new['data_utworzenia'] = '📆 Start';
+            $new['powtorka_1'] = 'P1';
+            $new['powtorka_2'] = 'P2';
+            $new['powtorka_3'] = 'P3';
+            $new['powtorka_4'] = 'P4';
+            $new['powtorka_5'] = 'P5';
+        }
+    }
+    unset($new['date']);
+    return $new;
+});
+
+add_action('manage_fiszka_posts_custom_column', function($column, $post_id) {
+    $today = date('Y-m-d');
+    
+    if ($column === 'jezyk') {
+        $jezyk = get_post_meta($post_id, '_fiszka_jezyk', true) ?: 'hiszpanski';
+        echo $jezyk === 'hiszpanski' ? '🇪🇸' : '🇬🇧';
+        return;
+    }
+    
+    $meta_key = '';
+    switch ($column) {
+        case 'data_utworzenia': $meta_key = '_fiszka_data_utworzenia'; break;
+        case 'powtorka_1': $meta_key = '_fiszka_powtorka_1'; break;
+        case 'powtorka_2': $meta_key = '_fiszka_powtorka_2'; break;
+        case 'powtorka_3': $meta_key = '_fiszka_powtorka_3'; break;
+        case 'powtorka_4': $meta_key = '_fiszka_powtorka_4'; break;
+        case 'powtorka_5': $meta_key = '_fiszka_powtorka_5'; break;
+    }
+    
+    if ($meta_key) {
+        $date = get_post_meta($post_id, $meta_key, true);
+        if ($date) {
+            $style = ($date === $today) ? 'color: #d63638; font-weight: bold;' : '';
+            $past = ($date < $today) ? ' ✓' : '';
+            echo '<span style="' . $style . '">' . date('d.m', strtotime($date)) . $past . '</span>';
+        } else {
+            echo '—';
+        }
+    }
+}, 10, 2);
+
+add_action('restrict_manage_posts', function($post_type) {
+    if ($post_type !== 'fiszka') return;
+    
+    $current = $_GET['fiszka_jezyk_filter'] ?? '';
+    ?>
+    <select name="fiszka_jezyk_filter">
+        <option value="">🌍 Wszystkie języki</option>
+        <option value="hiszpanski" <?php selected($current, 'hiszpanski'); ?>>🇪🇸 Hiszpański</option>
+        <option value="angielski" <?php selected($current, 'angielski'); ?>>🇬🇧 Angielski</option>
+    </select>
+    <?php
+});
+
+add_filter('parse_query', function($query) {
+    global $pagenow;
+    
+    if ($pagenow === 'edit.php' && 
+        isset($_GET['post_type']) && $_GET['post_type'] === 'fiszka' &&
+        !empty($_GET['fiszka_jezyk_filter'])) {
+        
+        $query->query_vars['meta_key'] = '_fiszka_jezyk';
+        $query->query_vars['meta_value'] = sanitize_text_field($_GET['fiszka_jezyk_filter']);
+    }
+});
+
+add_filter('manage_edit-fiszka_sortable_columns', function($columns) {
+    $columns['data_utworzenia'] = 'data_utworzenia';
+    $columns['jezyk'] = 'jezyk';
+    return $columns;
+});
+
+add_action('pre_get_posts', function($query) {
+    if (!is_admin() || !$query->is_main_query()) return;
+    
+    $orderby = $query->get('orderby');
+    
+    if ($orderby === 'data_utworzenia') {
+        $query->set('meta_key', '_fiszka_data_utworzenia');
+        $query->set('orderby', 'meta_value');
+    } elseif ($orderby === 'jezyk') {
+        $query->set('meta_key', '_fiszka_jezyk');
+        $query->set('orderby', 'meta_value');
+    }
+});
