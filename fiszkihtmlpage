@@ -27,15 +27,23 @@
 
         * { box-sizing: border-box; }
 
-        body { 
-            font-family: var(--font-body); 
-            background: var(--deep-blue); /*  */
+        body {
+            font-family: var(--font-body);
+            background: var(--deep-blue);
             color: var(--ash-grey);
-            margin: 0; 
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+        }
+
+        #fiszki-app {
+            max-width: 900px;
+            margin: 0 auto;
             padding: 20px;
             min-height: 100vh;
-            /* Subtelny wzór geometryczny w tle nawiązujący do "Wzoru Firmowego" [cite: 64] */
-            background-image: 
+            /* Subtelny wzór geometryczny w tle nawiązujący do "Wzoru Firmowego" */
+            background-color: var(--deep-blue);
+            background-image:
                 linear-gradient(30deg, #051025 12%, transparent 12.5%, transparent 87%, #051025 87.5%, #051025),
                 linear-gradient(150deg, #051025 12%, transparent 12.5%, transparent 87%, #051025 87.5%, #051025),
                 linear-gradient(30deg, #051025 12%, transparent 12.5%, transparent 87%, #051025 87.5%, #051025),
@@ -45,8 +53,6 @@
             background-size: 80px 140px;
             background-position: 0 0, 0 0, 40px 70px, 40px 70px, 0 0, 40px 70px;
         }
-        
-        #fiszki-app { max-width: 900px; margin: 0 auto; }
 
         /* BRANDING HEADER */
         .brand-header {
