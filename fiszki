@@ -153,13 +153,14 @@ add_action('add_meta_boxes', function() {
 
 function fiszka_meta_box_html($post) {
     $jezyk = get_post_meta($post->ID, '_fiszka_jezyk', true) ?: 'hiszpanski';
+    $ilosc_slowek = get_post_meta($post->ID, '_fiszka_ilosc_slowek', true) ?: '';
     $data_utworzenia = get_post_meta($post->ID, '_fiszka_data_utworzenia', true);
     $powtorka_1 = get_post_meta($post->ID, '_fiszka_powtorka_1', true);
     $powtorka_2 = get_post_meta($post->ID, '_fiszka_powtorka_2', true);
     $powtorka_3 = get_post_meta($post->ID, '_fiszka_powtorka_3', true);
     $powtorka_4 = get_post_meta($post->ID, '_fiszka_powtorka_4', true);
     $powtorka_5 = get_post_meta($post->ID, '_fiszka_powtorka_5', true);
-    
+
     if (empty($data_utworzenia)) {
         $data_utworzenia = date('Y-m-d');
     }
@@ -190,15 +191,23 @@ function fiszka_meta_box_html($post) {
         @media (max-width: 600px) { .fiszka-grid { grid-template-columns: 1fr; } }
     </style>
     
-    <!-- SEKCJA: JĘZYK -->
+    <!-- SEKCJA: JĘZYK I ILOŚĆ SŁÓWEK -->
     <div class="fiszka-section">
         <h4>🌍 Język <span class="fiszka-jezyk-info <?php echo esc_attr($jezyk); ?>" id="jezyk-badge"><?php echo $jezyk === 'hiszpanski' ? '🇪🇸 Hiszpański' : '🇬🇧 Angielski'; ?></span></h4>
-        <div class="fiszka-field">
-            <select name="fiszka_jezyk" id="fiszka_jezyk" style="max-width: 200px;" onchange="fiszkaJezykChanged()">
-                <option value="hiszpanski" <?php selected($jezyk, 'hiszpanski'); ?>>🇪🇸 Hiszpański</option>
-                <option value="angielski" <?php selected($jezyk, 'angielski'); ?>>🇬🇧 Angielski</option>
-            </select>
-            <small>⚠️ Zmiana języka wpływa na liczenie obciążenia - każdy język ma osobną kolejkę!</small>
+        <div class="fiszka-grid">
+            <div class="fiszka-field">
+                <label>Język</label>
+                <select name="fiszka_jezyk" id="fiszka_jezyk" style="max-width: 200px;" onchange="fiszkaJezykChanged()">
+                    <option value="hiszpanski" <?php selected($jezyk, 'hiszpanski'); ?>>🇪🇸 Hiszpański</option>
+                    <option value="angielski" <?php selected($jezyk, 'angielski'); ?>>🇬🇧 Angielski</option>
+                </select>
+                <small>⚠️ Zmiana języka wpływa na liczenie obciążenia</small>
+            </div>
+            <div class="fiszka-field">
+                <label>📝 Ilość słówek w zestawie</label>
+                <input type="number" name="fiszka_ilosc_slowek" id="fiszka_ilosc_slowek" value="<?php echo esc_attr($ilosc_slowek); ?>" min="0" style="max-width: 120px;">
+                <small>Liczba słówek w tej fiszce</small>
+            </div>
         </div>
     </div>
     
@@ -517,7 +526,11 @@ add_action('save_post_fiszka', function($post_id) {
     if (isset($_POST['fiszka_jezyk'])) {
         update_post_meta($post_id, '_fiszka_jezyk', sanitize_text_field($_POST['fiszka_jezyk']));
     }
-    
+
+    if (isset($_POST['fiszka_ilosc_slowek'])) {
+        update_post_meta($post_id, '_fiszka_ilosc_slowek', intval($_POST['fiszka_ilosc_slowek']));
+    }
+
     $fields = ['data_utworzenia', 'powtorka_1', 'powtorka_2', 'powtorka_3', 'powtorka_4', 'powtorka_5'];
     
     foreach ($fields as $field) {
@@ -651,6 +664,7 @@ function fiszki_api_date($request) {
                     'type' => $d['type'],
                     'priority' => $d['priority'],
                     'jezyk' => $jezyk,
+                    'ilosc_slowek' => intval(get_post_meta($fiszka->ID, '_fiszka_ilosc_slowek', true)),
                     'edit_url' => admin_url('post.php?post=' . $fiszka->ID . '&action=edit'),
                 ];
             }
@@ -694,6 +708,7 @@ function fiszki_api_all($request) {
             'id' => $fiszka->ID,
             'name' => $fiszka->post_title,
             'jezyk' => $jezyk,
+            'ilosc_slowek' => intval(get_post_meta($fiszka->ID, '_fiszka_ilosc_slowek', true)),
             'data_utworzenia' => get_post_meta($fiszka->ID, '_fiszka_data_utworzenia', true),
             'powtorka_1' => get_post_meta($fiszka->ID, '_fiszka_powtorka_1', true),
             'powtorka_2' => get_post_meta($fiszka->ID, '_fiszka_powtorka_2', true),
@@ -738,21 +753,25 @@ function fiszki_api_stats($request) {
         'posts_per_page' => -1,
         'post_status' => 'publish',
     ]);
-    
+
     $stats = [
-        'hiszpanski' => ['total' => 0, 'today' => 0],
-        'angielski' => ['total' => 0, 'today' => 0],
+        'hiszpanski' => ['total' => 0, 'today' => 0, 'slowek' => 0],
+        'angielski' => ['total' => 0, 'today' => 0, 'slowek' => 0],
     ];
-    
+
     $today = date('Y-m-d');
     $meta_keys = ['_fiszka_data_utworzenia', '_fiszka_powtorka_1', '_fiszka_powtorka_2', '_fiszka_powtorka_3', '_fiszka_powtorka_4', '_fiszka_powtorka_5'];
-    
+
     foreach ($fiszki as $fiszka) {
         $jezyk = get_post_meta($fiszka->ID, '_fiszka_jezyk', true) ?: 'hiszpanski';
-        
+
         if (isset($stats[$jezyk])) {
             $stats[$jezyk]['total']++;
-            
+
+            // Dodaj ilość słówek
+            $ilosc_slowek = intval(get_post_meta($fiszka->ID, '_fiszka_ilosc_slowek', true));
+            $stats[$jezyk]['slowek'] += $ilosc_slowek;
+
             foreach ($meta_keys as $key) {
                 if (get_post_meta($fiszka->ID, $key, true) === $today) {
                     $stats[$jezyk]['today']++;
@@ -761,7 +780,7 @@ function fiszki_api_stats($request) {
             }
         }
     }
-    
+
     return $stats;
 }
 
@@ -775,6 +794,7 @@ add_filter('manage_fiszka_posts_columns', function($columns) {
         $new[$key] = $value;
         if ($key === 'title') {
             $new['jezyk'] = '🌍';
+            $new['ilosc_slowek'] = '📝';
             $new['data_utworzenia'] = '📆 Start';
             $new['powtorka_1'] = 'P1';
             $new['powtorka_2'] = 'P2';
@@ -789,10 +809,16 @@ add_filter('manage_fiszka_posts_columns', function($columns) {
 
 add_action('manage_fiszka_posts_custom_column', function($column, $post_id) {
     $today = date('Y-m-d');
-    
+
     if ($column === 'jezyk') {
         $jezyk = get_post_meta($post_id, '_fiszka_jezyk', true) ?: 'hiszpanski';
         echo $jezyk === 'hiszpanski' ? '🇪🇸' : '🇬🇧';
+        return;
+    }
+
+    if ($column === 'ilosc_slowek') {
+        $ilosc = get_post_meta($post_id, '_fiszka_ilosc_slowek', true);
+        echo $ilosc ? intval($ilosc) : '—';
         return;
     }
     
