@@ -4391,12 +4391,12 @@ add_filter('query_vars', function($vars) {
 
 add_action('template_redirect', function() {
     if (get_query_var('habits_dashboard')) {
-        habits_render_dashboard();
+        habits_render_langer_dashboard_view();
         exit;
     }
 });
 
-function habits_render_dashboard() {
+function habits_render_langer_dashboard_view() {
     $ajax_url = admin_url('admin-ajax.php');
     ?>
 <!DOCTYPE html>
