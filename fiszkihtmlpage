@@ -29,19 +29,15 @@
 
         body {
             font-family: var(--font-body);
-            background: var(--deep-blue);
             color: var(--ash-grey);
             margin: 0;
             padding: 0;
-            min-height: 100vh;
         }
 
-        #fiszki-app {
-            max-width: 900px;
-            margin: 0 auto;
-            padding: 20px;
+        .fiszki-wrapper {
             min-height: 100vh;
-            /* Subtelny wzór geometryczny w tle nawiązujący do "Wzoru Firmowego" */
+            width: 100%;
+            /* Subtelny wzór geometryczny w tle na całą stronę */
             background-color: var(--deep-blue);
             background-image:
                 linear-gradient(30deg, #051025 12%, transparent 12.5%, transparent 87%, #051025 87.5%, #051025),
@@ -52,6 +48,18 @@
                 linear-gradient(60deg, #061229 25%, transparent 25.5%, transparent 75%, #061229 75%, #061229);
             background-size: 80px 140px;
             background-position: 0 0, 0 0, 40px 70px, 40px 70px, 0 0, 40px 70px;
+            /* Rozciągnij na całą szerokość nawet w kontenerze WordPress */
+            margin-left: calc(-50vw + 50%);
+            margin-right: calc(-50vw + 50%);
+            padding-left: calc(50vw - 50%);
+            padding-right: calc(50vw - 50%);
+        }
+
+        #fiszki-app {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            min-height: 100vh;
         }
 
         /* BRANDING HEADER */
@@ -571,6 +579,7 @@
 </head>
 <body>
 
+<div class="fiszki-wrapper">
 <div id="fiszki-app">
 
     <div class="brand-header">
@@ -667,7 +676,8 @@
         <h3><span style="color:var(--ash-grey)">///</span> Baza wiedzy <span id="jezyk-label-table"></span></h3>
         <div class="table-container" id="table-container">Loading data...</div>
     </div>
-    
+
+</div>
 </div>
 
 <script>
