@@ -7,6 +7,9 @@
 
 date_default_timezone_set('Europe/Warsaw');
 
+// Załaduj zewnętrzny dashboard
+require_once __DIR__ . '/habits-dashboard.php';
+
 // =============================================
 // TWORZENIE TABEL
 // =============================================
@@ -115,6 +118,21 @@ function habits_create_tables() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;";
 
+    // Tabela diety (import z CSV)
+    $table_diet = $wpdb->prefix . 'habits_diet';
+    $sql9 = "CREATE TABLE IF NOT EXISTS $table_diet (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        dzien DATE NOT NULL,
+        nazwa_produktu VARCHAR(255) DEFAULT NULL,
+        kalorie DECIMAL(10,2) DEFAULT 0,
+        bialko DECIMAL(10,2) DEFAULT 0,
+        tluszcze DECIMAL(10,2) DEFAULT 0,
+        weglowodany DECIMAL(10,2) DEFAULT 0,
+        notatka TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_dzien (dzien)
+    ) $charset_collate;";
+
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql1);
     dbDelta($sql2);
@@ -124,6 +142,7 @@ function habits_create_tables() {
     dbDelta($sql6);
     dbDelta($sql7);
     dbDelta($sql8);
+    dbDelta($sql9);
 }
 
 add_action('admin_init', function() {
@@ -136,6 +155,12 @@ add_action('admin_init', function() {
     // Sprawdź czy tabela sport istnieje (nowa tabela)
     $table_sport = $wpdb->prefix . 'habits_sport';
     if($wpdb->get_var("SHOW TABLES LIKE '$table_sport'") != $table_sport) {
+        habits_create_tables();
+    }
+
+    // Sprawdź czy tabela diet istnieje (nowa tabela)
+    $table_diet = $wpdb->prefix . 'habits_diet';
+    if($wpdb->get_var("SHOW TABLES LIKE '$table_diet'") != $table_diet) {
         habits_create_tables();
     }
 
@@ -1083,6 +1108,233 @@ add_action('wp_ajax_habits_mark_steps_converted', function() {
 });
 
 // =============================================
+// DIET AJAX HANDLERS
+// =============================================
+
+// Import diety z CSV
+add_action('wp_ajax_habits_import_diet_csv', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_diet';
+
+    if (!isset($_FILES['csv_file'])) {
+        wp_send_json_error('Brak pliku CSV');
+        return;
+    }
+
+    $file = $_FILES['csv_file'];
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        wp_send_json_error('Błąd przesyłania pliku');
+        return;
+    }
+
+    $handle = fopen($file['tmp_name'], 'r');
+    if (!$handle) {
+        wp_send_json_error('Nie można otworzyć pliku');
+        return;
+    }
+
+    // Pomiń nagłówek
+    $header = fgetcsv($handle, 0, ',');
+
+    $imported = 0;
+    $errors = [];
+
+    while (($row = fgetcsv($handle, 0, ',')) !== false) {
+        if (count($row) < 6) continue;
+
+        // Format CSV: data, nazwa_produktu, kalorie, bialko, tluszcze, weglowodany
+        $dzien = sanitize_text_field($row[0]);
+
+        // Konwertuj format daty jeśli trzeba (DD/MM/YYYY -> YYYY-MM-DD)
+        if (preg_match('/^(\d{2})\/(\d{2})\/(\d{4})$/', $dzien, $matches)) {
+            $dzien = $matches[3] . '-' . $matches[2] . '-' . $matches[1];
+        }
+
+        // Walidacja daty
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dzien)) {
+            $errors[] = "Nieprawidłowa data: " . $row[0];
+            continue;
+        }
+
+        $nazwa = sanitize_text_field($row[1] ?? '');
+        $kalorie = floatval(str_replace(',', '.', $row[2] ?? 0));
+        $bialko = floatval(str_replace(',', '.', $row[3] ?? 0));
+        $tluszcze = floatval(str_replace(',', '.', $row[4] ?? 0));
+        $weglowodany = floatval(str_replace(',', '.', $row[5] ?? 0));
+
+        $wpdb->insert($table, [
+            'dzien' => $dzien,
+            'nazwa_produktu' => $nazwa,
+            'kalorie' => $kalorie,
+            'bialko' => $bialko,
+            'tluszcze' => $tluszcze,
+            'weglowodany' => $weglowodany
+        ]);
+
+        if ($wpdb->insert_id) {
+            $imported++;
+        }
+    }
+
+    fclose($handle);
+
+    wp_send_json_success([
+        'imported' => $imported,
+        'errors' => $errors
+    ]);
+});
+
+// Pobierz dane diety (zsumowane dziennie)
+add_action('wp_ajax_habits_get_diet', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_diet';
+
+    $date_start = sanitize_text_field($_POST['date_start'] ?? date('Y-m-01'));
+    $date_end = sanitize_text_field($_POST['date_end'] ?? date('Y-m-d'));
+
+    $data = $wpdb->get_results($wpdb->prepare("
+        SELECT
+            dzien,
+            SUM(kalorie) as kalorie,
+            SUM(bialko) as bialko,
+            SUM(tluszcze) as tluszcze,
+            SUM(weglowodany) as weglowodany
+        FROM $table
+        WHERE dzien BETWEEN %s AND %s
+        GROUP BY dzien
+        ORDER BY dzien DESC
+    ", $date_start, $date_end));
+
+    wp_send_json_success($data);
+});
+
+// Pobierz szczegóły diety dla dnia
+add_action('wp_ajax_habits_get_diet_details', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_diet';
+
+    $dzien = sanitize_text_field($_POST['dzien']);
+
+    $data = $wpdb->get_results($wpdb->prepare("
+        SELECT * FROM $table WHERE dzien = %s ORDER BY id ASC
+    ", $dzien));
+
+    wp_send_json_success($data);
+});
+
+// Usuń wpis diety
+add_action('wp_ajax_habits_delete_diet', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_diet';
+
+    $id = intval($_POST['id']);
+    $wpdb->delete($table, ['id' => $id]);
+
+    wp_send_json_success();
+});
+
+// Wyczyść dietę dla dnia
+add_action('wp_ajax_habits_clear_diet_day', function() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'habits_diet';
+
+    $dzien = sanitize_text_field($_POST['dzien']);
+    $wpdb->delete($table, ['dzien' => $dzien]);
+
+    wp_send_json_success();
+});
+
+// =============================================
+// DASHBOARD API ENDPOINTS (dla zewnętrznego dashboardu)
+// =============================================
+
+// Pobierz wszystkie dane do dashboardu (publiczny endpoint)
+add_action('wp_ajax_nopriv_habits_dashboard_data', 'habits_get_dashboard_data');
+add_action('wp_ajax_habits_dashboard_data', 'habits_get_dashboard_data');
+
+function habits_get_dashboard_data() {
+    global $wpdb;
+
+    $date_start = sanitize_text_field($_GET['date_start'] ?? $_POST['date_start'] ?? date('Y-m-01'));
+    $date_end = sanitize_text_field($_GET['date_end'] ?? $_POST['date_end'] ?? date('Y-m-d'));
+
+    // Pobierz dane diety
+    $diet = $wpdb->get_results($wpdb->prepare("
+        SELECT
+            dzien,
+            SUM(kalorie) as kalorie,
+            SUM(bialko) as bialko,
+            SUM(tluszcze) as tluszcze,
+            SUM(weglowodany) as weglowodany
+        FROM {$wpdb->prefix}habits_diet
+        WHERE dzien BETWEEN %s AND %s
+        GROUP BY dzien
+        ORDER BY dzien DESC
+    ", $date_start, $date_end));
+
+    // Pobierz dane sportu (kroki i aktywności)
+    $sport = $wpdb->get_results($wpdb->prepare("
+        SELECT * FROM {$wpdb->prefix}habits_sport
+        WHERE dzien BETWEEN %s AND %s
+        ORDER BY dzien DESC
+    ", $date_start, $date_end));
+
+    // Pobierz aktualny okres
+    $period = habits_get_current_period();
+    $habits = [];
+    $entries = [];
+
+    if ($period) {
+        // Pobierz nawyki z aktualnego okresu
+        $habits = $wpdb->get_results($wpdb->prepare("
+            SELECT * FROM {$wpdb->prefix}habits_definitions
+            WHERE period_id = %d AND aktywny = 1
+            ORDER BY pozycja ASC
+        ", $period->id));
+
+        // Pobierz wpisy nawyków
+        $entries = $wpdb->get_results($wpdb->prepare("
+            SELECT e.*, h.nazwa as habit_nazwa, h.ikona, h.kolor, h.cel_minut_dziennie
+            FROM {$wpdb->prefix}habits_entries e
+            JOIN {$wpdb->prefix}habits_definitions h ON e.habit_id = h.id
+            WHERE h.period_id = %d AND e.dzien BETWEEN %s AND %s
+            ORDER BY e.dzien DESC
+        ", $period->id, $date_start, $date_end));
+
+        // Pobierz challenges
+        $challenges = $wpdb->get_results($wpdb->prepare("
+            SELECT * FROM {$wpdb->prefix}habits_challenges
+            WHERE period_id = %d AND aktywny = 1
+        ", $period->id));
+
+        // Pobierz checks dla challenges
+        $challenge_checks = $wpdb->get_results($wpdb->prepare("
+            SELECT cc.*, c.nazwa as challenge_nazwa, c.ikona
+            FROM {$wpdb->prefix}habits_challenge_checks cc
+            JOIN {$wpdb->prefix}habits_challenges c ON cc.challenge_id = c.id
+            WHERE c.period_id = %d AND cc.dzien BETWEEN %s AND %s
+            ORDER BY cc.dzien DESC
+        ", $period->id, $date_start, $date_end));
+    }
+
+    // Globalne statystyki
+    $stats = $wpdb->get_row("SELECT * FROM {$wpdb->prefix}habits_stats LIMIT 1");
+
+    wp_send_json_success([
+        'diet' => $diet,
+        'sport' => $sport,
+        'habits' => $habits,
+        'entries' => $entries,
+        'challenges' => $challenges ?? [],
+        'challenge_checks' => $challenge_checks ?? [],
+        'period' => $period,
+        'stats' => $stats,
+        'date_start' => $date_start,
+        'date_end' => $date_end
+    ]);
+}
+
+// =============================================
 // MENU I STRONA
 // =============================================
 add_action('admin_menu', function() {
@@ -2005,6 +2257,7 @@ function habits_render_page() {
         <div class="habits-tabs">
             <button class="habits-tab active" data-tab="tracking">📝 Logowanie</button>
             <button class="habits-tab" data-tab="sport">🏃 Sport</button>
+            <button class="habits-tab" data-tab="diet">🥗 Dieta</button>
             <button class="habits-tab" data-tab="challenges">🎯 Challenge</button>
             <button class="habits-tab" data-tab="summary">📊 Podsumowanie</button>
             <button class="habits-tab" data-tab="charts">📈 Wykresy</button>
@@ -2165,6 +2418,72 @@ function habits_render_page() {
                 <div id="sportStats">
                     <p style="color: #6B7280; text-align: center;">Ładowanie...</p>
                 </div>
+            </div>
+        </div>
+
+        <!-- TAB: Dieta -->
+        <div class="habits-tab-content" id="tab-diet">
+            <!-- Import CSV -->
+            <div class="habits-card">
+                <div class="habits-card-title">
+                    📥 Import diety z CSV
+                </div>
+                <p style="color: #6B7280; font-size: 14px; margin-bottom: 15px;">
+                    Importuj dane diety z pliku CSV. Format: <strong>data, nazwa_produktu, kalorie, bialko, tluszcze, weglowodany</strong>
+                </p>
+                <div class="habits-form-row" style="align-items: flex-end; gap: 15px;">
+                    <div class="habits-form-group" style="flex: 1;">
+                        <label class="habits-form-label">Plik CSV</label>
+                        <input type="file" class="habits-form-input" id="dietCsvFile" accept=".csv" style="padding: 8px;">
+                    </div>
+                    <button class="habits-btn habits-btn-primary" onclick="HabitsApp.importDietCsv()">
+                        📥 Importuj
+                    </button>
+                </div>
+                <div id="importDietResult" style="margin-top: 15px;"></div>
+            </div>
+
+            <!-- Podsumowanie dzienne -->
+            <div class="habits-card">
+                <div class="habits-card-title">📊 Podsumowanie diety</div>
+                <div class="habits-form-row" style="margin-bottom: 20px; gap: 15px; align-items: flex-end;">
+                    <div class="habits-form-group">
+                        <label class="habits-form-label">Od</label>
+                        <input type="date" class="habits-form-input" id="dietDateStart"
+                               value="<?php echo date('Y-m-01'); ?>" style="width: 160px;">
+                    </div>
+                    <div class="habits-form-group">
+                        <label class="habits-form-label">Do</label>
+                        <input type="date" class="habits-form-input" id="dietDateEnd"
+                               value="<?php echo date('Y-m-d'); ?>" style="width: 160px;">
+                    </div>
+                    <button class="habits-btn habits-btn-secondary" onclick="HabitsApp.loadDietData()">
+                        🔍 Pokaż
+                    </button>
+                </div>
+                <div id="dietSummary">
+                    <p style="color: #6B7280; text-align: center;">Wybierz zakres dat i kliknij "Pokaż"</p>
+                </div>
+            </div>
+
+            <!-- Tabela diety -->
+            <div class="habits-card">
+                <div class="habits-card-title">📋 Historia diety</div>
+                <div class="table-container" id="dietTableContainer">
+                    <p style="color: #6B7280; text-align: center;">Brak danych</p>
+                </div>
+            </div>
+
+            <!-- Link do dashboardu -->
+            <div class="habits-card" style="background: linear-gradient(135deg, #6366F1, #8B5CF6); color: white;">
+                <div class="habits-card-title" style="color: white;">🚀 Dashboard zewnętrzny</div>
+                <p style="margin-bottom: 15px; opacity: 0.9;">
+                    Zobacz wizualizację wszystkich danych na zewnętrznym dashboardzie w stylu LANGER.
+                </p>
+                <a href="<?php echo site_url('/habits-dashboard/'); ?>" target="_blank"
+                   class="habits-btn" style="background: white; color: #6366F1;">
+                    🔗 Otwórz Dashboard
+                </a>
             </div>
         </div>
 
@@ -3905,6 +4224,152 @@ function habits_render_page() {
             await this.ajax('habits_delete_sport', { id: id });
             this.loadSportHistory();
             this.loadSportStats();
+        },
+
+        // ==================== DIET FUNCTIONS ====================
+        async importDietCsv() {
+            const fileInput = document.getElementById('dietCsvFile');
+            const resultDiv = document.getElementById('importDietResult');
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                resultDiv.innerHTML = '<p style="color: var(--habits-danger);">Wybierz plik CSV</p>';
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('action', 'habits_import_diet_csv');
+            formData.append('csv_file', file);
+
+            resultDiv.innerHTML = '<p style="color: #6B7280;">Importowanie...</p>';
+
+            try {
+                const response = await fetch(ajaxurl, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    let html = `<p style="color: var(--habits-success);">✓ Zaimportowano ${result.data.imported} wpisów</p>`;
+                    if (result.data.errors && result.data.errors.length > 0) {
+                        html += `<p style="color: var(--habits-warning);">Błędy: ${result.data.errors.join(', ')}</p>`;
+                    }
+                    resultDiv.innerHTML = html;
+                    fileInput.value = '';
+                    this.loadDietData();
+                } else {
+                    resultDiv.innerHTML = `<p style="color: var(--habits-danger);">Błąd: ${result.data || 'Nieznany błąd'}</p>`;
+                }
+            } catch (e) {
+                resultDiv.innerHTML = `<p style="color: var(--habits-danger);">Błąd: ${e.message}</p>`;
+            }
+        },
+
+        async loadDietData() {
+            const dateStart = document.getElementById('dietDateStart').value;
+            const dateEnd = document.getElementById('dietDateEnd').value;
+
+            const result = await this.ajax('habits_get_diet', {
+                date_start: dateStart,
+                date_end: dateEnd
+            });
+
+            if (!result.success) return;
+
+            const data = result.data;
+            const summaryDiv = document.getElementById('dietSummary');
+            const tableDiv = document.getElementById('dietTableContainer');
+
+            if (!data || data.length === 0) {
+                summaryDiv.innerHTML = '<p style="color: #6B7280; text-align: center;">Brak danych w wybranym okresie</p>';
+                tableDiv.innerHTML = '<p style="color: #6B7280; text-align: center;">Brak danych</p>';
+                return;
+            }
+
+            // Oblicz sumy
+            let totalKcal = 0, totalP = 0, totalF = 0, totalC = 0;
+            data.forEach(d => {
+                totalKcal += parseFloat(d.kalorie) || 0;
+                totalP += parseFloat(d.bialko) || 0;
+                totalF += parseFloat(d.tluszcze) || 0;
+                totalC += parseFloat(d.weglowodany) || 0;
+            });
+
+            const avgKcal = (totalKcal / data.length).toFixed(0);
+            const avgP = (totalP / data.length).toFixed(1);
+            const avgF = (totalF / data.length).toFixed(1);
+            const avgC = (totalC / data.length).toFixed(1);
+
+            summaryDiv.innerHTML = `
+                <div class="habits-summary-grid" style="grid-template-columns: repeat(4, 1fr);">
+                    <div class="summary-card" style="text-align: center;">
+                        <div style="font-size: 28px; font-weight: 700; color: var(--habits-primary);">${avgKcal}</div>
+                        <div style="font-size: 12px; color: #6B7280;">Śr. kcal/dzień</div>
+                    </div>
+                    <div class="summary-card" style="text-align: center;">
+                        <div style="font-size: 28px; font-weight: 700; color: #4CAF50;">${avgP}g</div>
+                        <div style="font-size: 12px; color: #6B7280;">Śr. białko</div>
+                    </div>
+                    <div class="summary-card" style="text-align: center;">
+                        <div style="font-size: 28px; font-weight: 700; color: #FFC107;">${avgF}g</div>
+                        <div style="font-size: 12px; color: #6B7280;">Śr. tłuszcze</div>
+                    </div>
+                    <div class="summary-card" style="text-align: center;">
+                        <div style="font-size: 28px; font-weight: 700; color: #2196F3;">${avgC}g</div>
+                        <div style="font-size: 12px; color: #6B7280;">Śr. węglowodany</div>
+                    </div>
+                </div>
+            `;
+
+            // Tabela
+            let html = `
+                <table class="habits-table">
+                    <thead>
+                        <tr>
+                            <th style="text-align: left;">Data</th>
+                            <th style="text-align: right;">Kalorie</th>
+                            <th style="text-align: right;">Białko</th>
+                            <th style="text-align: right;">Tłuszcze</th>
+                            <th style="text-align: right;">Węglowodany</th>
+                            <th style="width: 80px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            data.forEach(d => {
+                const dateObj = new Date(d.dzien);
+                const dateStr = dateObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'short', year: 'numeric' });
+                const kcal = parseFloat(d.kalorie).toFixed(0);
+                const p = parseFloat(d.bialko).toFixed(1);
+                const f = parseFloat(d.tluszcze).toFixed(1);
+                const c = parseFloat(d.weglowodany).toFixed(1);
+
+                html += `
+                    <tr>
+                        <td style="text-align: left; font-weight: 500;">${dateStr}</td>
+                        <td style="text-align: right;">${kcal} kcal</td>
+                        <td style="text-align: right;">${p}g</td>
+                        <td style="text-align: right;">${f}g</td>
+                        <td style="text-align: right;">${c}g</td>
+                        <td>
+                            <button class="habits-btn habits-btn-sm habits-btn-danger" onclick="HabitsApp.clearDietDay('${d.dzien}')">🗑️</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            tableDiv.innerHTML = html;
+        },
+
+        async clearDietDay(dzien) {
+            if (!confirm(`Usunąć wszystkie wpisy diety z dnia ${dzien}?`)) return;
+
+            await this.ajax('habits_clear_diet_day', { dzien: dzien });
+            this.loadDietData();
         }
     };
 
