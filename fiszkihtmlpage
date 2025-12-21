@@ -170,6 +170,8 @@
 
         .progress-ring {
             transform: rotate(-90deg);
+            width: 100%;
+            height: 100%;
         }
 
         .progress-ring-bg {
@@ -240,15 +242,39 @@
             margin-top: 3px;
         }
 
-        @media (max-width: 500px) {
+        @media (max-width: 600px) {
             .progress-banner {
-                flex-direction: column;
                 gap: 25px;
-                align-items: center;
+                padding: 20px 15px;
             }
             .progress-ring-container {
                 width: 100px;
                 height: 100px;
+            }
+            .progress-lang {
+                font-size: 0.85rem;
+            }
+            .progress-goal {
+                font-size: 0.7rem;
+            }
+            .progress-words {
+                font-size: 0.7rem;
+            }
+            .progress-percent {
+                font-size: 1.2rem;
+            }
+        }
+
+        @media (max-width: 380px) {
+            .progress-banner {
+                flex-direction: column;
+            }
+            .progress-ring-container {
+                width: 110px;
+                height: 110px;
+            }
+            .progress-percent {
+                font-size: 1.4rem;
             }
         }
 
@@ -549,7 +575,7 @@
     <div class="progress-banner">
         <div class="progress-item">
             <div class="progress-ring-container">
-                <svg class="progress-ring" width="120" height="120">
+                <svg class="progress-ring" viewBox="0 0 120 120">
                     <circle class="progress-ring-bg" cx="60" cy="60" r="52"/>
                     <circle class="progress-ring-fill hiszpanski" id="ring-hiszpanski" cx="60" cy="60" r="52"
                             stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
@@ -568,7 +594,7 @@
 
         <div class="progress-item">
             <div class="progress-ring-container">
-                <svg class="progress-ring" width="120" height="120">
+                <svg class="progress-ring" viewBox="0 0 120 120">
                     <circle class="progress-ring-bg" cx="60" cy="60" r="52"/>
                     <circle class="progress-ring-fill angielski" id="ring-angielski" cx="60" cy="60" r="52"
                             stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
