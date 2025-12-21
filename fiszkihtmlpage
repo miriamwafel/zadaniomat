@@ -143,7 +143,115 @@
             margin-left: 8px;
             border-radius: 2px;
         }
-        
+
+        /* PROGRESS BANNER */
+        .progress-banner {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 30px;
+            padding: 25px;
+            background: var(--deep-blue-card);
+            border: 1px solid #172a45;
+        }
+
+        .progress-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .progress-ring-container {
+            position: relative;
+            width: 120px;
+            height: 120px;
+        }
+
+        .progress-ring {
+            transform: rotate(-90deg);
+        }
+
+        .progress-ring-bg {
+            fill: none;
+            stroke: #172a45;
+            stroke-width: 8;
+        }
+
+        .progress-ring-fill {
+            fill: none;
+            stroke-width: 8;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.5s ease;
+        }
+
+        .progress-ring-fill.hiszpanski {
+            stroke: var(--flame);
+        }
+
+        .progress-ring-fill.angielski {
+            stroke: var(--cobalt);
+        }
+
+        .progress-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .progress-percent {
+            font-family: var(--font-headers);
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--light-grey);
+        }
+
+        .progress-label {
+            font-size: 0.7rem;
+            color: var(--ash-grey);
+            text-transform: uppercase;
+        }
+
+        .progress-info {
+            text-align: center;
+        }
+
+        .progress-lang {
+            font-family: var(--font-headers);
+            font-size: 1rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .progress-lang.hiszpanski { color: var(--flame); }
+        .progress-lang.angielski { color: var(--cobalt); }
+
+        .progress-goal {
+            font-size: 0.8rem;
+            color: var(--ash-grey);
+        }
+
+        .progress-words {
+            font-size: 0.75rem;
+            color: var(--light-grey);
+            margin-top: 3px;
+        }
+
+        @media (max-width: 500px) {
+            .progress-banner {
+                flex-direction: column;
+                gap: 25px;
+                align-items: center;
+            }
+            .progress-ring-container {
+                width: 100px;
+                height: 100px;
+            }
+        }
+
         /* KARTY */
         .card {
             background: var(--deep-blue-card);
@@ -436,7 +544,48 @@
     <div class="brand-header">
         <h1>Progresownik Marcina <span>System</span></h1>
     </div>
-    
+
+    <!-- PROGRESS BANNER -->
+    <div class="progress-banner">
+        <div class="progress-item">
+            <div class="progress-ring-container">
+                <svg class="progress-ring" width="120" height="120">
+                    <circle class="progress-ring-bg" cx="60" cy="60" r="52"/>
+                    <circle class="progress-ring-fill hiszpanski" id="ring-hiszpanski" cx="60" cy="60" r="52"
+                            stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
+                </svg>
+                <div class="progress-center">
+                    <div class="progress-percent" id="percent-hiszpanski">0%</div>
+                    <div class="progress-label">B2</div>
+                </div>
+            </div>
+            <div class="progress-info">
+                <div class="progress-lang hiszpanski">Hiszpański</div>
+                <div class="progress-goal">Cel: 2500 słówek</div>
+                <div class="progress-words" id="words-progress-hiszpanski">0 / 2500</div>
+            </div>
+        </div>
+
+        <div class="progress-item">
+            <div class="progress-ring-container">
+                <svg class="progress-ring" width="120" height="120">
+                    <circle class="progress-ring-bg" cx="60" cy="60" r="52"/>
+                    <circle class="progress-ring-fill angielski" id="ring-angielski" cx="60" cy="60" r="52"
+                            stroke-dasharray="326.73" stroke-dashoffset="326.73"/>
+                </svg>
+                <div class="progress-center">
+                    <div class="progress-percent" id="percent-angielski">0%</div>
+                    <div class="progress-label">C1</div>
+                </div>
+            </div>
+            <div class="progress-info">
+                <div class="progress-lang angielski">Angielski</div>
+                <div class="progress-goal">Cel: 2000 słówek</div>
+                <div class="progress-words" id="words-progress-angielski">0 / 2000</div>
+            </div>
+        </div>
+    </div>
+
     <div class="jezyk-switcher">
         <button class="jezyk-btn hiszpanski active" onclick="setJezyk('hiszpanski')">
             ES • Hiszpański
@@ -576,6 +725,27 @@ function setJezyk(jezyk) {
     loadTable();
 }
 
+// Cele językowe
+const GOALS = {
+    hiszpanski: { words: 2500, level: 'B2' },
+    angielski: { words: 2000, level: 'C1' }
+};
+
+function updateProgressRing(jezyk, currentWords) {
+    const goal = GOALS[jezyk].words;
+    const percent = Math.min(100, Math.round((currentWords / goal) * 100));
+    const circumference = 2 * Math.PI * 52; // r=52
+    const offset = circumference - (percent / 100) * circumference;
+
+    const ring = document.getElementById(`ring-${jezyk}`);
+    const percentEl = document.getElementById(`percent-${jezyk}`);
+    const wordsEl = document.getElementById(`words-progress-${jezyk}`);
+
+    if (ring) ring.style.strokeDashoffset = offset;
+    if (percentEl) percentEl.textContent = `${percent}%`;
+    if (wordsEl) wordsEl.textContent = `${currentWords} / ${goal}`;
+}
+
 async function loadStats() {
     try {
         const response = await fetch(API.stats());
@@ -585,8 +755,15 @@ async function loadStats() {
         document.getElementById('count-angielski').textContent = data.angielski.today;
 
         // Wyświetl łączną liczbę słówek per język
-        document.getElementById('words-hiszpanski').textContent = `${data.hiszpanski.slowek || 0} słówek`;
-        document.getElementById('words-angielski').textContent = `${data.angielski.slowek || 0} słówek`;
+        const slowekHiszpanski = data.hiszpanski.slowek || 0;
+        const slowekAngielski = data.angielski.slowek || 0;
+
+        document.getElementById('words-hiszpanski').textContent = `${slowekHiszpanski} słówek`;
+        document.getElementById('words-angielski').textContent = `${slowekAngielski} słówek`;
+
+        // Aktualizuj pierścienie postępu
+        updateProgressRing('hiszpanski', slowekHiszpanski);
+        updateProgressRing('angielski', slowekAngielski);
     } catch (err) {
         console.error('Błąd statystyk:', err);
     }
@@ -787,6 +964,7 @@ async function loadTable() {
                     <th>P2</th>
                     <th>P3</th>
                     <th>P4</th>
+                    <th>P5</th>
                 </tr>
             </thead>
             <tbody>`;
@@ -808,6 +986,7 @@ async function loadTable() {
                 <td class="${cellClass(f.powtorka_2)}">${formatDatePL(f.powtorka_2)}${check(f.powtorka_2)}</td>
                 <td class="${cellClass(f.powtorka_3)}">${formatDatePL(f.powtorka_3)}${check(f.powtorka_3)}</td>
                 <td class="${cellClass(f.powtorka_4)}">${formatDatePL(f.powtorka_4)}${check(f.powtorka_4)}</td>
+                <td class="${cellClass(f.powtorka_5)}">${formatDatePL(f.powtorka_5)}${check(f.powtorka_5)}</td>
             </tr>`;
         });
         
