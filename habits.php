@@ -667,55 +667,100 @@ add_action('wp_ajax_habits_get_summary', function() {
     global $wpdb;
 
     $period_id = intval($_POST['period_id']);
+    $year_id = isset($_POST['year_id']) ? intval($_POST['year_id']) : 0;
+    $scope = isset($_POST['scope']) ? sanitize_text_field($_POST['scope']) : 'period';
 
-    // Pobierz okres
-    $period = $wpdb->get_row($wpdb->prepare(
-        "SELECT * FROM {$wpdb->prefix}habits_periods WHERE id = %d",
-        $period_id
-    ));
+    // Determine periods based on scope
+    $periods = [];
 
-    if (!$period) {
-        wp_send_json_error('Period not found');
+    if ($scope === 'period') {
+        $period = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}habits_periods WHERE id = %d",
+            $period_id
+        ));
+        if ($period) {
+            $periods = [$period];
+        }
+    } elseif ($scope === 'year' && $year_id > 0) {
+        $periods = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}habits_periods WHERE year_id = %d ORDER BY data_start ASC",
+            $year_id
+        ));
+    } elseif ($scope === 'all') {
+        $periods = $wpdb->get_results(
+            "SELECT * FROM {$wpdb->prefix}habits_periods ORDER BY data_start ASC"
+        );
+    }
+
+    if (empty($periods)) {
+        wp_send_json_error('No periods found');
         return;
     }
 
-    // Pobierz nawyki
-    $habits = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM {$wpdb->prefix}habits_definitions WHERE period_id = %d AND aktywny = 1",
-        $period_id
-    ));
+    // Get all period IDs for query
+    $period_ids = array_map(function($p) { return $p->id; }, $periods);
+    $period_ids_placeholder = implode(',', array_map('intval', $period_ids));
+
+    // Calculate overall date range
+    $overall_start = min(array_map(function($p) { return $p->data_start; }, $periods));
+    $overall_end = min(
+        max(array_map(function($p) { return $p->data_koniec; }, $periods)),
+        date('Y-m-d')
+    );
+
+    // Pobierz nawyki z wszystkich okresów
+    $habits = $wpdb->get_results(
+        "SELECT * FROM {$wpdb->prefix}habits_definitions WHERE period_id IN ($period_ids_placeholder) AND aktywny = 1"
+    );
+
+    // Group habits by name to aggregate across periods
+    $habits_by_name = [];
+    foreach ($habits as $habit) {
+        $name = $habit->nazwa;
+        if (!isset($habits_by_name[$name])) {
+            $habits_by_name[$name] = [
+                'habit' => $habit,
+                'habit_ids' => [],
+                'goal' => $habit->cel_minut_dziennie
+            ];
+        }
+        $habits_by_name[$name]['habit_ids'][] = $habit->id;
+    }
 
     $summary = [];
 
-    foreach ($habits as $habit) {
-        // Suma minut w okresie
-        $total_minutes = $wpdb->get_var($wpdb->prepare("
+    foreach ($habits_by_name as $name => $data) {
+        $habit_ids_str = implode(',', array_map('intval', $data['habit_ids']));
+        $habit = $data['habit'];
+
+        // Suma minut
+        $total_minutes = $wpdb->get_var("
             SELECT COALESCE(SUM(minuty), 0) FROM {$wpdb->prefix}habits_entries
-            WHERE habit_id = %d AND dzien BETWEEN %s AND %s
-        ", $habit->id, $period->data_start, min($period->data_koniec, date('Y-m-d'))));
+            WHERE habit_id IN ($habit_ids_str) AND dzien BETWEEN '$overall_start' AND '$overall_end'
+        ");
 
         // Dni aktywne
-        $active_days = $wpdb->get_var($wpdb->prepare("
-            SELECT COUNT(*) FROM {$wpdb->prefix}habits_entries
-            WHERE habit_id = %d AND dzien BETWEEN %s AND %s AND minuty > 0
-        ", $habit->id, $period->data_start, min($period->data_koniec, date('Y-m-d'))));
+        $active_days = $wpdb->get_var("
+            SELECT COUNT(DISTINCT dzien) FROM {$wpdb->prefix}habits_entries
+            WHERE habit_id IN ($habit_ids_str) AND dzien BETWEEN '$overall_start' AND '$overall_end' AND minuty > 0
+        ");
 
         // Dni spełniające cel
         $goal_days = $wpdb->get_var($wpdb->prepare("
-            SELECT COUNT(*) FROM {$wpdb->prefix}habits_entries
-            WHERE habit_id = %d AND dzien BETWEEN %s AND %s AND minuty >= %d
-        ", $habit->id, $period->data_start, min($period->data_koniec, date('Y-m-d')), $habit->cel_minut_dziennie));
+            SELECT COUNT(DISTINCT dzien) FROM {$wpdb->prefix}habits_entries
+            WHERE habit_id IN ($habit_ids_str) AND dzien BETWEEN '$overall_start' AND '$overall_end' AND minuty >= %d
+        ", $data['goal']));
 
-        // Oblicz dni w okresie (do dziś)
-        $period_start = new DateTime($period->data_start);
-        $period_end = new DateTime(min($period->data_koniec, date('Y-m-d')));
-        $total_days = $period_start->diff($period_end)->days + 1;
+        // Oblicz dni w zakresie (do dziś)
+        $range_start = new DateTime($overall_start);
+        $range_end = new DateTime($overall_end);
+        $total_days = $range_start->diff($range_end)->days + 1;
 
         // Średnia dzienna
         $avg_daily = $total_days > 0 ? round($total_minutes / $total_days, 1) : 0;
 
-        // Aktualny streak
-        $streak = habits_calculate_streak($habit->id);
+        // Aktualny streak (use first habit id)
+        $streak = habits_calculate_streak($data['habit_ids'][0]);
 
         $summary[] = [
             'habit' => $habit,
@@ -731,22 +776,38 @@ add_action('wp_ajax_habits_get_summary', function() {
     }
 
     // Challenge summary
-    $challenges = $wpdb->get_results($wpdb->prepare(
-        "SELECT * FROM {$wpdb->prefix}habits_challenges WHERE period_id = %d AND aktywny = 1",
-        $period_id
-    ));
+    $challenges = $wpdb->get_results(
+        "SELECT * FROM {$wpdb->prefix}habits_challenges WHERE period_id IN ($period_ids_placeholder) AND aktywny = 1"
+    );
+
+    // Group challenges by name
+    $challenges_by_name = [];
+    foreach ($challenges as $challenge) {
+        $name = $challenge->nazwa;
+        if (!isset($challenges_by_name[$name])) {
+            $challenges_by_name[$name] = [
+                'challenge' => $challenge,
+                'challenge_ids' => [],
+                'goal' => $challenge->cel_dni
+            ];
+        }
+        $challenges_by_name[$name]['challenge_ids'][] = $challenge->id;
+    }
 
     $challenge_summary = [];
 
-    foreach ($challenges as $challenge) {
-        $completed_days = $wpdb->get_var($wpdb->prepare("
+    foreach ($challenges_by_name as $name => $data) {
+        $challenge_ids_str = implode(',', array_map('intval', $data['challenge_ids']));
+        $challenge = $data['challenge'];
+
+        $completed_days = $wpdb->get_var("
             SELECT COUNT(*) FROM {$wpdb->prefix}habits_challenge_checks
-            WHERE challenge_id = %d AND dzien BETWEEN %s AND %s AND wykonane = 1
-        ", $challenge->id, $period->data_start, min($period->data_koniec, date('Y-m-d'))));
+            WHERE challenge_id IN ($challenge_ids_str) AND dzien BETWEEN '$overall_start' AND '$overall_end' AND wykonane = 1
+        ");
 
         // Oblicz tygodnie
-        $weeks_in_period = ceil((strtotime(min($period->data_koniec, date('Y-m-d'))) - strtotime($period->data_start)) / (7 * 24 * 60 * 60));
-        $expected = $weeks_in_period * $challenge->cel_dni;
+        $weeks_in_range = ceil((strtotime($overall_end) - strtotime($overall_start)) / (7 * 24 * 60 * 60));
+        $expected = $weeks_in_range * $data['goal'];
 
         $challenge_summary[] = [
             'challenge' => $challenge,
@@ -758,7 +819,12 @@ add_action('wp_ajax_habits_get_summary', function() {
 
     wp_send_json_success([
         'habits' => $summary,
-        'challenges' => $challenge_summary
+        'challenges' => $challenge_summary,
+        'scope' => $scope,
+        'date_range' => [
+            'start' => $overall_start,
+            'end' => $overall_end
+        ]
     ]);
 });
 
@@ -1358,6 +1424,31 @@ function habits_render_page() {
             color: rgba(255,255,255,0.8);
         }
 
+        .day-header.out-of-period {
+            opacity: 0.35;
+        }
+
+        .day-cell.out-of-period {
+            background: #f5f5f5;
+        }
+
+        .habit-cell.disabled {
+            pointer-events: none;
+        }
+
+        .habit-check.disabled {
+            background: #e5e5e5;
+            border-color: #d0d0d0;
+            cursor: not-allowed;
+        }
+
+        .challenge-check.disabled {
+            background: #e5e5e5;
+            border-color: #d0d0d0;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         /* Challenge checkbox */
         .challenge-check {
             width: 32px;
@@ -1402,6 +1493,12 @@ function habits_render_page() {
             height: 100%;
             border-radius: 4px;
             transition: width 0.3s;
+        }
+
+        /* Summary scope buttons */
+        .summary-scope-buttons {
+            display: flex;
+            gap: 10px;
         }
 
         /* Summary cards */
@@ -2212,6 +2309,14 @@ function habits_render_page() {
 
         <!-- TAB: Podsumowanie -->
         <div class="habits-tab-content" id="tab-summary">
+            <div class="habits-card" style="margin-bottom: 20px;">
+                <div class="habits-card-title">Zakres podsumowania</div>
+                <div class="summary-scope-buttons">
+                    <button class="habits-btn habits-btn-sm habits-btn-primary" id="btnScopePeriod" onclick="HabitsApp.setSummaryScope('period')">Okres</button>
+                    <button class="habits-btn habits-btn-sm habits-btn-secondary" id="btnScopeYear" onclick="HabitsApp.setSummaryScope('year')">Rok</button>
+                    <button class="habits-btn habits-btn-sm habits-btn-secondary" id="btnScopeAll" onclick="HabitsApp.setSummaryScope('all')">Wszystkie</button>
+                </div>
+            </div>
             <div id="summaryContent">
                 <p style="color: #6B7280; text-align: center; padding: 40px;">
                     Wybierz okres, aby zobaczyć podsumowanie.
@@ -2535,7 +2640,10 @@ function habits_render_page() {
                 select.innerHTML = '<option value="">-- Wybierz okres --</option>';
                 select.disabled = false;
 
+                // Store periods for later reference
+                this.periods = {};
                 result.data.forEach(period => {
+                    this.periods[period.id] = period;
                     const opt = document.createElement('option');
                     opt.value = period.id;
                     opt.textContent = period.nazwa + ' (' + period.data_start + ' - ' + period.data_koniec + ')';
@@ -2545,6 +2653,9 @@ function habits_render_page() {
                 select.onchange = () => {
                     this.currentPeriodId = select.value;
                     if (this.currentPeriodId) {
+                        // Store current period dates
+                        this.currentPeriodStart = this.periods[this.currentPeriodId].data_start;
+                        this.currentPeriodEnd = this.periods[this.currentPeriodId].data_koniec;
                         this.loadHabits();
                         this.loadChallenges();
                         this.loadSummary();
@@ -2640,6 +2751,10 @@ function habits_render_page() {
 
             const dayNames = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Nd'];
 
+            // Check which days are within period range
+            const periodStart = this.currentPeriodStart;
+            const periodEnd = this.currentPeriodEnd;
+
             let html = `
                 <table class="habits-table">
                     <thead>
@@ -2647,10 +2762,11 @@ function habits_render_page() {
                             <th>Nawyk</th>
                             ${dates.map((d, i) => {
                                 const isToday = d === today;
+                                const isOutOfPeriod = d < periodStart || d > periodEnd;
                                 const dateObj = new Date(d);
                                 return `
                                     <th>
-                                        <div class="day-header ${isToday ? 'today' : ''}">
+                                        <div class="day-header ${isToday ? 'today' : ''} ${isOutOfPeriod ? 'out-of-period' : ''}">
                                             <div class="day-name">${dayNames[i]}</div>
                                             <div class="day-date">${dateObj.getDate()}.${String(dateObj.getMonth() + 1).padStart(2, '0')}</div>
                                         </div>
@@ -2680,29 +2796,42 @@ function habits_render_page() {
                 `;
 
                 dates.forEach(d => {
+                    const isOutOfPeriod = d < periodStart || d > periodEnd;
                     const value = entries[habit.id]?.[d] || 0;
-                    weekTotal += parseInt(value);
+                    if (!isOutOfPeriod) {
+                        weekTotal += parseInt(value);
+                    }
                     const hasValue = value > 0;
 
-                    html += `
-                        <td class="day-cell">
-                            <div class="habit-cell">
-                                <div class="habit-check ${hasValue ? 'checked' : ''}"
-                                     data-habit-id="${habit.id}"
-                                     data-date="${d}"
-                                     data-goal="${habit.cel_minut_dziennie}"
-                                     data-value="${value}"
-                                     onclick="HabitsApp.toggleHabit(this)">
+                    if (isOutOfPeriod) {
+                        html += `
+                            <td class="day-cell out-of-period">
+                                <div class="habit-cell disabled">
+                                    <div class="habit-check disabled"></div>
                                 </div>
-                                <div class="habit-minutes"
-                                     data-habit-id="${habit.id}"
-                                     data-date="${d}"
-                                     onclick="HabitsApp.editMinutes(this, ${habit.id}, '${d}', ${value}, ${habit.cel_minut_dziennie})">
-                                    ${hasValue ? value + 'm' : ''}
+                            </td>
+                        `;
+                    } else {
+                        html += `
+                            <td class="day-cell">
+                                <div class="habit-cell">
+                                    <div class="habit-check ${hasValue ? 'checked' : ''}"
+                                         data-habit-id="${habit.id}"
+                                         data-date="${d}"
+                                         data-goal="${habit.cel_minut_dziennie}"
+                                         data-value="${value}"
+                                         onclick="HabitsApp.toggleHabit(this)">
+                                    </div>
+                                    <div class="habit-minutes"
+                                         data-habit-id="${habit.id}"
+                                         data-date="${d}"
+                                         onclick="HabitsApp.editMinutes(this, ${habit.id}, '${d}', ${value}, ${habit.cel_minut_dziennie})">
+                                        ${hasValue ? value + 'm' : ''}
+                                    </div>
                                 </div>
-                            </div>
-                        </td>
-                    `;
+                            </td>
+                        `;
+                    }
                 });
 
                 html += `
@@ -2878,6 +3007,10 @@ function habits_render_page() {
                 }
             }
 
+            // Check which days are within period range
+            const periodStart = this.currentPeriodStart;
+            const periodEnd = this.currentPeriodEnd;
+
             let html = `
                 <table class="habits-table">
                     <thead>
@@ -2885,10 +3018,11 @@ function habits_render_page() {
                             <th>Challenge</th>
                             ${dates.map((d, i) => {
                                 const isToday = d === today;
+                                const isOutOfPeriod = d < periodStart || d > periodEnd;
                                 const dateObj = new Date(d);
                                 return `
                                     <th>
-                                        <div class="day-header ${isToday ? 'today' : ''}">
+                                        <div class="day-header ${isToday ? 'today' : ''} ${isOutOfPeriod ? 'out-of-period' : ''}">
                                             <div class="day-name">${dayNames[i]}</div>
                                             <div class="day-date">${dateObj.getDate()}.${String(dateObj.getMonth() + 1).padStart(2, '0')}</div>
                                         </div>
@@ -2919,18 +3053,27 @@ function habits_render_page() {
                 `;
 
                 dates.forEach(d => {
+                    const isOutOfPeriod = d < periodStart || d > periodEnd;
                     const checked = checksMap[challenge.id]?.[d] || false;
-                    if (checked) weekCount++;
+                    if (checked && !isOutOfPeriod) weekCount++;
 
-                    html += `
-                        <td class="day-cell">
-                            <div class="challenge-check ${checked ? 'checked' : ''}"
-                                 data-challenge-id="${challenge.id}"
-                                 data-date="${d}"
-                                 onclick="HabitsApp.toggleChallenge(this)">
-                            </div>
-                        </td>
-                    `;
+                    if (isOutOfPeriod) {
+                        html += `
+                            <td class="day-cell out-of-period">
+                                <div class="challenge-check disabled"></div>
+                            </td>
+                        `;
+                    } else {
+                        html += `
+                            <td class="day-cell">
+                                <div class="challenge-check ${checked ? 'checked' : ''}"
+                                     data-challenge-id="${challenge.id}"
+                                     data-date="${d}"
+                                     onclick="HabitsApp.toggleChallenge(this)">
+                                </div>
+                            </td>
+                        `;
+                    }
                 });
 
                 const goalMet = weekCount >= challenge.cel_dni;
@@ -3017,19 +3160,69 @@ function habits_render_page() {
             this.renderChallengesTable();
         },
 
-        async loadSummary() {
-            if (!this.currentPeriodId) return;
+        summaryScope: 'period',
 
-            const result = await this.ajax('habits_get_summary', { period_id: this.currentPeriodId });
+        setSummaryScope(scope) {
+            this.summaryScope = scope;
+
+            // Update button states
+            document.getElementById('btnScopePeriod').classList.toggle('habits-btn-primary', scope === 'period');
+            document.getElementById('btnScopePeriod').classList.toggle('habits-btn-secondary', scope !== 'period');
+            document.getElementById('btnScopeYear').classList.toggle('habits-btn-primary', scope === 'year');
+            document.getElementById('btnScopeYear').classList.toggle('habits-btn-secondary', scope !== 'year');
+            document.getElementById('btnScopeAll').classList.toggle('habits-btn-primary', scope === 'all');
+            document.getElementById('btnScopeAll').classList.toggle('habits-btn-secondary', scope !== 'all');
+
+            this.loadSummary();
+        },
+
+        async loadSummary() {
+            // Check if we have required data for selected scope
+            if (this.summaryScope === 'period' && !this.currentPeriodId) {
+                document.getElementById('summaryContent').innerHTML = `
+                    <p style="color: #6B7280; text-align: center; padding: 40px;">
+                        Wybierz okres, aby zobaczyć podsumowanie.
+                    </p>
+                `;
+                return;
+            }
+            if (this.summaryScope === 'year' && !this.currentYearId) {
+                document.getElementById('summaryContent').innerHTML = `
+                    <p style="color: #6B7280; text-align: center; padding: 40px;">
+                        Wybierz rok, aby zobaczyć podsumowanie.
+                    </p>
+                `;
+                return;
+            }
+
+            const params = {
+                period_id: this.currentPeriodId || 0,
+                year_id: this.currentYearId || 0,
+                scope: this.summaryScope
+            };
+
+            const result = await this.ajax('habits_get_summary', params);
 
             if (!result.success) return;
 
-            const { habits, challenges } = result.data;
+            const { habits, challenges, date_range } = result.data;
 
-            let html = '<h3 style="margin-bottom: 20px; color: var(--habits-dark);">📊 Nawyki</h3>';
-            html += '<div class="habits-summary-grid">';
+            // Show date range info
+            const scopeLabels = { period: 'Okres', year: 'Rok', all: 'Wszystkie okresy' };
+            let html = `
+                <div style="margin-bottom: 20px; padding: 12px; background: #f0f9ff; border-radius: 8px; color: #0369a1;">
+                    <strong>${scopeLabels[this.summaryScope]}</strong>: ${date_range.start} - ${date_range.end}
+                </div>
+            `;
 
-            habits.forEach(item => {
+            html += '<h3 style="margin-bottom: 20px; color: var(--habits-dark);">📊 Nawyki</h3>';
+
+            if (habits.length === 0) {
+                html += '<p style="color: #6B7280; text-align: center; padding: 20px;">Brak nawyków w wybranym zakresie.</p>';
+            } else {
+                html += '<div class="habits-summary-grid">';
+
+                habits.forEach(item => {
                 const h = item.habit;
                 html += `
                     <div class="summary-card">
@@ -3065,9 +3258,10 @@ function habits_render_page() {
                         </div>
                     </div>
                 `;
-            });
+                });
 
-            html += '</div>';
+                html += '</div>';
+            }
 
             if (challenges.length > 0) {
                 html += '<h3 style="margin: 30px 0 20px; color: var(--habits-dark);">🎯 Challenge</h3>';
